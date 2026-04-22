@@ -224,10 +224,25 @@ This is not treated as a direct `.sync` line in Udon Assembly itself. Instead, i
   "options": {
     "strict": true,
     "unknownFieldPolicy": "ignore | warn | error",
-    "unknownFunctionPolicy": "ignore | warn | error"
+    "unknownFunctionPolicy": "ignore | warn | error",
+    "memory": {
+      "initialPages": 1,
+      "maxPages": 256,
+      "udonName": "_memory"
+    }
   }
 }
 ```
+
+### `options.memory`
+
+Overrides for how WASM linear memory is lowered. See `spec_linear_memory.md` for the underlying model (a two-level chunked array with runtime `memory.grow` support).
+
+All fields are optional.
+
+- `initialPages` — number of 64 KiB pages committed at `_onEnable`. If omitted, the WASM module's declared `initial` is used.
+- `maxPages` — upper bound used to size the outer `SystemObjectArray` and to gate `memory.grow`. Resolution order: this field, then the WASM module's declared `max`, then a default of `256` when the module has no `max` and `options.strict` is not `true`. With `options.strict = true` and no `max` anywhere, the translator raises an error. `initialPages > maxPages` is always an error.
+- `udonName` — overrides the Udon variable name of the outer array (default `__G__memory`). Companion scalars `__G__memory_size_pages` and `__G__memory_max_pages` follow the same prefix rule and are renamed in lockstep.
 
 ---
 
@@ -315,7 +330,12 @@ This is not treated as a direct `.sync` line in Udon Assembly itself. Instead, i
   "options": {
     "strict": true,
     "unknownFieldPolicy": "warn",
-    "unknownFunctionPolicy": "warn"
+    "unknownFunctionPolicy": "warn",
+    "memory": {
+      "initialPages": 1,
+      "maxPages": 16,
+      "udonName": "_memory"
+    }
   }
 }
 ```
@@ -352,6 +372,12 @@ This is not treated as a direct `.sync` line in Udon Assembly itself. Instead, i
 
 * Reflect it in the synchronization setting of the generated UdonBehaviour
 * Since there is no direct corresponding line in Udon Assembly, it may be treated as out-of-assembly generation metadata
+
+### 6. Apply `options.memory`
+
+* Resolve `initialPages` and `maxPages` per the order in `spec_linear_memory.md` (meta override, then WASM declaration, then default `256` with `strict = false`)
+* Size the outer `SystemObjectArray` to `maxPages`
+* Rename the memory variables if `udonName` is provided
 
 ---
 
