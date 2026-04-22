@@ -31,6 +31,7 @@ const udon = @import("udon");
 const names = @import("names.zig");
 const numeric = @import("lower_numeric.zig");
 const lower_import = @import("lower_import.zig");
+const recursion = @import("recursion.zig");
 
 const tn = udon.type_name;
 const Asm = udon.Asm;
@@ -125,6 +126,11 @@ const Translator = struct {
     max_indirect_params: u32 = 0,
     max_indirect_results: u32 = 0,
 
+    /// For each function index, true iff that function is recursive (has a
+    /// self-edge or participates in an SCC ≥ 2). Populated by
+    /// `analyzeRecursion()`. See `docs/spec_call_return_conversion.md` §8.2.
+    is_recursive: []bool = &.{},
+
     const EventBinding = struct {
         /// WASM export name (e.g. "on_update").
         wasm_export: []const u8,
@@ -154,6 +160,7 @@ const Translator = struct {
         self.rac_sites.deinit(self.gpa);
         self.event_bindings.deinit(self.gpa);
         self.indirect_fns.deinit(self.gpa);
+        if (self.is_recursive.len > 0) self.gpa.free(self.is_recursive);
         self.asm_.deinit();
         self.arena.deinit();
     }
@@ -171,6 +178,7 @@ const Translator = struct {
         try self.resolveGlobalNames();
         try self.resolveEventBindings();
         try self.resolveIndirectFns();
+        try self.analyzeRecursion();
         try self.emitCommonData();
         try self.emitGlobalsData();
         try self.emitMemoryData();
@@ -302,6 +310,24 @@ const Translator = struct {
     /// reachable via `call_indirect`. Also compute the maximum param and
     /// result arity across all affected function types — this sizes the
     /// shared `__ind_P*` / `__ind_R*` slots used by the indirect ABI.
+    fn analyzeRecursion(self: *Translator) Error!void {
+        // Flatten indirect-callable indices.
+        var ind_list: std.ArrayList(u32) = .empty;
+        defer ind_list.deinit(self.gpa);
+        var it = self.indirect_fns.iterator();
+        while (it.next()) |e| try ind_list.append(self.gpa, e.key_ptr.*);
+        var graph = try recursion.buildCallGraph(self.gpa, self.mod, self.num_imported_funcs, ind_list.items);
+        defer graph.deinit(self.gpa);
+        self.is_recursive = try recursion.detectRecursive(self.gpa, graph);
+    }
+
+    fn shouldSpill(self: *Translator, fn_idx: u32) bool {
+        const m = self.meta orelse return false;
+        if (m.options.recursion != .stack) return false;
+        if (fn_idx >= self.is_recursive.len) return false;
+        return self.is_recursive[fn_idx];
+    }
+
     fn resolveIndirectFns(self: *Translator) Error!void {
         for (self.mod.elements) |elem| {
             for (elem.init) |fn_idx| {
@@ -424,6 +450,55 @@ const Translator = struct {
         try self.asm_.addData(.{ .name = "__c_i32_16", .ty = tn.int32, .init = .{ .int32 = 16 } });
         try self.asm_.addData(.{ .name = "__c_i32_0xFFFF", .ty = tn.int32, .init = .{ .int32 = 0xFFFF } });
         try self.asm_.addData(.{ .name = "__c_i32_16384", .ty = tn.int32, .init = .{ .int32 = 16384 } });
+        try self.asm_.addData(.{ .name = "__c_i32_3", .ty = tn.int32, .init = .{ .int32 = 3 } });
+        try self.asm_.addData(.{ .name = "__c_i32_24", .ty = tn.int32, .init = .{ .int32 = 24 } });
+        try self.asm_.addData(.{ .name = "__c_u32_0xFF", .ty = tn.uint32, .init = .{ .uint32 = 0xFF } });
+        try self.asm_.addData(.{ .name = "__c_u32_0xFFFF_32", .ty = tn.uint32, .init = .{ .uint32 = 0xFFFF } });
+        try self.asm_.addData(.{ .name = "__c_u32_0xFFFFFFFF", .ty = tn.uint32, .init = .{ .uint32 = 0xFFFFFFFF } });
+        try self.asm_.addData(.{ .name = "__c_i32_32", .ty = tn.int32, .init = .{ .int32 = 32 } });
+        // Scratch slots for i64 memory access (load/store split across two words).
+        try self.asm_.addData(.{ .name = "_mem_u32_hi", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_i64_lo", .ty = tn.int64, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_mem_i64_hi", .ty = tn.int64, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_mem_i64_hi_shifted", .ty = tn.int64, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_mem_word_in_page_hi", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_st_lo_i32", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_st_hi_i32", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_st_lo_u32", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_st_hi_u32", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_hi_i64", .ty = tn.int64, .init = .null_literal });
+        // Scratch slots for narrow (byte) memory access shift/mask expansion.
+        try self.asm_.addData(.{ .name = "_mem_sub", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_shift", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_u32_shifted", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_mask_lo", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_mask_inv", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_byte_shifted", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_u32_cleared", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_u32_new", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_byte", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        // Scratch slots for memory.grow.
+        try self.asm_.addData(.{ .name = "_mg_old", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mg_new", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mg_i", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mg_cmp", .ty = tn.boolean, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "__c_i32_neg1", .ty = tn.int32, .init = .{ .int32 = -1 } });
+        // Scratch + constants for generic (unaligned / page-straddle) word access.
+        try self.asm_.addData(.{ .name = "__c_i32_16383", .ty = tn.int32, .init = .{ .int32 = 16383 } });
+        try self.asm_.addData(.{ .name = "__c_i32_65532", .ty = tn.int32, .init = .{ .int32 = 65532 } });
+        try self.asm_.addData(.{ .name = "_mlw_lo", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mlw_hi", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mlw_shift", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mlw_rshift", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mlw_tmp", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_msw_lo_mask", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_msw_hi_mask", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_msw_lo_cleared", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_msw_hi_cleared", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_msw_lo_new_bits", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_msw_hi_new_bits", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_msw_lo_out", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_msw_hi_out", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
     }
 
     fn emitFunctionData(self: *Translator) Error!void {
@@ -683,16 +758,87 @@ const Translator = struct {
         };
         defer ctx.blocks.deinit(self.gpa);
 
+        if (self.shouldSpill(fn_idx)) {
+            try self.emitPrologueSpill(&ctx, code);
+        }
+
         try self.emitInstrs(&ctx, code.body);
 
         // Natural fall-through return: copy Sd-result_arity .. Sd-1 into R0..
         // (Only if any results are declared.)
         try self.emitFunctionReturn(&ctx);
         try self.asm_.label(exit);
+        if (self.shouldSpill(fn_idx)) {
+            try self.emitEpilogueRestore(&ctx, code);
+        }
         // Emit the indirect jump back. All defined functions use JUMP_INDIRECT
         // on their own RA slot (per §4).
         const ra = try names.returnAddrSlot(self.aa(), fn_name);
         try self.asm_.jumpIndirect(ra);
+    }
+
+    fn collectFrameSlots(
+        self: *Translator,
+        ctx: *FuncCtx,
+        code: wasm.module.Code,
+        slots: *std.ArrayList([]const u8),
+    ) Error!void {
+        const fn_name = ctx.fn_name;
+        for (ctx.params, 0..) |_, i|
+            try slots.append(self.gpa, try names.param(self.aa(), fn_name, @intCast(i)));
+        var li: u32 = 0;
+        for (code.locals) |lg| {
+            for (0..lg.count) |_| {
+                try slots.append(self.gpa, try names.local(self.aa(), fn_name, li));
+                li += 1;
+            }
+        }
+        for (ctx.results, 0..) |_, i|
+            try slots.append(self.gpa, try names.returnSlot(self.aa(), fn_name, @intCast(i)));
+        try slots.append(self.gpa, try names.returnAddrSlot(self.aa(), fn_name));
+    }
+
+    fn emitPrologueSpill(self: *Translator, ctx: *FuncCtx, code: wasm.module.Code) Error!void {
+        try self.asm_.comment("recursion: prologue spill");
+        var slots: std.ArrayList([]const u8) = .empty;
+        defer slots.deinit(self.gpa);
+        try self.collectFrameSlots(ctx, code, &slots);
+
+        for (slots.items) |slot| {
+            // __call_stack__[__call_stack_top__] = slot
+            try self.asm_.push("__call_stack__");
+            try self.asm_.push(slot);
+            try self.asm_.push("__call_stack_top__");
+            try self.asm_.extern_("SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid");
+            // __call_stack_top__ += 1
+            try self.asm_.push("__call_stack_top__");
+            try self.asm_.push("__c_i32_1");
+            try self.asm_.push("__call_stack_top__");
+            try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        }
+    }
+
+    fn emitEpilogueRestore(self: *Translator, ctx: *FuncCtx, code: wasm.module.Code) Error!void {
+        try self.asm_.comment("recursion: epilogue restore");
+        var slots: std.ArrayList([]const u8) = .empty;
+        defer slots.deinit(self.gpa);
+        try self.collectFrameSlots(ctx, code, &slots);
+
+        var i = slots.items.len;
+        while (i > 0) {
+            i -= 1;
+            const slot = slots.items[i];
+            // __call_stack_top__ -= 1
+            try self.asm_.push("__call_stack_top__");
+            try self.asm_.push("__c_i32_1");
+            try self.asm_.push("__call_stack_top__");
+            try self.asm_.extern_("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32");
+            // slot = __call_stack__[__call_stack_top__]
+            try self.asm_.push("__call_stack__");
+            try self.asm_.push("__call_stack_top__");
+            try self.asm_.push(slot);
+            try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        }
     }
 
     fn emitFunctionReturn(self: *Translator, ctx: *FuncCtx) Error!void {
@@ -803,6 +949,9 @@ const Translator = struct {
             .i32_store => try self.emitMemStoreWord(ctx, ins),
             .i32_load8_u, .i32_load8_s => try self.emitMemLoadByte(ctx, ins),
             .i32_store8 => try self.emitMemStoreByte(ctx, ins),
+            .i32_store16 => try self.emitMemStore16(ctx, ins),
+            .i64_load => try self.emitMemLoadI64(ctx, ins),
+            .i64_store => try self.emitMemStoreI64(ctx, ins),
 
             else => try self.emitUnsupported(ctx, ins),
         }
@@ -1261,22 +1410,96 @@ const Translator = struct {
     }
 
     fn emitMemoryGrow(self: *Translator, ctx: *FuncCtx) Error!void {
-        // Pop delta; push previous size (we don't actually grow here —
-        // bench mostly uses this to observe that pages increase). A full
-        // implementation would allocate new chunks up to maxPages.
-        try self.asm_.comment("memory.grow (simplified: returns current pages, no real growth)");
+        try self.asm_.comment("memory.grow");
+        const id = self.block_counter;
+        self.block_counter += 1;
+        const loop_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mg_loop_{d}__", .{ ctx.fn_name, id });
+        const done_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mg_done_{d}__", .{ ctx.fn_name, id });
+        const end_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mg_end_{d}__", .{ ctx.fn_name, id });
+        const alloc_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mg_alloc_{d}__", .{ ctx.fn_name, id });
+
+        // delta on top of stack
         const delta = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
-        _ = delta;
         ctx.pop();
         ctx.push();
-        const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const result = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+
+        // _mg_old = __G__memory_size_pages
         try self.asm_.push("__G__memory_size_pages");
-        try self.asm_.push(dst);
+        try self.asm_.push("_mg_old");
         try self.asm_.copy();
+
+        // _mg_new = _mg_old + delta
+        try self.asm_.push("_mg_old");
+        try self.asm_.push(delta);
+        try self.asm_.push("_mg_new");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+
+        // if _mg_new > __G__memory_max_pages: result = -1; goto end
+        try self.asm_.push("_mg_new");
+        try self.asm_.push("__G__memory_max_pages");
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.extern_("SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean");
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.jumpIfFalse(alloc_lbl);
+        try self.asm_.push("__c_i32_neg1");
+        try self.asm_.push(result);
+        try self.asm_.copy();
+        try self.asm_.jump(end_lbl);
+
+        try self.asm_.label(alloc_lbl);
+        // _mg_i = _mg_old
+        try self.asm_.push("_mg_old");
+        try self.asm_.push("_mg_i");
+        try self.asm_.copy();
+
+        try self.asm_.label(loop_lbl);
+        // if !(_mg_i < _mg_new) goto done
+        try self.asm_.push("_mg_i");
+        try self.asm_.push("_mg_new");
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.extern_("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.jumpIfFalse(done_lbl);
+
+        // _mem_chunk = new SystemUInt32Array(16384)
+        try self.asm_.push("__c_i32_16384");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array");
+        // __G__memory[_mg_i] = _mem_chunk
+        try self.asm_.push("__G__memory");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mg_i");
+        try self.asm_.extern_("SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid");
+        // _mg_i = _mg_i + 1
+        try self.asm_.push("_mg_i");
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("_mg_i");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.jump(loop_lbl);
+
+        try self.asm_.label(done_lbl);
+        // __G__memory_size_pages = _mg_new
+        try self.asm_.push("_mg_new");
+        try self.asm_.push("__G__memory_size_pages");
+        try self.asm_.copy();
+        // result = _mg_old
+        try self.asm_.push("_mg_old");
+        try self.asm_.push(result);
+        try self.asm_.copy();
+
+        try self.asm_.label(end_lbl);
     }
 
     fn emitMemLoadWord(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
-        _ = ins;
+        const memarg = ins.i32_load;
+        if (memarg.@"align" >= 2) {
+            return self.emitMemLoadWordFast(ctx);
+        }
+        return self.emitMemLoadWordGeneric(ctx);
+    }
+
+    fn emitMemLoadWordFast(self: *Translator, ctx: *FuncCtx) Error!void {
         try self.asm_.comment("i32.load (aligned, within-chunk fast path)");
         const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
         ctx.pop();
@@ -1308,8 +1531,179 @@ const Translator = struct {
         try self.asm_.extern_("SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32");
     }
 
+    /// Generic i32.load that handles unaligned access and page-straddle.
+    /// Per `docs/spec_linear_memory.md` §6.1, dispatches at runtime into one
+    /// of three branches based on `sub = addr & 3` and whether the 4-byte
+    /// window crosses a page boundary.
+    fn emitMemLoadWordGeneric(self: *Translator, ctx: *FuncCtx) Error!void {
+        try self.asm_.comment("i32.load (generic: 3-branch alignment/straddle dispatch)");
+        const id = self.block_counter;
+        self.block_counter += 1;
+        const fast_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mlw_fast_{d}__", .{ ctx.fn_name, id });
+        const slow_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mlw_slow_{d}__", .{ ctx.fn_name, id });
+        const straddle_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mlw_straddle_{d}__", .{ ctx.fn_name, id });
+        const end_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mlw_end_{d}__", .{ ctx.fn_name, id });
+
+        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        ctx.pop();
+        ctx.push();
+        const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+
+        // Decompose address.
+        // sub := addr & 3
+        try self.asm_.push(addr_slot);
+        try self.asm_.push("__c_i32_3");
+        try self.asm_.push("_mem_sub");
+        try self.asm_.extern_("SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32");
+        // page_idx := addr >> 16
+        try self.asm_.push(addr_slot);
+        try self.asm_.push("__c_i32_16");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+        // byte_in_page := addr & 0xFFFF (reuse _mem_addr as scratch)
+        try self.asm_.push(addr_slot);
+        try self.asm_.push("__c_i32_0xFFFF");
+        try self.asm_.push("_mem_addr");
+        try self.asm_.extern_("SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32");
+        // word_in_page := byte_in_page >> 2
+        try self.asm_.push("_mem_addr");
+        try self.asm_.push("__c_i32_2");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+
+        // Branch 1: if sub == 0, goto fast.
+        try self.asm_.push("_mem_sub");
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.extern_("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean");
+        // JUMP_IF_FALSE skips the fast path; we want to JUMP to fast when true.
+        // Synthesize by jumping to a "not-fast" label when false, else jumping to fast.
+        // Simpler: negate — compute (sub != 0) and JUMP_IF_FALSE over the JUMP to fast.
+        // To avoid extra EXTERN, use pattern: push cmp; jump_if_false skip; jump fast; skip:
+        const skip_fast_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mlw_nofast_{d}__", .{ ctx.fn_name, id });
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.jumpIfFalse(skip_fast_lbl);
+        try self.asm_.jump(fast_lbl);
+        try self.asm_.label(skip_fast_lbl);
+
+        // Branch 2: if byte_in_page > 65532, goto straddle.
+        try self.asm_.push("_mem_addr");
+        try self.asm_.push("__c_i32_65532");
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.extern_("SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean");
+        const skip_straddle_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mlw_nostraddle_{d}__", .{ ctx.fn_name, id });
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.jumpIfFalse(skip_straddle_lbl);
+        try self.asm_.jump(straddle_lbl);
+        try self.asm_.label(skip_straddle_lbl);
+
+        // Fall-through: unaligned within chunk.
+        try self.asm_.label(slow_lbl);
+        // chunk := outer[page_idx]
+        try self.asm_.push("__G__memory");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // lo := chunk[word_in_page]
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("_mlw_lo");
+        try self.asm_.extern_("SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32");
+        // word_in_page_hi := word_in_page + 1
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("_mem_word_in_page_hi");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        // hi := chunk[word_in_page + 1]
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mem_word_in_page_hi");
+        try self.asm_.push("_mlw_hi");
+        try self.asm_.extern_("SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32");
+        try self.emitMlwCombineAndEnd(dst, end_lbl);
+
+        // Straddle branch.
+        try self.asm_.label(straddle_lbl);
+        // lo_chunk := outer[page_idx]
+        try self.asm_.push("__G__memory");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // lo := lo_chunk[16383]
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("__c_i32_16383");
+        try self.asm_.push("_mlw_lo");
+        try self.asm_.extern_("SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32");
+        // page_idx_hi := page_idx + 1 (reuse _mem_word_in_page_hi as scratch int)
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("_mem_word_in_page_hi");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        // hi_chunk := outer[page_idx + 1]
+        try self.asm_.push("__G__memory");
+        try self.asm_.push("_mem_word_in_page_hi");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // hi := hi_chunk[0]
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push("_mlw_hi");
+        try self.asm_.extern_("SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32");
+        try self.emitMlwCombineAndEnd(dst, end_lbl);
+
+        // Fast branch.
+        try self.asm_.label(fast_lbl);
+        try self.asm_.push("__G__memory");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push(dst);
+        try self.asm_.extern_("SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32");
+
+        try self.asm_.label(end_lbl);
+    }
+
+    /// Common trailer for the unaligned-within and straddle branches:
+    /// dst := (lo >> shift) | (hi << rshift) ; then goto end.
+    fn emitMlwCombineAndEnd(self: *Translator, dst: []const u8, end_lbl: []const u8) Error!void {
+        // shift := sub << 3 (bytes → bits)
+        try self.asm_.push("_mem_sub");
+        try self.asm_.push("__c_i32_3");
+        try self.asm_.push("_mlw_shift");
+        try self.asm_.extern_("SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32");
+        // rshift := 32 - shift
+        try self.asm_.push("__c_i32_32");
+        try self.asm_.push("_mlw_shift");
+        try self.asm_.push("_mlw_rshift");
+        try self.asm_.extern_("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32");
+        // tmp := lo >> shift (unsigned)
+        try self.asm_.push("_mlw_lo");
+        try self.asm_.push("_mlw_shift");
+        try self.asm_.push("_mlw_tmp");
+        try self.asm_.extern_("SystemUInt32.__op_RightShift__SystemUInt32_SystemInt32__SystemUInt32");
+        // hi_shifted := hi << rshift (unsigned, reuse _mem_u32_shifted)
+        try self.asm_.push("_mlw_hi");
+        try self.asm_.push("_mlw_rshift");
+        try self.asm_.push("_mem_u32_shifted");
+        try self.asm_.extern_("SystemUInt32.__op_LeftShift__SystemUInt32_SystemInt32__SystemUInt32");
+        // dst := tmp | hi_shifted
+        try self.asm_.push("_mlw_tmp");
+        try self.asm_.push("_mem_u32_shifted");
+        try self.asm_.push(dst);
+        try self.asm_.extern_("SystemUInt32.__op_BitwiseOr__SystemUInt32_SystemUInt32__SystemUInt32");
+        try self.asm_.jump(end_lbl);
+    }
+
     fn emitMemStoreWord(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
-        _ = ins;
+        const memarg = ins.i32_store;
+        if (memarg.@"align" >= 2) {
+            return self.emitMemStoreWordFast(ctx);
+        }
+        return self.emitMemStoreWordGeneric(ctx);
+    }
+
+    fn emitMemStoreWordFast(self: *Translator, ctx: *FuncCtx) Error!void {
         try self.asm_.comment("i32.store (aligned, within-chunk fast path)");
         const val = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
         ctx.pop();
@@ -1337,20 +1731,527 @@ const Translator = struct {
         try self.asm_.extern_("SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid");
     }
 
+    /// Generic i32.store that handles unaligned access and page-straddle
+    /// via a 3-branch RMW (read-modify-write) of two adjacent words.
+    fn emitMemStoreWordGeneric(self: *Translator, ctx: *FuncCtx) Error!void {
+        try self.asm_.comment("i32.store (generic: 3-branch alignment/straddle RMW)");
+        const id = self.block_counter;
+        self.block_counter += 1;
+        const fast_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_msw_fast_{d}__", .{ ctx.fn_name, id });
+        const slow_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_msw_slow_{d}__", .{ ctx.fn_name, id });
+        const straddle_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_msw_straddle_{d}__", .{ ctx.fn_name, id });
+        const end_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_msw_end_{d}__", .{ ctx.fn_name, id });
+
+        const val = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        ctx.pop();
+        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        ctx.pop();
+
+        // Decompose address (same as load).
+        try self.asm_.push(addr_slot);
+        try self.asm_.push("__c_i32_3");
+        try self.asm_.push("_mem_sub");
+        try self.asm_.extern_("SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push(addr_slot);
+        try self.asm_.push("__c_i32_16");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push(addr_slot);
+        try self.asm_.push("__c_i32_0xFFFF");
+        try self.asm_.push("_mem_addr");
+        try self.asm_.extern_("SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push("_mem_addr");
+        try self.asm_.push("__c_i32_2");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+
+        // if sub == 0, goto fast
+        try self.asm_.push("_mem_sub");
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.extern_("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean");
+        const skip_fast_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_msw_nofast_{d}__", .{ ctx.fn_name, id });
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.jumpIfFalse(skip_fast_lbl);
+        try self.asm_.jump(fast_lbl);
+        try self.asm_.label(skip_fast_lbl);
+
+        // if byte_in_page > 65532, goto straddle
+        try self.asm_.push("_mem_addr");
+        try self.asm_.push("__c_i32_65532");
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.extern_("SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean");
+        const skip_straddle_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_msw_nostraddle_{d}__", .{ ctx.fn_name, id });
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.jumpIfFalse(skip_straddle_lbl);
+        try self.asm_.jump(straddle_lbl);
+        try self.asm_.label(skip_straddle_lbl);
+
+        // Unaligned within-chunk: read both words from same chunk.
+        try self.asm_.label(slow_lbl);
+        try self.asm_.push("__G__memory");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("_mlw_lo");
+        try self.asm_.extern_("SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("_mem_word_in_page_hi");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mem_word_in_page_hi");
+        try self.asm_.push("_mlw_hi");
+        try self.asm_.extern_("SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32");
+        // Build new pair and write back to same chunk.
+        try self.emitMswComputeNewPair(val);
+        // chunk[word_in_page] := lo_out
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_msw_lo_out");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid");
+        // chunk[word_in_page + 1] := hi_out
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_msw_hi_out");
+        try self.asm_.push("_mem_word_in_page_hi");
+        try self.asm_.extern_("SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid");
+        try self.asm_.jump(end_lbl);
+
+        // Straddle: read lo from current chunk[16383], hi from next chunk[0].
+        try self.asm_.label(straddle_lbl);
+        // lo_chunk := outer[page_idx]  (store in _mem_chunk temporarily, but we need both)
+        try self.asm_.push("__G__memory");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // lo := lo_chunk[16383]
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("__c_i32_16383");
+        try self.asm_.push("_mlw_lo");
+        try self.asm_.extern_("SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32");
+        // Write back lo_out to lo_chunk[16383] later — but we overwrite _mem_chunk
+        // for hi_chunk fetch. So we compute new pair up front after getting hi.
+        // page_idx_hi := page_idx + 1
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("_mem_word_in_page_hi");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        // Stash lo_chunk elsewhere: we have only one _mem_chunk slot; emit another fetch later.
+        // hi_chunk := outer[page_idx + 1]
+        try self.asm_.push("__G__memory");
+        try self.asm_.push("_mem_word_in_page_hi");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push("_mlw_hi");
+        try self.asm_.extern_("SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32");
+        // Compute new pair.
+        try self.emitMswComputeNewPair(val);
+        // hi_chunk[0] := hi_out (still in _mem_chunk)
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_msw_hi_out");
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.extern_("SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid");
+        // Re-fetch lo_chunk := outer[page_idx] and write lo_out[16383].
+        try self.asm_.push("__G__memory");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_msw_lo_out");
+        try self.asm_.push("__c_i32_16383");
+        try self.asm_.extern_("SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid");
+        try self.asm_.jump(end_lbl);
+
+        // Fast branch.
+        try self.asm_.label(fast_lbl);
+        try self.asm_.push("__G__memory");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push(val);
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid");
+
+        try self.asm_.label(end_lbl);
+    }
+
+    /// Given `_mlw_lo` and `_mlw_hi` loaded with the original two words and
+    /// `_mem_sub` holding the byte offset in [1,3], compute the
+    /// store-new-pair (`_msw_lo_out`, `_msw_hi_out`) for writing `val` at
+    /// byte offset `sub` across the pair.
+    fn emitMswComputeNewPair(self: *Translator, val: []const u8) Error!void {
+        // shift := sub << 3
+        try self.asm_.push("_mem_sub");
+        try self.asm_.push("__c_i32_3");
+        try self.asm_.push("_mlw_shift");
+        try self.asm_.extern_("SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32");
+        // rshift := 32 - shift
+        try self.asm_.push("__c_i32_32");
+        try self.asm_.push("_mlw_shift");
+        try self.asm_.push("_mlw_rshift");
+        try self.asm_.extern_("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32");
+        // lo_mask := 0xFFFFFFFF << shift
+        try self.asm_.push("__c_u32_0xFFFFFFFF");
+        try self.asm_.push("_mlw_shift");
+        try self.asm_.push("_msw_lo_mask");
+        try self.asm_.extern_("SystemUInt32.__op_LeftShift__SystemUInt32_SystemInt32__SystemUInt32");
+        // hi_mask := 0xFFFFFFFF >> rshift
+        try self.asm_.push("__c_u32_0xFFFFFFFF");
+        try self.asm_.push("_mlw_rshift");
+        try self.asm_.push("_msw_hi_mask");
+        try self.asm_.extern_("SystemUInt32.__op_RightShift__SystemUInt32_SystemInt32__SystemUInt32");
+        // lo_cleared := lo & ~lo_mask
+        try self.asm_.push("_msw_lo_mask");
+        try self.asm_.push("_mem_mask_inv");
+        try self.asm_.extern_("SystemUInt32.__op_OnesComplement__SystemUInt32__SystemUInt32");
+        try self.asm_.push("_mlw_lo");
+        try self.asm_.push("_mem_mask_inv");
+        try self.asm_.push("_msw_lo_cleared");
+        try self.asm_.extern_("SystemUInt32.__op_BitwiseAnd__SystemUInt32_SystemUInt32__SystemUInt32");
+        // hi_cleared := hi & ~hi_mask
+        try self.asm_.push("_msw_hi_mask");
+        try self.asm_.push("_mem_mask_inv");
+        try self.asm_.extern_("SystemUInt32.__op_OnesComplement__SystemUInt32__SystemUInt32");
+        try self.asm_.push("_mlw_hi");
+        try self.asm_.push("_mem_mask_inv");
+        try self.asm_.push("_msw_hi_cleared");
+        try self.asm_.extern_("SystemUInt32.__op_BitwiseAnd__SystemUInt32_SystemUInt32__SystemUInt32");
+        // lo_new_bits := val << shift
+        try self.asm_.push(val);
+        try self.asm_.push("_mlw_shift");
+        try self.asm_.push("_msw_lo_new_bits");
+        try self.asm_.extern_("SystemUInt32.__op_LeftShift__SystemUInt32_SystemInt32__SystemUInt32");
+        // hi_new_bits := val >> rshift
+        try self.asm_.push(val);
+        try self.asm_.push("_mlw_rshift");
+        try self.asm_.push("_msw_hi_new_bits");
+        try self.asm_.extern_("SystemUInt32.__op_RightShift__SystemUInt32_SystemInt32__SystemUInt32");
+        // lo_out := lo_cleared | lo_new_bits
+        try self.asm_.push("_msw_lo_cleared");
+        try self.asm_.push("_msw_lo_new_bits");
+        try self.asm_.push("_msw_lo_out");
+        try self.asm_.extern_("SystemUInt32.__op_BitwiseOr__SystemUInt32_SystemUInt32__SystemUInt32");
+        // hi_out := hi_cleared | hi_new_bits
+        try self.asm_.push("_msw_hi_cleared");
+        try self.asm_.push("_msw_hi_new_bits");
+        try self.asm_.push("_msw_hi_out");
+        try self.asm_.extern_("SystemUInt32.__op_BitwiseOr__SystemUInt32_SystemUInt32__SystemUInt32");
+    }
+
+    /// Shared preamble for byte-level memory accesses: computes
+    /// `_mem_page_idx`, `_mem_word_in_page`, `_mem_sub`, `_mem_shift` and
+    /// populates `_mem_chunk` / `_mem_u32` from the given address slot.
+    fn emitByteAccessPreamble(self: *Translator, addr_slot: []const u8) Error!void {
+        // page_idx := addr >> 16
+        try self.asm_.push(addr_slot);
+        try self.asm_.push("__c_i32_16");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+        // word_in_page := (addr & 0xFFFF) >> 2
+        try self.asm_.push(addr_slot);
+        try self.asm_.push("__c_i32_0xFFFF");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("__c_i32_2");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+        // sub := addr & 3 (bottom 2 bits preserved regardless of page masking)
+        try self.asm_.push(addr_slot);
+        try self.asm_.push("__c_i32_3");
+        try self.asm_.push("_mem_sub");
+        try self.asm_.extern_("SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32");
+        // shift := sub << 3   (i.e. sub * 8)
+        try self.asm_.push("_mem_sub");
+        try self.asm_.push("__c_i32_3");
+        try self.asm_.push("_mem_shift");
+        try self.asm_.extern_("SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32");
+        // _mem_chunk := __G__memory[page_idx]
+        try self.asm_.push("__G__memory");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // _mem_u32 := _mem_chunk[word_in_page]
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("_mem_u32");
+        try self.asm_.extern_("SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32");
+    }
+
     fn emitMemLoadByte(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
-        try self.asm_.comment("i32.load8 (simplified shift/mask placeholder)");
-        _ = ins;
-        ctx.pop(); // addr
-        ctx.push(); // result
-        try self.asm_.annotation("__unsupported__");
+        const signed = switch (ins) {
+            .i32_load8_s => true,
+            else => false,
+        };
+        try self.asm_.comment(if (signed) "i32.load8_s" else "i32.load8_u");
+        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        ctx.pop();
+
+        try self.emitByteAccessPreamble(addr_slot);
+
+        // _mem_u32_shifted := _mem_u32 >> shift (unsigned)
+        try self.asm_.push("_mem_u32");
+        try self.asm_.push("_mem_shift");
+        try self.asm_.push("_mem_u32_shifted");
+        try self.asm_.extern_("SystemUInt32.__op_RightShift__SystemUInt32_SystemInt32__SystemUInt32");
+
+        ctx.push();
+        const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+
+        // dst := _mem_u32_shifted & 0xFF
+        try self.asm_.push("_mem_u32_shifted");
+        try self.asm_.push("__c_u32_0xFF");
+        try self.asm_.push(dst);
+        try self.asm_.extern_("SystemUInt32.__op_BitwiseAnd__SystemUInt32_SystemUInt32__SystemUInt32");
+
+        if (signed) {
+            // Sign-extend 8-bit → 32-bit: (dst << 24) >> 24 arithmetically.
+            try self.asm_.push(dst);
+            try self.asm_.push("__c_i32_24");
+            try self.asm_.push(dst);
+            try self.asm_.extern_("SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32");
+            try self.asm_.push(dst);
+            try self.asm_.push("__c_i32_24");
+            try self.asm_.push(dst);
+            try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+        }
     }
 
     fn emitMemStoreByte(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
-        try self.asm_.comment("i32.store8 (simplified shift/mask placeholder)");
         _ = ins;
+        try self.asm_.comment("i32.store8");
+        const val = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
         ctx.pop();
+        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
         ctx.pop();
-        try self.asm_.annotation("__unsupported__");
+
+        try self.emitByteAccessPreamble(addr_slot);
+
+        // _mem_mask_lo := 0xFF << shift (unsigned)
+        try self.asm_.push("__c_u32_0xFF");
+        try self.asm_.push("_mem_shift");
+        try self.asm_.push("_mem_mask_lo");
+        try self.asm_.extern_("SystemUInt32.__op_LeftShift__SystemUInt32_SystemInt32__SystemUInt32");
+
+        // _mem_mask_inv := ~_mem_mask_lo
+        try self.asm_.push("_mem_mask_lo");
+        try self.asm_.push("_mem_mask_inv");
+        try self.asm_.extern_("SystemUInt32.__op_OnesComplement__SystemUInt32__SystemUInt32");
+
+        // _mem_u32_cleared := _mem_u32 & _mem_mask_inv
+        try self.asm_.push("_mem_u32");
+        try self.asm_.push("_mem_mask_inv");
+        try self.asm_.push("_mem_u32_cleared");
+        try self.asm_.extern_("SystemUInt32.__op_BitwiseAnd__SystemUInt32_SystemUInt32__SystemUInt32");
+
+        // _mem_byte := val & 0xFF (clamp to low 8 bits)
+        try self.asm_.push(val);
+        try self.asm_.push("__c_u32_0xFF");
+        try self.asm_.push("_mem_byte");
+        try self.asm_.extern_("SystemUInt32.__op_BitwiseAnd__SystemUInt32_SystemUInt32__SystemUInt32");
+
+        // _mem_byte_shifted := _mem_byte << shift
+        try self.asm_.push("_mem_byte");
+        try self.asm_.push("_mem_shift");
+        try self.asm_.push("_mem_byte_shifted");
+        try self.asm_.extern_("SystemUInt32.__op_LeftShift__SystemUInt32_SystemInt32__SystemUInt32");
+
+        // _mem_u32_new := _mem_u32_cleared | _mem_byte_shifted
+        try self.asm_.push("_mem_u32_cleared");
+        try self.asm_.push("_mem_byte_shifted");
+        try self.asm_.push("_mem_u32_new");
+        try self.asm_.extern_("SystemUInt32.__op_BitwiseOr__SystemUInt32_SystemUInt32__SystemUInt32");
+
+        // _mem_chunk[word_in_page] := _mem_u32_new
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mem_u32_new");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid");
+    }
+
+    fn emitMemStore16(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
+        _ = ins;
+        try self.asm_.comment("i32.store16");
+        const val = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        ctx.pop();
+        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        ctx.pop();
+
+        try self.emitByteAccessPreamble(addr_slot);
+
+        // _mem_mask_lo := 0xFFFF << shift
+        try self.asm_.push("__c_u32_0xFFFF_32");
+        try self.asm_.push("_mem_shift");
+        try self.asm_.push("_mem_mask_lo");
+        try self.asm_.extern_("SystemUInt32.__op_LeftShift__SystemUInt32_SystemInt32__SystemUInt32");
+
+        // _mem_mask_inv := ~_mem_mask_lo
+        try self.asm_.push("_mem_mask_lo");
+        try self.asm_.push("_mem_mask_inv");
+        try self.asm_.extern_("SystemUInt32.__op_OnesComplement__SystemUInt32__SystemUInt32");
+
+        // _mem_u32_cleared := _mem_u32 & _mem_mask_inv
+        try self.asm_.push("_mem_u32");
+        try self.asm_.push("_mem_mask_inv");
+        try self.asm_.push("_mem_u32_cleared");
+        try self.asm_.extern_("SystemUInt32.__op_BitwiseAnd__SystemUInt32_SystemUInt32__SystemUInt32");
+
+        // _mem_byte := val & 0xFFFF (clamp to low 16 bits)
+        try self.asm_.push(val);
+        try self.asm_.push("__c_u32_0xFFFF_32");
+        try self.asm_.push("_mem_byte");
+        try self.asm_.extern_("SystemUInt32.__op_BitwiseAnd__SystemUInt32_SystemUInt32__SystemUInt32");
+
+        // _mem_byte_shifted := _mem_byte << shift
+        try self.asm_.push("_mem_byte");
+        try self.asm_.push("_mem_shift");
+        try self.asm_.push("_mem_byte_shifted");
+        try self.asm_.extern_("SystemUInt32.__op_LeftShift__SystemUInt32_SystemInt32__SystemUInt32");
+
+        // _mem_u32_new := _mem_u32_cleared | _mem_byte_shifted
+        try self.asm_.push("_mem_u32_cleared");
+        try self.asm_.push("_mem_byte_shifted");
+        try self.asm_.push("_mem_u32_new");
+        try self.asm_.extern_("SystemUInt32.__op_BitwiseOr__SystemUInt32_SystemUInt32__SystemUInt32");
+
+        // _mem_chunk[word_in_page] := _mem_u32_new
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mem_u32_new");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid");
+    }
+
+    fn emitMemLoadI64(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
+        _ = ins;
+        try self.asm_.comment("i64.load (aligned, within-chunk fast path)");
+        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        ctx.pop();
+
+        // page_idx := addr >> 16
+        try self.asm_.push(addr_slot);
+        try self.asm_.push("__c_i32_16");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+        // word_in_page := (addr & 0xFFFF) >> 2
+        try self.asm_.push(addr_slot);
+        try self.asm_.push("__c_i32_0xFFFF");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("__c_i32_2");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+        // _mem_chunk := __G__memory[page_idx]
+        try self.asm_.push("__G__memory");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // _mem_u32 := _mem_chunk[word_in_page]      (lo)
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("_mem_u32");
+        try self.asm_.extern_("SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32");
+        // _mem_word_in_page_hi := word_in_page + 1
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("_mem_word_in_page_hi");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        // _mem_u32_hi := _mem_chunk[word_in_page + 1]
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mem_word_in_page_hi");
+        try self.asm_.push("_mem_u32_hi");
+        try self.asm_.extern_("SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32");
+        // _mem_i64_lo := (i64)_mem_u32
+        try self.asm_.push("_mem_u32");
+        try self.asm_.push("_mem_i64_lo");
+        try self.asm_.extern_("SystemConvert.__ToInt64__SystemUInt32__SystemInt64");
+        // _mem_i64_hi := (i64)_mem_u32_hi
+        try self.asm_.push("_mem_u32_hi");
+        try self.asm_.push("_mem_i64_hi");
+        try self.asm_.extern_("SystemConvert.__ToInt64__SystemUInt32__SystemInt64");
+        // _mem_i64_hi_shifted := _mem_i64_hi << 32
+        try self.asm_.push("_mem_i64_hi");
+        try self.asm_.push("__c_i32_32");
+        try self.asm_.push("_mem_i64_hi_shifted");
+        try self.asm_.extern_("SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64");
+        // dst := _mem_i64_hi_shifted | _mem_i64_lo
+        ctx.push();
+        const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        try self.asm_.push("_mem_i64_hi_shifted");
+        try self.asm_.push("_mem_i64_lo");
+        try self.asm_.push(dst);
+        try self.asm_.extern_("SystemInt64.__op_LogicalOr__SystemInt64_SystemInt64__SystemInt64");
+    }
+
+    fn emitMemStoreI64(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
+        _ = ins;
+        try self.asm_.comment("i64.store (aligned, within-chunk fast path)");
+        const val = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        ctx.pop();
+        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        ctx.pop();
+
+        // _mem_hi_i64 := val >> 32 (arithmetic; bit pattern for high word is what we want)
+        try self.asm_.push(val);
+        try self.asm_.push("__c_i32_32");
+        try self.asm_.push("_mem_hi_i64");
+        try self.asm_.extern_("SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64");
+        // _mem_st_lo_i32 := (i32)val   (truncates low 32 bits)
+        try self.asm_.push(val);
+        try self.asm_.push("_mem_st_lo_i32");
+        try self.asm_.extern_("SystemConvert.__ToInt32__SystemInt64__SystemInt32");
+        // _mem_st_hi_i32 := (i32)_mem_hi_i64
+        try self.asm_.push("_mem_hi_i64");
+        try self.asm_.push("_mem_st_hi_i32");
+        try self.asm_.extern_("SystemConvert.__ToInt32__SystemInt64__SystemInt32");
+        // bit-copy int32 → uint32 (same 32-bit bit pattern in the slot)
+        try self.asm_.push("_mem_st_lo_i32");
+        try self.asm_.push("_mem_st_lo_u32");
+        try self.asm_.copy();
+        try self.asm_.push("_mem_st_hi_i32");
+        try self.asm_.push("_mem_st_hi_u32");
+        try self.asm_.copy();
+
+        // address decomposition
+        // page_idx := addr >> 16
+        try self.asm_.push(addr_slot);
+        try self.asm_.push("__c_i32_16");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+        // word_in_page := (addr & 0xFFFF) >> 2
+        try self.asm_.push(addr_slot);
+        try self.asm_.push("__c_i32_0xFFFF");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("__c_i32_2");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+        // _mem_chunk := __G__memory[page_idx]
+        try self.asm_.push("__G__memory");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // _mem_chunk[word_in_page] := _mem_st_lo_u32
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mem_st_lo_u32");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid");
+        // _mem_word_in_page_hi := word_in_page + 1
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("_mem_word_in_page_hi");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        // _mem_chunk[word_in_page + 1] := _mem_st_hi_u32
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mem_st_hi_u32");
+        try self.asm_.push("_mem_word_in_page_hi");
+        try self.asm_.extern_("SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid");
     }
 
     // ---- helpers ----
@@ -1648,6 +2549,339 @@ test "translate bench.wasm end-to-end (structural)" {
     // by test_arithmetic but its presence is reassuring.
     try std.testing.expect(std.mem.indexOf(u8, out,
         "SystemInt32.__op_Multiply__SystemInt32_SystemInt32__SystemInt32") != null);
+}
+
+// ----------------------------------------------------------------
+//  README 未実装項目の TDD テスト群
+//
+//  README.md "Status" 節で `[ ]` のままだった以下の 4 項目について、
+//  bench.wasm を変換した結果が構造的に spec 準拠であることを担保する:
+//    - memory.grow 実アロケーション
+//    - i32.load8_* / i32.store8 の shift/mask 展開
+//    - unaligned / page-straddling memory access
+//    - 変換 opcode (i32.trunc_*, f64.convert_*, i32.wrap_i64, etc.)
+//
+//  どのテストも bench.wasm を 1 回だけ変換して共通の出力文字列に対して
+//  アサートするため、最初のテストで翻訳を回しその出力を keep している。
+// ----------------------------------------------------------------
+
+fn translateBench(gpa: std.mem.Allocator) ![]u8 {
+    const bench = @embedFile("testdata/bench.wasm");
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    const mod = try wasm.parseModule(aa, bench);
+    const meta = try wasm.parseUdonMetaFromModule(aa, mod);
+
+    var buf: std.Io.Writer.Allocating = .init(gpa);
+    errdefer buf.deinit();
+    try translate(gpa, mod, meta, &buf.writer, .{});
+    return buf.toOwnedSlice();
+}
+
+test "bench: memory.grow allocates inner chunks via SystemUInt32Array ctor" {
+    // README unimplemented item: "memory.grow real allocation".
+    // bench の test_memory 内で @wasmMemoryGrow(0, 1) を呼ぶので、
+    // 変換後の assembly には:
+    //   - 新しい SystemUInt32Array のアロケート
+    //   - SystemObjectArray への SetValue（outer に store）
+    //   - __G__memory_size_pages への書き込み
+    // が出現しなければならない。
+    //
+    // 現状の emitMemoryGrow は size_pages をそのまま push して返すだけ
+    // なので、このテストは Red になる。
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    // memory init がすでに持っている ctor 呼び出しとは別に、
+    // grow 経由でも呼び出される必要がある。grow のコメントが
+    // "memory.grow" を含む位置以降に ctor 呼び出しがあれば OK。
+    const grow_marker = std.mem.indexOf(u8, out, "memory.grow") orelse return error.TestExpectedEqual;
+    const after = out[grow_marker..];
+
+    // 新チャンクのアロケート
+    try std.testing.expect(std.mem.indexOf(u8, after,
+        "SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array") != null);
+    // outer への設置
+    try std.testing.expect(std.mem.indexOf(u8, after,
+        "SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid") != null);
+    // page counter の更新と、-1 (失敗時) のコンスタント
+    try std.testing.expect(std.mem.indexOf(u8, after, "__G__memory_size_pages") != null);
+
+    // 未実装プレースホルダは残っていないこと
+    try std.testing.expect(std.mem.indexOf(u8, after,
+        "simplified: returns current pages, no real growth") == null);
+}
+
+test "bench: i32.store8 expands to shift/mask RMW sequence" {
+    // README unimplemented item: "Full i32.load8_* / i32.store8 shift/mask expansion".
+    // bench の test_memory で `bytes[8] = 0x11; bytes[9] = 0x22; ...` の
+    // 連続 store8 を行う。spec_linear_memory.md §6 Example 3 の RMW 手順に
+    // 従って以下の EXTERN が出現するはず:
+    //   - SystemUInt32.__op_LeftShift (new_byte シフト / mask シフト)
+    //   - SystemUInt32.__op_BitwiseAnd (word clear)
+    //   - SystemUInt32.__op_BitwiseOr  (合成)
+    //   - SystemUInt32Array.__SetValue__...SystemVoid (書き戻し)
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt32.__op_LeftShift__SystemUInt32_SystemInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt32.__op_BitwiseAnd__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt32.__op_BitwiseOr__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid") != null);
+
+    // store8 の placeholder が残っていないこと
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "i32.store8 (simplified shift/mask placeholder)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "i32.load8 (simplified shift/mask placeholder)") == null);
+}
+
+test "bench: i32.load8_u expands to shift + mask 0xFF" {
+    // Example 2 (spec_linear_memory.md §6): shift → u32 RightShift → BitwiseAnd 0xFF
+    // load8_u は unsigned mask なので BitwiseAnd は SystemUInt32 版。
+    // i32.shr_u が既に UInt32 RightShift を使っているため RightShift 単独では
+    // シグナルにならない。BitwiseAnd が u32 で出ていることまで要求する。
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt32.__op_BitwiseAnd__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+}
+
+test "bench: i64 conversions dispatch via SystemConvert" {
+    // README unimplemented item: "Some conversion opcodes".
+    // bench の test_64bit_and_float / test_globals で:
+    //   - @intCast(i32, r >> 32) / r & 0xFFFFFFFF → i32.wrap_i64
+    //   - @as(i64, 0x1_0000_0000) + 5             → i64.extend_i32_u
+    //
+    // (f64 側の @intFromFloat(@floor(...)) は Zig のコンパイル時最適化で
+    //  bench.wasm に残らないため、ここでは unary 形の SystemConvert が
+    //  出ていることだけ検証する。)
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemConvert.__ToInt32__SystemInt64__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemConvert.__ToInt64__SystemUInt32__SystemInt64") != null);
+}
+
+test "synthesized self-recursive function spills frame when recursion=stack" {
+    // README unimplemented item: "Recursive-function call-stack spill".
+    //
+    // spec_call_return_conversion.md §8.2: recursive な関数 (SCC サイズ ≥ 2、
+    // または自己辺をもつ) は `__udon_meta.options.recursion == "stack"` のとき
+    // prologue/epilogue で P / L / S / R / RA を `__call_stack__` に退避する。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const params = try a.alloc(ValType, 1);
+    params[0] = .i32;
+    const results = try a.alloc(ValType, 1);
+    results[0] = .i32;
+    const types_ = try a.alloc(wasm.types.FuncType, 1);
+    types_[0] = .{ .params = params, .results = results };
+
+    const funcs = try a.alloc(u32, 1);
+    funcs[0] = 0;
+
+    const then_body = try a.alloc(Instruction, 1);
+    then_body[0] = .{ .i32_const = 1 };
+    const else_body = try a.alloc(Instruction, 6);
+    else_body[0] = .{ .local_get = 0 };
+    else_body[1] = .{ .i32_const = 1 };
+    else_body[2] = .i32_sub;
+    else_body[3] = .{ .call = 0 }; // self-recursion
+    else_body[4] = .{ .local_get = 0 };
+    else_body[5] = .i32_mul;
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .i32_const = 0 };
+    body[2] = .i32_eq;
+    body[3] = .{ .if_ = .{
+        .bt = .{ .value = .i32 },
+        .then_body = then_body,
+        .else_body = else_body,
+    } };
+    const codes = try a.alloc(wasm.module.Code, 1);
+    codes[0] = .{ .locals = &.{}, .body = body };
+
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "recur", .desc = .{ .func = 0 } };
+
+    const mod: wasm.Module = .{
+        .types_ = types_,
+        .funcs = funcs,
+        .codes = codes,
+        .exports = exports,
+    };
+
+    // UdonMeta.options.recursion は Item 1 実装で追加されるフィールド。
+    var meta: wasm.UdonMeta = .{ .version = 1 };
+    meta.options.recursion = .stack;
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, meta, &buf.writer, .{});
+    const out = buf.written();
+
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid") != null);
+    const cs_hits = std.mem.count(u8, out, "__call_stack__");
+    try std.testing.expect(cs_hits >= 4);
+    const top_hits = std.mem.count(u8, out, "__call_stack_top__");
+    try std.testing.expect(top_hits >= 4);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
+}
+
+test "non-recursive function does not spill when recursion=stack" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const params = try a.alloc(ValType, 2);
+    params[0] = .i32;
+    params[1] = .i32;
+    const results = try a.alloc(ValType, 1);
+    results[0] = .i32;
+    const types_ = try a.alloc(wasm.types.FuncType, 1);
+    types_[0] = .{ .params = params, .results = results };
+    const funcs = try a.alloc(u32, 1);
+    funcs[0] = 0;
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .i32_add;
+    const codes = try a.alloc(wasm.module.Code, 1);
+    codes[0] = .{ .locals = &.{}, .body = body };
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "add", .desc = .{ .func = 0 } };
+
+    const mod: wasm.Module = .{
+        .types_ = types_,
+        .funcs = funcs,
+        .codes = codes,
+        .exports = exports,
+    };
+    var meta: wasm.UdonMeta = .{ .version = 1 };
+    meta.options.recursion = .stack;
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, meta, &buf.writer, .{});
+    const out = buf.written();
+
+    var it = std.mem.splitSequence(u8, out, "\n");
+    var push_in_code: usize = 0;
+    var in_data = true;
+    while (it.next()) |line| {
+        if (std.mem.indexOf(u8, line, ".code_start") != null) in_data = false;
+        if (!in_data and std.mem.indexOf(u8, line, "PUSH, __call_stack__") != null) {
+            push_in_code += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), push_in_code);
+}
+
+test "synthesized unaligned i32.load emits runtime alignment dispatch" {
+    // README unimplemented item: "Unaligned / page-straddling memory access".
+    //
+    // 戦略: LLVM は bench のアクセスすべてに align=2 (log2, = 4 バイト) を
+    // 立てるので、bench だけでは unaligned ケースを発火できない。
+    // ここでは align=0 (byte-aligned hint) を持つ i32.load を 1 つ含む
+    // 小さな module を手で合成し、翻訳器が runtime 整列チェック分岐を
+    // 吐き出すことを確認する。
+    //
+    // 期待する出力構造 (spec_linear_memory.md §6 Example 1 の 3-branch 拡張):
+    //   - `sub = addr & 3` を計算し、0 でないとき fallback へ JUMP
+    //   - fallback ラベル (`__*_mlw_slow_*__` のような unique 名)
+    //   - fallback は 2 word 読み + shift + or で結合
+    //
+    // 名前規約: 実装者は `_mlw_fast_`, `_mlw_slow_`, `_mlw_end_` または
+    // それに類するラベルを関数内ユニーク id 付きで使用する。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // fn load_maybe_unaligned(addr: i32) -> i32 : local.get 0; i32.load align=0; end
+    const params = try a.alloc(ValType, 1);
+    params[0] = .i32;
+    const results = try a.alloc(ValType, 1);
+    results[0] = .i32;
+    const types_ = try a.alloc(wasm.types.FuncType, 1);
+    types_[0] = .{ .params = params, .results = results };
+
+    const funcs = try a.alloc(u32, 1);
+    funcs[0] = 0;
+
+    const body = try a.alloc(Instruction, 2);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .i32_load = .{ .@"align" = 0, .offset = 0 } };
+    const codes = try a.alloc(wasm.module.Code, 1);
+    codes[0] = .{ .locals = &.{}, .body = body };
+
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "load_maybe_unaligned", .desc = .{ .func = 0 } };
+
+    // Memory section: 1-page module so __G__memory infra is emitted.
+    const memories = try a.alloc(wasm.types.MemType, 1);
+    memories[0] = .{ .min = 1, .max = null };
+
+    const mod: wasm.Module = .{
+        .types_ = types_,
+        .funcs = funcs,
+        .codes = codes,
+        .exports = exports,
+        .memories = memories,
+    };
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // 3-branch 構造のラベルが存在すること。実装者は prefix を決めてよいが
+    // ここでは最低限 "fast" / "slow" or "unaligned" / "end" のいずれかが
+    // 関数名プレフィックスと共に複数出現することを要求する。
+    const has_fast = std.mem.indexOf(u8, out, "mlw_fast") != null or
+        std.mem.indexOf(u8, out, "_aligned") != null;
+    const has_slow = std.mem.indexOf(u8, out, "mlw_slow") != null or
+        std.mem.indexOf(u8, out, "unaligned") != null or
+        std.mem.indexOf(u8, out, "straddle") != null;
+    try std.testing.expect(has_fast);
+    try std.testing.expect(has_slow);
+
+    // 整列チェックの `addr & 3` が出ていること: addr に対する LogicalAnd と
+    // `__c_i32_3` (または相当する const) が現れる。
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_3") != null);
+}
+
+test "bench: no __unsupported__ annotation remains" {
+    // 最終的な受け入れ条件: bench.wasm を変換したら ANNOTATION __unsupported__
+    // は一切出現しない。このテストを Green にすることがタスク全体の完成定義。
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    // `__unsupported__` はデータ宣言として 1 回出現する
+    // (code sink の安全策)。ANNOTATION としての使用は 0 回であるべき。
+    var it = std.mem.splitSequence(u8, out, "\n");
+    var annotation_hits: usize = 0;
+    while (it.next()) |line| {
+        if (std.mem.indexOf(u8, line, "ANNOTATION") != null and
+            std.mem.indexOf(u8, line, "__unsupported__") != null)
+        {
+            annotation_hits += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), annotation_hits);
 }
 
 test "translate simple add module" {

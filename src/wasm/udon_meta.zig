@@ -23,6 +23,7 @@ pub const SourceKind = enum { global, symbol, name, @"export" };
 pub const FieldType = enum { bool_, int, uint, float, string, object };
 pub const EventKind = enum { Start, Update, Interact, custom };
 pub const UnknownPolicy = enum { ignore, warn, error_ };
+pub const RecursionMode = enum { disabled, stack };
 
 pub const Source = struct {
     kind: SourceKind,
@@ -70,6 +71,7 @@ pub const Options = struct {
     unknown_field_policy: ?UnknownPolicy = null,
     unknown_function_policy: ?UnknownPolicy = null,
     memory: MemoryOptions = .{},
+    recursion: RecursionMode = .disabled,
 };
 
 pub const UdonMeta = struct {
@@ -141,6 +143,12 @@ fn parseUnknownPolicy(s: []const u8) errors.ParseError!UnknownPolicy {
     if (std.mem.eql(u8, s, "warn")) return .warn;
     if (std.mem.eql(u8, s, "error")) return .error_;
     return error.InvalidUnknownPolicy;
+}
+
+fn parseRecursionMode(s: []const u8) errors.ParseError!RecursionMode {
+    if (std.mem.eql(u8, s, "disabled")) return .disabled;
+    if (std.mem.eql(u8, s, "stack")) return .stack;
+    return error.MalformedMeta;
 }
 
 fn parseSource(obj: std.json.ObjectMap) errors.ParseError!Source {
@@ -245,6 +253,10 @@ fn parseOptions(obj: std.json.ObjectMap) errors.ParseError!Options {
     if (obj.get("memory")) |mv| {
         const mobj = try getObjectFromValue(mv);
         o.memory = try parseMemoryOptions(mobj);
+    }
+    if (obj.get("recursion")) |rv| {
+        const rs = try getStringFromValue(rv);
+        o.recursion = try parseRecursionMode(rs);
     }
     return o;
 }
@@ -479,6 +491,29 @@ test "parse rejects initialPages > maxPages" {
         \\}
     ;
     try std.testing.expectError(error.InvalidMemoryPageBounds, parse(arena.allocator(), j));
+}
+
+test "parse options.recursion=stack" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const j = "{\"version\":1,\"options\":{\"recursion\":\"stack\"}}";
+    const m = try parse(arena.allocator(), j);
+    try std.testing.expectEqual(RecursionMode.stack, m.options.recursion);
+}
+
+test "parse options.recursion default is disabled" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const j = "{\"version\":1,\"options\":{}}";
+    const m = try parse(arena.allocator(), j);
+    try std.testing.expectEqual(RecursionMode.disabled, m.options.recursion);
+}
+
+test "parse options.recursion invalid string" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const j = "{\"version\":1,\"options\":{\"recursion\":\"nope\"}}";
+    try std.testing.expectError(error.MalformedMeta, parse(arena.allocator(), j));
 }
 
 test "parse rejects invalid UTF-8" {

@@ -23,20 +23,20 @@ Covers enough of the surface to translate `examples/wasm-bench` structurally end
 
 - [x] WASM Core 1 / MVP binary parser (types, imports/exports, code, data, element, custom/name)
 - [x] `__udon_meta` JSON metadata extraction from data segments
-- [x] Arithmetic (full i32; i64/f64 via EXTERN signatures, partial)
+- [x] Arithmetic (full i32 / i64 / f64 via EXTERN signatures)
 - [x] Structured control flow (block / loop / if-else / br / br_if / br_table / return)
 - [x] Locals and globals (`__{fn}_P{i}__` / `__{fn}_L{i}__` / `__G__{name}` naming)
 - [x] Direct calls with the RAC-based ABI
 - [x] Full `call_indirect` (shared `__ind_P*` / `__ind_R*` + per-function indirect entry + trampoline)
-- [x] Word-aligned linear memory `i32.load` / `i32.store`, `memory.size`
+- [x] Linear memory `i32.load` / `i32.store` with compile-time aligned fast path and 3-branch (unaligned within-chunk / page-straddling) fallback, plus `i64.load` / `i64.store` word-pair combine, `memory.size`
+- [x] Full `i32.load8_*` / `i32.store8` and `i32.store16` shift/mask RMW expansion
+- [x] `memory.grow` real allocation (per-page `SystemUInt32Array` ctor + outer `SetValue`, bounds-checked against `maxPages`)
+- [x] Conversion opcodes (`i32.wrap_i64`, `i64.extend_i32_*`, `i{32,64}.trunc_f{32,64}_{s,u}`, `f{32,64}.convert_i{32,64}_{s,u}`, `f32.demote_f64`, `f64.promote_f32`, `{i,f}{32,64}.reinterpret_{f,i}{32,64}`)
 - [x] Host import dispatch via signature grammar, with `SystemString` marshalling from `(ptr, len)`
 - [x] `__udon_meta.functions` → Udon event-label mapping (`_start` / `_update` / `_interact` / …)
+- [x] Recursive-function call-stack spill (opt-in via `__udon_meta.options.recursion = "stack"`, Tarjan-SCC based detection, prologue/epilogue spill of P / L / R / RA onto `__call_stack__`)
 - [x] CLI (`translate <in.wasm> [-o <out.uasm>]`)
-- [ ] Recursive-function call-stack spill (data declarations exist; spill/restore logic is TODO)
-- [ ] Unaligned / page-straddling memory access
-- [ ] `memory.grow` real allocation (currently returns the current page count)
-- [ ] Full `i32.load8_*` / `i32.store8` shift/mask expansion
-- [ ] Some conversion opcodes (`f64.convert_*`, `i32.trunc_sat_*`, etc.)
+- [ ] `i32.trunc_sat_*` (0xFC prefix, post-MVP) and other non-MVP extensions
 
 ## Getting started
 
@@ -132,13 +132,14 @@ examples/wasm-bench/       # Test fixture (freestanding Zig → MVP WASM)
 
 ## Testing
 
-`zig build test` runs 162 unit and integration tests:
+`zig build test` runs 185 unit and integration tests:
 
-- ~120 parser tests in `src/wasm/*.zig`
+- Parser tests in `src/wasm/*.zig` (including `__udon_meta` parse coverage for `options.recursion`)
 - Assembly writer tests in `src/udon/*.zig`
 - Signature-parser tests in `src/translator/extern_sig.zig`, including a regression round-trip over the entire numeric EXTERN table
+- Call-graph / Tarjan SCC tests in `src/translator/recursion.zig` (self-recursion, mutual recursion, linear chains)
 - Mock-`Host`-based tests for the generic import dispatcher in `src/translator/lower_import.zig`
-- End-to-end structural assertions in `src/translator/translate.zig` that `@embedFile` the compiled `bench.wasm` and check the emitted assembly
+- End-to-end structural assertions in `src/translator/translate.zig` that `@embedFile` the compiled `bench.wasm` and check the emitted assembly, plus synthesized-module tests for unaligned memory access and recursion spill
 
 Execution on the real Udon VM depends on the VRChat runtime and cannot be validated from CI, so the translator's responsibility stops at "emit a structurally spec-conformant Udon Assembly program."
 
