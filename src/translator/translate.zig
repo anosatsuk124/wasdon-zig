@@ -1312,6 +1312,23 @@ test "translate bench.wasm end-to-end (structural)" {
 
     // ---- terminator JUMP exists at event exits ----
     try std.testing.expect(std.mem.indexOf(u8, out, "JUMP, 0xFFFFFFFC") != null);
+
+    // ---- struct tests (test_struct) produce memory load/store sequences ----
+    // Struct field access lowers to i32.load/store at linear-memory offsets.
+    // The translator emits those through the chunked-memory fast path — each
+    // access leaves a distinctive RightShift + LogicalAnd preamble. We check
+    // for the field-word-fetch extern used by both load and store.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid") != null);
+    // Subtraction and multiplication come from test_struct's rect_width and
+    // point_area (when not fully folded). Multiplication is already covered
+    // by test_arithmetic but its presence is reassuring.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemInt32.__op_Multiply__SystemInt32_SystemInt32__SystemInt32") != null);
 }
 
 test "translate simple add module" {

@@ -183,6 +183,77 @@ fn test_indirect_call() void {
     logf("add_one(99) = {d}", .{ops[2](99)}); // 100
 }
 
+// ==== test_struct: 構造体のフィールドアクセス / by-value 渡し / by-pointer 渡し ====
+// 翻訳器から見ると構造体は linear memory 上のオフセットアクセスに展開される。
+// 各フィールドの i32.load/store offset=N が期待通り生成されるか確認するためのフィクスチャ。
+const Point = struct {
+    x: i32,
+    y: i32,
+};
+
+const Rect = struct {
+    tl: Point,
+    br: Point,
+    tag: i32,
+};
+
+fn point_area(p: Point) i32 {
+    // by-value: wasm ABI 上は { x, y } が 2 つの i32 param に展開される。
+    return p.x * p.y;
+}
+
+fn point_translate(p: *Point, dx: i32, dy: i32) void {
+    // by-pointer: linear memory の offset=0 / offset=4 への store にコンパイルされる。
+    p.x += dx;
+    p.y += dy;
+}
+
+fn rect_width(r: *const Rect) i32 {
+    return r.br.x - r.tl.x;
+}
+
+var g_rect: Rect = .{
+    .tl = .{ .x = 1, .y = 2 },
+    .br = .{ .x = 11, .y = 22 },
+    .tag = 0x1234,
+};
+
+fn test_struct() void {
+    log("== struct ==");
+
+    // (1) by-value の単純な field access
+    const p: Point = .{ .x = 6, .y = 7 };
+    logf("point_area({{6,7}}) = {d}", .{point_area(p)}); // 42
+
+    // (2) by-pointer の read-modify-write (linear memory offset store)
+    var q: Point = .{ .x = 10, .y = 20 };
+    point_translate(&q, 3, 4);
+    logf("q after translate = ({d}, {d})", .{ q.x, q.y }); // (13, 24)
+
+    // (3) ネストした構造体 + 読み取り専用ポインタ
+    logf("rect_width(g_rect) = {d}", .{rect_width(&g_rect)}); // 10
+    logf("g_rect.tag = 0x{x}", .{g_rect.tag}); // 1234
+
+    // (4) struct の in-place 更新 (const default value がメモリにコピーされることの確認)
+    g_rect.tag += 1;
+    logf("g_rect.tag after inc = 0x{x}", .{g_rect.tag}); // 1235
+
+    // (5) 配列内 struct のインデックスアクセス (複数要素のオフセット計算)
+    var points: [3]Point = .{
+        .{ .x = 1, .y = 1 },
+        .{ .x = 2, .y = 4 },
+        .{ .x = 3, .y = 9 },
+    };
+    var sum: i32 = 0;
+    var i: usize = 0;
+    while (i < points.len) : (i += 1) sum += point_area(points[i]);
+    logf("sum of areas = {d}", .{sum}); // 1 + 8 + 27 = 36
+
+    // (6) ポインタ経由で配列要素の構造体を書き換える
+    point_translate(&points[1], 100, 200);
+    logf("points[1] after translate = ({d}, {d})", .{ points[1].x, points[1].y }); // (102, 204)
+}
+
 // ==== test_64bit_and_float: i64 / f64 演算 ====
 fn test_64bit_and_float() void {
     log("== 64bit_and_float ==");
@@ -208,6 +279,7 @@ export fn on_start() void {
     test_recursion();
     test_memory();
     test_indirect_call();
+    test_struct();
     test_64bit_and_float();
     log("=== on_start done ===");
 }
