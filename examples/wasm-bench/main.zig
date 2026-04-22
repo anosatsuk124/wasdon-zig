@@ -24,10 +24,13 @@ fn logf(comptime format: []const u8, args: anytype) void {
     log(s);
 }
 
-// グローバル (翻訳器の __G__ 命名規則テスト用)
-var counter: i32 = 0;
-var accum: i64 = 0;
-var update_tick: i32 = 0;
+// グローバル (翻訳器の __G__ 命名規則テスト用)。
+// `export` を付けて WASM global として明示的にエクスポートする。
+// これがないと Zig はデータセクションに置いてしまい、__udon_meta の
+// `"source": {"kind":"global","name":"counter"}` が解決できない。
+export var counter: i32 = 0;
+export var accum: i64 = 0;
+export var update_tick: i32 = 0;
 
 // リニアメモリで使う static buffer
 var scratch: [256]u32 = [_]u32{0} ** 256;

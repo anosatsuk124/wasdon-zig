@@ -36,6 +36,23 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
+    // Udon Assembly construction primitives (WASM-independent: type name
+    // encoding + data/code section writer with bytecode address layout).
+    const udon_mod = b.addModule("udon", .{
+        .root_source_file = b.path("src/udon/root.zig"),
+        .target = target,
+    });
+
+    // Translator module (WASM → Udon Assembly).
+    const translator_mod = b.addModule("translator", .{
+        .root_source_file = b.path("src/translator/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "wasm", .module = wasm_mod },
+            .{ .name = "udon", .module = udon_mod },
+        },
+    });
+
     const mod = b.addModule("wasdon_zig", .{
         // The root source file is the "entry point" of this module. Users of
         // this module will only be able to access public declarations contained
@@ -49,6 +66,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "wasm", .module = wasm_mod },
+            .{ .name = "udon", .module = udon_mod },
+            .{ .name = "translator", .module = translator_mod },
         },
     });
 
@@ -152,6 +171,18 @@ pub fn build(b: *std.Build) void {
     });
     const run_wasm_tests = b.addRunArtifact(wasm_tests);
 
+    // Test executable for the udon sub-library.
+    const udon_tests = b.addTest(.{
+        .root_module = udon_mod,
+    });
+    const run_udon_tests = b.addRunArtifact(udon_tests);
+
+    // Test executable for the translator sub-library.
+    const translator_tests = b.addTest(.{
+        .root_module = translator_mod,
+    });
+    const run_translator_tests = b.addRunArtifact(translator_tests);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
@@ -159,6 +190,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_wasm_tests.step);
+    test_step.dependOn(&run_udon_tests.step);
+    test_step.dependOn(&run_translator_tests.step);
 
     // === wasm test bench ===
     // 「ConsoleWriteLine だけが import されている環境」を想定した
@@ -194,6 +227,7 @@ pub fn build(b: *std.Build) void {
     // (@embedFile refuses paths outside the package).
     const copy_bench = b.addUpdateSourceFiles();
     copy_bench.addCopyFileToSource(wasm_exe.getEmittedBin(), "src/wasm/testdata/bench.wasm");
+    copy_bench.addCopyFileToSource(wasm_exe.getEmittedBin(), "src/translator/testdata/bench.wasm");
     const wasm_step = b.step("wasm-example", "Build the example WASM test bench");
     wasm_step.dependOn(&wasm_install.step);
     wasm_step.dependOn(&copy_bench.step);

@@ -1,71 +1,86 @@
+//! wasdon-zig CLI.
+//!
+//! Usage:
+//!   wasdon-zig translate <input.wasm> [-o <output.uasm>]
+//!
+//! If `-o` is omitted, the translation is written to stdout. The CLI is the
+//! only place that touches stdio; the translator itself is a pure library.
+
 const std = @import("std");
 const Io = std.Io;
 
 const wasdon_zig = @import("wasdon_zig");
 
 pub fn main(init: std.process.Init) !void {
-    // Prints to stderr, unbuffered, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-
-    // This is appropriate for anything that lives as long as the process.
     const arena: std.mem.Allocator = init.arena.allocator();
-
-    // Accessing command line arguments:
     const args = try init.minimal.args.toSlice(arena);
-    for (args) |arg| {
-        std.log.info("arg: {s}", .{arg});
-    }
-
-    // In order to do I/O operations need an `Io` instance.
     const io = init.io;
 
-    // Stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-    const stdout_writer = &stdout_file_writer.interface;
+    if (args.len < 2) {
+        try printUsage(init, "missing subcommand");
+        return;
+    }
 
-    try wasdon_zig.printAnotherMessage(stdout_writer);
+    if (std.mem.eql(u8, args[1], "translate")) {
+        try runTranslate(init, args[2..]);
+        return;
+    }
 
-    try stdout_writer.flush(); // Don't forget to flush!
+    try printUsage(init, "unknown subcommand");
+    _ = io;
 }
 
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
+fn printUsage(init: std.process.Init, reason: []const u8) !void {
+    var buf: [2048]u8 = undefined;
+    var fw: Io.File.Writer = .init(.stderr(), init.io, &buf);
+    const w = &fw.interface;
+    try w.print("error: {s}\n\nUsage: wasdon-zig translate <input.wasm> [-o <output.uasm>]\n", .{reason});
+    try w.flush();
 }
 
-test "fuzz example" {
-    try std.testing.fuzz({}, testOne, .{});
+fn runTranslate(init: std.process.Init, args: []const []const u8) !void {
+    const arena: std.mem.Allocator = init.arena.allocator();
+    if (args.len < 1) {
+        try printUsage(init, "translate requires an input path");
+        return;
+    }
+    const input_path = args[0];
+    var output_path: ?[]const u8 = null;
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "-o")) {
+            if (i + 1 >= args.len) {
+                try printUsage(init, "-o requires a path");
+                return;
+            }
+            output_path = args[i + 1];
+            i += 1;
+        }
+    }
+
+    const cwd = std.Io.Dir.cwd();
+    const wasm_bytes = try cwd.readFileAlloc(init.io, input_path, arena, .limited(64 * 1024 * 1024));
+
+    // Translate into a growing buffer first so errors surface before we open
+    // the output file.
+    var allocating: Io.Writer.Allocating = .init(arena);
+    defer allocating.deinit();
+    try wasdon_zig.translateBytes(arena, wasm_bytes, &allocating.writer, .{});
+    const out = allocating.written();
+
+    if (output_path) |p| {
+        try cwd.writeFile(init.io, .{ .sub_path = p, .data = out });
+    } else {
+        var buf: [4096]u8 = undefined;
+        var stdout_fw: Io.File.Writer = .init(.stdout(), init.io, &buf);
+        const stdout = &stdout_fw.interface;
+        try stdout.writeAll(out);
+        try stdout.flush();
+    }
 }
 
-fn testOne(context: void, smith: *std.testing.Smith) !void {
-    _ = context;
-    // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(u8) = .empty;
-    defer list.deinit(gpa);
-    while (!smith.eos()) switch (smith.value(enum { add_data, dup_data })) {
-        .add_data => {
-            const slice = try list.addManyAsSlice(gpa, smith.value(u4));
-            smith.bytes(slice);
-        },
-        .dup_data => {
-            if (list.items.len == 0) continue;
-            if (list.items.len > std.math.maxInt(u32)) return error.SkipZigTest;
-            const len = smith.valueRangeAtMost(u32, 1, @min(32, list.items.len));
-            const off = smith.valueRangeAtMost(u32, 0, @intCast(list.items.len - len));
-            try list.appendSlice(gpa, list.items[off..][0..len]);
-            try std.testing.expectEqualSlices(
-                u8,
-                list.items[off..][0..len],
-                list.items[list.items.len - len ..],
-            );
-        },
-    };
+test "main smoke" {
+    // Just ensure the library is linked; proper e2e tests live in
+    // src/translator/translate.zig and src/root.zig.
+    try std.testing.expect(true);
 }

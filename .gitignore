@@ -3,6 +3,7 @@
 zig-out/
 
 # Auto-generated test fixture (produced by `zig build wasm-example` and
-# consumed by the wasm parser integration test via @embedFile)
+# consumed by the wasm parser and translator integration tests via @embedFile)
 src/wasm/testdata/
+src/translator/testdata/
 
