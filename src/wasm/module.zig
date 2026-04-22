@@ -427,9 +427,16 @@ test "parseImportSection one func import" {
     // count=01 mod="env" name="foo" desc=0x00 typeidx=0
     const payload = &[_]u8{
         0x01, // count
-        0x03, 'e', 'n', 'v',
-        0x03, 'f', 'o', 'o',
-        0x00, 0x00,
+        0x03,
+        'e',
+        'n',
+        'v',
+        0x03,
+        'f',
+        'o',
+        'o',
+        0x00,
+        0x00,
     };
     const is = try parseImportSection(std.testing.allocator, payload);
     defer std.testing.allocator.free(is);
