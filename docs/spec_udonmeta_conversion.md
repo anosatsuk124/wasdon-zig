@@ -16,7 +16,7 @@ The metadata is mainly intended to express the following three kinds of informat
 
 * `__udon_meta` is a conceptual metadata body; its contents are UTF-8 JSON
 * Concretely, the body is placed as a static byte sequence inside a Wasm data segment
-* Its location is surfaced to the translator by exporting a pointer/length pair (`__udon_meta_ptr`, `__udon_meta_len`); alternatively, the translator may resolve it by the symbol name `__udon_meta` when the producer toolchain preserves that symbol reliably
+* Its location is surfaced to the translator by exporting a pointer/length pair (`__udon_meta_ptr`, `__udon_meta_len`)
 * If the translator finds the metadata, it decodes the bytes as UTF-8 JSON and uses them
 * If it is not found, lowering proceeds with default behavior
 * It is not intended to be read by the Wasm side at runtime
@@ -31,9 +31,9 @@ arrays themselves cannot be exported, so the canonical representation is:
   * `__udon_meta_len` — the length in bytes of the JSON
 * The translator reads these two exports, slices the data segment, and decodes the slice as UTF-8
 
-The symbol-based alternative (exposing a named static symbol `__udon_meta`) is
-permitted but fragile, because static symbol preservation is toolchain-dependent.
-When in doubt, prefer the `__udon_meta_ptr` / `__udon_meta_len` pair.
+This is the only supported form. Raw-symbol resolution (e.g. looking up a
+static symbol literally named `__udon_meta`) is not supported — producers must
+emit the `__udon_meta_ptr` / `__udon_meta_len` export pair.
 
 ---
 
@@ -432,8 +432,7 @@ All fields are optional.
 * Read their values to obtain the byte offset and length inside linear memory
 * Resolve that byte range against the module's `data` segments and extract the raw bytes
 * Decode the bytes as UTF-8 JSON
-* If the `__udon_meta_ptr` / `__udon_meta_len` pair is absent, fall back to resolving a static symbol named `__udon_meta` when the producer toolchain preserves it
-* If neither form is present, lowering proceeds with default behavior
+* If the `__udon_meta_ptr` / `__udon_meta_len` pair is absent, lowering proceeds with default behavior
 * Treat decode failure (invalid UTF-8 or malformed JSON) as an error or warning per `options.strict`
 
 ### 2. Check `version`
@@ -472,7 +471,6 @@ All fields are optional.
 * `fields[*].sync.mode` must allow only `none | linear | smooth`, matching the actual value domain of Udon Assembly `.sync`
 * `functions` event/export metadata applies to code labels and must not be confused with field sync metadata
 * `source.kind = "name"` is discouraged because it is fragile with respect to stripping and optimization
-* Locating the metadata via a raw `__udon_meta` symbol is likewise fragile; the `__udon_meta_ptr` / `__udon_meta_len` export pair is the recommended form
 * JSON is chosen for human readability, but could be replaced with CBOR or another format in the future if needed
 
 ---
