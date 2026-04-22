@@ -115,6 +115,16 @@ const Translator = struct {
     /// in `render` against the completed layout.
     rac_sites: std.ArrayList(RacSite) = .empty,
 
+    /// Set of function indices reachable via `call_indirect` (gathered from
+    /// WASM element segments). Each gets a dedicated indirect-entry label
+    /// and a trampoline. See `docs/spec_call_return_conversion.md` §7.3.
+    indirect_fns: std.AutoHashMapUnmanaged(u32, void) = .empty,
+
+    /// Maximum parameter / result arity across all types used by indirect
+    /// calls — sizes the shared `__ind_P*` / `__ind_R*` heap slots.
+    max_indirect_params: u32 = 0,
+    max_indirect_results: u32 = 0,
+
     const EventBinding = struct {
         /// WASM export name (e.g. "on_update").
         wasm_export: []const u8,
@@ -143,6 +153,7 @@ const Translator = struct {
     fn deinit(self: *Translator) void {
         self.rac_sites.deinit(self.gpa);
         self.event_bindings.deinit(self.gpa);
+        self.indirect_fns.deinit(self.gpa);
         self.asm_.deinit();
         self.arena.deinit();
     }
@@ -159,12 +170,15 @@ const Translator = struct {
         try self.resolveFunctionNames();
         try self.resolveGlobalNames();
         try self.resolveEventBindings();
+        try self.resolveIndirectFns();
         try self.emitCommonData();
         try self.emitGlobalsData();
         try self.emitMemoryData();
         try self.emitFunctionData();
+        try self.emitIndirectData();
         try self.emitEventEntries();
         try self.emitDefinedFunctions();
+        try self.emitIndirectTrampolines();
         // Unsupported-opcode sink.
         try self.asm_.addData(.{
             .name = "__unsupported__",
@@ -280,6 +294,26 @@ const Translator = struct {
                     .wasm_export = export_name,
                     .udon_label = label,
                 });
+            }
+        }
+    }
+
+    /// Scan every element segment and collect the set of function indices
+    /// reachable via `call_indirect`. Also compute the maximum param and
+    /// result arity across all affected function types — this sizes the
+    /// shared `__ind_P*` / `__ind_R*` slots used by the indirect ABI.
+    fn resolveIndirectFns(self: *Translator) Error!void {
+        for (self.mod.elements) |elem| {
+            for (elem.init) |fn_idx| {
+                try self.indirect_fns.put(self.gpa, fn_idx, {});
+                // Imports can't legally appear in element segments (Core 1
+                // validation forbids it), but guard anyway.
+                if (fn_idx < self.num_imported_funcs) continue;
+                const ty = self.functionType(fn_idx);
+                if (ty.params.len > self.max_indirect_params)
+                    self.max_indirect_params = @intCast(ty.params.len);
+                if (ty.results.len > self.max_indirect_results)
+                    self.max_indirect_results = @intCast(ty.results.len);
             }
         }
     }
@@ -430,6 +464,45 @@ const Translator = struct {
         }
     }
 
+    /// Data declarations needed to implement `call_indirect` per the
+    /// two-pass RAC convention. Emits the shared function table, shared
+    /// param/result slots, and one RAC per indirect-callable function
+    /// (whose literal is patched at `render` time to the address of the
+    /// function's `__{F}_indirect_entry__` label).
+    fn emitIndirectData(self: *Translator) Error!void {
+        if (self.indirect_fns.count() == 0) return;
+
+        // Function table — SystemUInt32Array of bytecode addresses.
+        try self.asm_.addData(.{ .name = "__fn_table__", .ty = tn.uint32_array, .init = .null_literal });
+        // Shared parameter / result slots (SystemInt32 for MVP — bench's
+        // call_indirect signatures are all (i32) -> i32). Real code with
+        // other types would parameterize the slot type per signature.
+        var i: u32 = 0;
+        while (i < self.max_indirect_params) : (i += 1) {
+            const n = try std.fmt.allocPrint(self.aa(), "__ind_P{d}__", .{i});
+            try self.asm_.addData(.{ .name = n, .ty = tn.int32, .init = .{ .int32 = 0 } });
+        }
+        i = 0;
+        while (i < self.max_indirect_results) : (i += 1) {
+            const n = try std.fmt.allocPrint(self.aa(), "__ind_R{d}__", .{i});
+            try self.asm_.addData(.{ .name = n, .ty = tn.int32, .init = .{ .int32 = 0 } });
+        }
+        // Scratch for table index.
+        try self.asm_.addData(.{ .name = "__ind_idx__", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        // Per-function entry-address RACs (one RAC per indirect-callable
+        // function, patched at render time).
+        var it = self.indirect_fns.iterator();
+        while (it.next()) |e| {
+            const fn_idx = e.key_ptr.*;
+            if (fn_idx < self.num_imported_funcs) continue;
+            const fn_name = self.fn_names[fn_idx];
+            const addr_name = try names.fnEntryAddr(self.aa(), fn_name);
+            const entry_indirect = try std.fmt.allocPrint(self.aa(), "__{s}_indirect_entry__", .{fn_name});
+            try self.asm_.addData(.{ .name = addr_name, .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+            try self.rac_sites.append(self.gpa, .{ .const_name = addr_name, .target_label = entry_indirect });
+        }
+    }
+
     // ---- code: events ----
 
     fn emitEventEntries(self: *Translator) Error!void {
@@ -503,7 +576,57 @@ const Translator = struct {
         for (self.mod.datas) |d| {
             try self.emitDataSegmentInit(d);
         }
+        try self.emitFunctionTableInit();
         try self.asm_.comment("end memory init");
+    }
+
+    /// Populate `__fn_table__` with the entry addresses of every indirect
+    /// function referenced by an element segment. The entry addresses come
+    /// from pre-declared RACs (§emitIndirectData) whose literals the render
+    /// pass patches with the layout addresses of each `__{F}_indirect_entry__`.
+    fn emitFunctionTableInit(self: *Translator) Error!void {
+        if (self.indirect_fns.count() == 0) return;
+        // Compute the table size as max(offset + init.len) across all
+        // element segments. Default to the declared table's `min` if the
+        // table section is present.
+        var table_size: u32 = 0;
+        for (self.mod.elements) |elem| {
+            const offset = wasm.const_eval.evalConstI32(self.mod, elem.offset) catch 0;
+            if (offset < 0) continue;
+            const end = @as(u32, @intCast(offset)) + @as(u32, @intCast(elem.init.len));
+            if (end > table_size) table_size = end;
+        }
+        if (self.mod.tables.len > 0) {
+            const t_min = self.mod.tables[0].limits.min;
+            if (t_min > table_size) table_size = t_min;
+        }
+        if (table_size == 0) return;
+
+        try self.asm_.comment("function table init");
+        const size_name = try std.fmt.allocPrint(self.aa(), "__fn_table_size_{d}", .{table_size});
+        try self.asm_.addData(.{ .name = size_name, .ty = tn.int32, .init = .{ .int32 = @intCast(table_size) } });
+        try self.asm_.push(size_name);
+        try self.asm_.push("__fn_table__");
+        try self.asm_.extern_("SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array");
+
+        // Fill: for each element segment, for each entry, emit a
+        // SetValue(addr_rac, offset+i) call.
+        for (self.mod.elements) |elem| {
+            const offset = wasm.const_eval.evalConstI32(self.mod, elem.offset) catch continue;
+            if (offset < 0) continue;
+            for (elem.init, 0..) |fn_idx, i| {
+                if (fn_idx < self.num_imported_funcs) continue;
+                const fn_name = self.fn_names[fn_idx];
+                const addr_name = try names.fnEntryAddr(self.aa(), fn_name);
+                const slot_idx: i32 = offset + @as(i32, @intCast(i));
+                const slot_name = try std.fmt.allocPrint(self.aa(), "__fn_tbl_idx_{d}", .{slot_idx});
+                try self.asm_.addData(.{ .name = slot_name, .ty = tn.int32, .init = .{ .int32 = slot_idx } });
+                try self.asm_.push("__fn_table__");
+                try self.asm_.push(addr_name);
+                try self.asm_.push(slot_name);
+                try self.asm_.extern_("SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid");
+            }
+        }
     }
 
     fn emitDataSegmentInit(self: *Translator, d: wasm.module.Data) Error!void {
@@ -672,7 +795,7 @@ const Translator = struct {
             .br_table => |bt| try self.emitBrTable(ctx, bt),
 
             .call => |fn_idx| try self.emitCall(ctx, fn_idx),
-            .call_indirect => try self.emitCallIndirect(ctx),
+            .call_indirect => |tidx| try self.emitCallIndirect(ctx, tidx),
 
             .memory_size => try self.emitMemorySize(ctx),
             .memory_grow => try self.emitMemoryGrow(ctx),
@@ -967,13 +1090,134 @@ const Translator = struct {
         }
     }
 
-    fn emitCallIndirect(self: *Translator, ctx: *FuncCtx) Error!void {
-        try self.asm_.comment("call_indirect (simplified — single shared indirect target)");
-        // For MVP we consume the index and leave a comment. A complete
-        // implementation would look up the function table then use
-        // __indirect_target__ + __indirect_RA__ + JUMP_INDIRECT.
-        ctx.pop(); // consume function index
-        try self.asm_.annotation("__indirect_target__");
+    /// Full `call_indirect` lowering (see docs/spec_call_return_conversion.md §7):
+    ///
+    ///   1. Pop the table index and fetch `__fn_table__[idx]` into
+    ///      `__indirect_target__`.
+    ///   2. Copy each WASM argument from the caller's S slots into the
+    ///      shared `__ind_P*` slots that every indirect-callable function
+    ///      reads from in its indirect-entry prologue.
+    ///   3. Write a RAC (bytecode address of the post-call landing label)
+    ///      into `__indirect_RA__`; every indirect function's trampoline
+    ///      reads this to JUMP_INDIRECT back.
+    ///   4. `JUMP_INDIRECT, __indirect_target__` lands in the chosen
+    ///      function's `__{F}_indirect_entry__`.
+    ///   5. After control returns, copy `__ind_R*` back into fresh S slots
+    ///      for each result.
+    ///
+    /// Type-check against `typeidx` is intentionally skipped per §7.4; the
+    /// element-segment scan at `resolveIndirectFns` already classified
+    /// callees by signature at translation time.
+    fn emitCallIndirect(self: *Translator, ctx: *FuncCtx, typeidx: u32) Error!void {
+        const ty = self.mod.types_[typeidx];
+        const n_args: u32 = @intCast(ty.params.len);
+        const n_res: u32 = @intCast(ty.results.len);
+        try self.asm_.comment("call_indirect");
+
+        // (a) Fetch table[idx] → __indirect_target__.
+        const idx_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        ctx.pop();
+        try self.asm_.push("__fn_table__");
+        try self.asm_.push(idx_slot);
+        try self.asm_.push("__indirect_target__");
+        try self.asm_.extern_("SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32");
+
+        // (b) Copy caller S slots → shared __ind_P*.
+        var i: u32 = 0;
+        while (i < n_args) : (i += 1) {
+            const src_depth = ctx.depth - n_args + i;
+            const src = try names.stackSlot(self.aa(), ctx.fn_name, src_depth);
+            const dst = try std.fmt.allocPrint(self.aa(), "__ind_P{d}__", .{i});
+            try self.asm_.push(src);
+            try self.asm_.push(dst);
+            try self.asm_.copy();
+        }
+        i = 0;
+        while (i < n_args) : (i += 1) ctx.pop();
+
+        // (c) RAC → __indirect_RA__.
+        const k = self.call_site_counter;
+        self.call_site_counter += 1;
+        const rac_name = try names.retAddrConst(self.aa(), k);
+        const ret_label = try names.callRetLabel(self.aa(), k);
+        try self.asm_.addData(.{ .name = rac_name, .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.rac_sites.append(self.gpa, .{ .const_name = rac_name, .target_label = ret_label });
+        try self.asm_.push(rac_name);
+        try self.asm_.push("__indirect_RA__");
+        try self.asm_.copy();
+
+        // (d) JUMP_INDIRECT.
+        try self.asm_.jumpIndirect("__indirect_target__");
+        try self.asm_.label(ret_label);
+
+        // (e) Copy shared __ind_R* back into caller S slots.
+        var r: u32 = 0;
+        while (r < n_res) : (r += 1) {
+            ctx.push();
+            const src = try std.fmt.allocPrint(self.aa(), "__ind_R{d}__", .{r});
+            const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+            try self.asm_.push(src);
+            try self.asm_.push(dst);
+            try self.asm_.copy();
+        }
+    }
+
+    /// Emit the per-indirect-function indirect-entry prologue and the
+    /// post-return trampoline. The indirect entry reads `__ind_P*` into the
+    /// function's own `__F_P*` slots then jumps into the direct entry — the
+    /// body itself is unchanged. When the body ends it falls into the
+    /// function's `__F_exit__` which `JUMP_INDIRECT`s on the trampoline
+    /// address we planted in `__F_RA__`.
+    fn emitIndirectTrampolines(self: *Translator) Error!void {
+        if (self.indirect_fns.count() == 0) return;
+
+        var it = self.indirect_fns.iterator();
+        while (it.next()) |e| {
+            const fn_idx = e.key_ptr.*;
+            if (fn_idx < self.num_imported_funcs) continue;
+            const fn_name = self.fn_names[fn_idx];
+            const ty = self.functionType(fn_idx);
+            const indirect_entry = try std.fmt.allocPrint(self.aa(), "__{s}_indirect_entry__", .{fn_name});
+            const trampoline = try std.fmt.allocPrint(self.aa(), "__{s}_indirect_trampoline__", .{fn_name});
+            const trampoline_rac = try std.fmt.allocPrint(self.aa(), "__{s}_trampoline_addr__", .{fn_name});
+            const entry = try names.entryLabel(self.aa(), fn_name);
+            const ra = try names.returnAddrSlot(self.aa(), fn_name);
+
+            // Pre-declare the RAC whose literal is the trampoline address;
+            // patched at render time.
+            try self.asm_.addData(.{ .name = trampoline_rac, .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+            try self.rac_sites.append(self.gpa, .{ .const_name = trampoline_rac, .target_label = trampoline });
+
+            try self.asm_.comment(try std.fmt.allocPrint(self.aa(), "indirect entry/trampoline for {s}", .{fn_name}));
+            try self.asm_.label(indirect_entry);
+            // Copy __ind_P* → __{F}_P*
+            var i: u32 = 0;
+            while (i < ty.params.len) : (i += 1) {
+                const src = try std.fmt.allocPrint(self.aa(), "__ind_P{d}__", .{i});
+                const dst = try names.param(self.aa(), fn_name, i);
+                try self.asm_.push(src);
+                try self.asm_.push(dst);
+                try self.asm_.copy();
+            }
+            // __{F}_RA__ := trampoline address (so the body's JUMP_INDIRECT
+            // naturally lands on the trampoline).
+            try self.asm_.push(trampoline_rac);
+            try self.asm_.push(ra);
+            try self.asm_.copy();
+            try self.asm_.jump(entry);
+
+            try self.asm_.label(trampoline);
+            // Copy __{F}_R* → __ind_R*
+            var r: u32 = 0;
+            while (r < ty.results.len) : (r += 1) {
+                const src = try names.returnSlot(self.aa(), fn_name, r);
+                const dst = try std.fmt.allocPrint(self.aa(), "__ind_R{d}__", .{r});
+                try self.asm_.push(src);
+                try self.asm_.push(dst);
+                try self.asm_.copy();
+            }
+            try self.asm_.jumpIndirect("__indirect_RA__");
+        }
     }
 
     /// Dispatch a host import via the generic `lower_import` module. No
@@ -1350,6 +1594,22 @@ test "translate bench.wasm end-to-end (structural)" {
     try std.testing.expect(std.mem.indexOf(u8, out, "_marshal_str_tmp:") != null);
     // Regression guard: the old hardcoded placeholder must be gone.
     try std.testing.expect(std.mem.indexOf(u8, out, "__cwl_placeholder__") == null);
+
+    // ---- call_indirect full ABI emitted ----
+    // Bench's `ops` array puts 3+ functions in the WASM table; each becomes
+    // an indirect-callable with an entry + trampoline, and every
+    // call_indirect site dispatches through __fn_table__ / __indirect_target__.
+    try std.testing.expect(std.mem.indexOf(u8, out, "__fn_table__") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_indirect_entry__:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_indirect_trampoline__:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "JUMP_INDIRECT, __indirect_target__") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid") != null);
+    // Regression guard: the old "simplified — single shared indirect target"
+    // comment must be gone.
+    try std.testing.expect(std.mem.indexOf(u8, out, "simplified — single shared indirect target") == null);
 
     // ---- memory infra was emitted ----
     try std.testing.expect(std.mem.indexOf(u8, out, "__G__memory_size_pages") != null);
