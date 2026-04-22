@@ -8,13 +8,25 @@
 
 const std = @import("std");
 
-// import module 名は wasm 慣例の "env"。
-// `extern "c"` は Zig 上で libc 依存を要求してしまうため freestanding では使えない。
-// 結果として wasm では `(import "env" "ConsoleWriteLine" (func (param i32 i32)))` になる。
-extern "env" fn ConsoleWriteLine(ptr: [*]const u8, len: usize) void;
+// Import 名そのものを Udon extern シグネチャとして記述し、翻訳器側で
+// ハードコードなしに EXTERN 命令を生成させる (docs/spec_host_import_conversion.md)。
+// Zig の raw-identifier 記法 `@"..."` で `.` や `_` を含む自由な名前が書ける。
+// `extern "c"` は libc 依存を要求してしまうため freestanding では使えない。
+extern "env" fn @"SystemConsole.__WriteLine__SystemString__SystemVoid"(
+    ptr: [*]const u8,
+    len: usize,
+) void;
+
+// もう 1 種類: `UnityEngine.Debug.Log(object)` への別ルート。
+// 同じ generic pass-through を経由し、翻訳器を改変せずに 2 番目の extern を
+// 利用できることを示す (docs/spec_host_import_conversion.md §"Worked Example" 末尾)。
+extern "env" fn @"UnityEngineDebug.__Log__SystemString__SystemVoid"(
+    ptr: [*]const u8,
+    len: usize,
+) void;
 
 fn log(s: []const u8) void {
-    ConsoleWriteLine(s.ptr, s.len);
+    @"SystemConsole.__WriteLine__SystemString__SystemVoid"(s.ptr, s.len);
 }
 
 var fmt_buf: [512]u8 = undefined;
@@ -291,4 +303,8 @@ export fn on_update() void {
 export fn on_interact() void {
     counter += 1;
     logf("interact! counter = {d}", .{counter});
+    // Generic pass-through 経由の 2 個目の extern を呼び出して、翻訳器が
+    // 同じルートで異なるシグネチャを扱えることを確認する。
+    const msg = "interact!";
+    @"UnityEngineDebug.__Log__SystemString__SystemVoid"(msg.ptr, msg.len);
 }

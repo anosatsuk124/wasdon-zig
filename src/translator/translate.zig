@@ -17,9 +17,10 @@
 //!   * Direct calls synthesize the RAC-based ABI from §5; `call_indirect`
 //!     uses a `SystemUInt32Array` function table (§7.1) via a shared indirect
 //!     jump slot. Recursion uses a dedicated `__call_stack__` (§8.2).
-//!   * The host import `env.ConsoleWriteLine(ptr, len)` is special-cased to
-//!     `SystemConsole.__WriteLine__SystemString__SystemVoid` with a UTF-8
-//!     decode of the linear-memory byte range.
+//!   * Host imports are dispatched generically via `lower_import.zig`: if
+//!     the WASM import name itself parses as an Udon extern signature
+//!     (`docs/spec_host_import_conversion.md`), it is emitted verbatim with
+//!     a `SystemString` marshaling helper for `(ptr, len)` pairs.
 //!   * Opcodes outside this minimum set are emitted as
 //!     `ANNOTATION, __unsupported__` with a comment describing what was
 //!     skipped. The resulting program is still structurally well-formed.
@@ -29,6 +30,7 @@ const wasm = @import("wasm");
 const udon = @import("udon");
 const names = @import("names.zig");
 const numeric = @import("lower_numeric.zig");
+const lower_import = @import("lower_import.zig");
 
 const tn = udon.type_name;
 const Asm = udon.Asm;
@@ -974,59 +976,34 @@ const Translator = struct {
         try self.asm_.annotation("__indirect_target__");
     }
 
+    /// Dispatch a host import via the generic `lower_import` module. No
+    /// per-import tables live here — if `imp.name` looks like an Udon extern
+    /// signature, it's emitted verbatim (see
+    /// `docs/spec_host_import_conversion.md`). Anything else falls through
+    /// to a diagnostic ANNOTATION.
     fn emitImportCall(self: *Translator, ctx: *FuncCtx, fn_idx: u32) Error!void {
-        // Identify the import by its module.name pair.
         var seen: u32 = 0;
         for (self.mod.imports) |imp| switch (imp.desc) {
-            .func => {
+            .func => |tidx| {
                 if (seen == fn_idx) {
-                    if (std.mem.eql(u8, imp.module, "env") and std.mem.eql(u8, imp.name, "ConsoleWriteLine")) {
-                        try self.emitConsoleWriteLine(ctx);
-                        return;
-                    }
-                    try self.asm_.comment(try std.fmt.allocPrint(self.aa(), "TODO import: {s}.{s}", .{ imp.module, imp.name }));
-                    try self.asm_.annotation("__unsupported__");
-                    // Consume whatever the import's signature said.
-                    const imp_ty = self.mod.types_[imp.desc.func];
-                    var i: u32 = 0;
-                    while (i < imp_ty.params.len) : (i += 1) ctx.pop();
-                    for (imp_ty.results) |_| ctx.push();
+                    const imp_ty = self.mod.types_[tidx];
+                    var bridge = HostBridge{ .t = self, .ctx = ctx };
+                    const host = bridge.host();
+                    lower_import.emit(host, imp, imp_ty) catch |err| switch (err) {
+                        error.SignatureMismatch, error.UnrecognizedImport => {
+                            // Recover by consuming whatever the WASM type said.
+                            var i: u32 = 0;
+                            while (i < imp_ty.params.len) : (i += 1) ctx.pop();
+                            for (imp_ty.results) |_| ctx.push();
+                        },
+                        error.OutOfMemory => return error.OutOfMemory,
+                    };
                     return;
                 }
                 seen += 1;
             },
             else => {},
         };
-    }
-
-    /// ConsoleWriteLine(ptr, len) → read `len` bytes from linear memory at
-    /// `ptr`, build a SystemString, and write via SystemConsole.WriteLine.
-    /// The full byte-by-byte read is elided for brevity; we emit a
-    /// placeholder EXTERN sequence that a completed runtime loop could
-    /// replace. The structural intent is visible.
-    fn emitConsoleWriteLine(self: *Translator, ctx: *FuncCtx) Error!void {
-        try self.asm_.comment("env.ConsoleWriteLine(ptr, len) → SystemConsole.WriteLine(SystemString)");
-        // Consume both args from the stack.
-        ctx.pop();
-        ctx.pop();
-        // Emit a single placeholder EXTERN that stands in for decoded string
-        // writing. A complete translator would construct the string via a
-        // memory-loop helper.
-        const msg_name = "__cwl_placeholder__";
-        // Declare the placeholder data only once — iterating datas.items
-        // while mutating would invalidate the slice on resize.
-        var exists = false;
-        for (self.asm_.datas.items) |d| {
-            if (std.mem.eql(u8, d.name, msg_name)) {
-                exists = true;
-                break;
-            }
-        }
-        if (!exists) {
-            try self.asm_.addData(.{ .name = msg_name, .ty = tn.string, .init = .{ .string = "<wasm msg>" } });
-        }
-        try self.asm_.push(msg_name);
-        try self.asm_.extern_("SystemConsole.__WriteLine__SystemString__SystemVoid");
     }
 
     // ---- memory ----
@@ -1173,6 +1150,78 @@ const Translator = struct {
     }
 };
 
+// --------------------- host-import bridge ---------------------
+
+/// Adapter between `lower_import.Host` (a type-erased interface so that
+/// module stays decoupled) and the concrete `Translator` state. Holds
+/// pointers to both the translator and the per-function context so vtable
+/// callbacks can mutate each as needed.
+const HostBridge = struct {
+    t: *Translator,
+    ctx: *Translator.FuncCtx,
+
+    fn host(self: *HostBridge) lower_import.Host {
+        return .{ .ctx = self, .vtable = &vtable };
+    }
+
+    const vtable: lower_import.Host.VTable = .{
+        .allocator = allocator,
+        .declareScratch = declareScratch,
+        .callerFnName = callerFnName,
+        .callerDepth = callerDepth,
+        .consumeOne = consumeOne,
+        .produceOne = produceOne,
+        .push = push,
+        .copy = copy,
+        .externCall = externCall,
+        .comment = comment,
+        .annotateUnsupported = annotateUnsupported,
+    };
+
+    fn self_(ctx: *anyopaque) *HostBridge {
+        return @ptrCast(@alignCast(ctx));
+    }
+
+    fn allocator(ctx: *anyopaque) std.mem.Allocator {
+        return self_(ctx).t.aa();
+    }
+    fn declareScratch(ctx: *anyopaque, n: []const u8, ty: tn.TypeName, lit: Literal) lower_import.Error!void {
+        const hb = self_(ctx);
+        // Idempotent: skip if a decl with the same name already exists.
+        for (hb.t.asm_.datas.items) |d| {
+            if (std.mem.eql(u8, d.name, n)) return;
+        }
+        try hb.t.asm_.addData(.{ .name = n, .ty = ty, .init = lit });
+    }
+    fn callerFnName(ctx: *anyopaque) []const u8 {
+        return self_(ctx).ctx.fn_name;
+    }
+    fn callerDepth(ctx: *anyopaque) u32 {
+        return self_(ctx).ctx.depth;
+    }
+    fn consumeOne(ctx: *anyopaque) void {
+        self_(ctx).ctx.pop();
+    }
+    fn produceOne(ctx: *anyopaque) void {
+        self_(ctx).ctx.push();
+    }
+    fn push(ctx: *anyopaque, sym: []const u8) lower_import.Error!void {
+        try self_(ctx).t.asm_.push(sym);
+    }
+    fn copy(ctx: *anyopaque) lower_import.Error!void {
+        try self_(ctx).t.asm_.copy();
+    }
+    fn externCall(ctx: *anyopaque, sig: []const u8) lower_import.Error!void {
+        try self_(ctx).t.asm_.extern_(sig);
+    }
+    fn comment(ctx: *anyopaque, text: []const u8) lower_import.Error!void {
+        try self_(ctx).t.asm_.comment(text);
+    }
+    fn annotateUnsupported(ctx: *anyopaque) lower_import.Error!void {
+        try self_(ctx).t.asm_.annotation("__unsupported__");
+    }
+};
+
 // --------------------- helpers ---------------------
 
 fn udonTypeOf(vt: ValType) tn.TypeName {
@@ -1288,9 +1337,19 @@ test "translate bench.wasm end-to-end (structural)" {
     try std.testing.expect(std.mem.indexOf(u8, out, "_update:") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "_interact:") != null);
 
-    // ---- host import was bound ----
+    // ---- host imports pass through the generic dispatcher ----
+    // The bench declares both SystemConsole.__WriteLine and
+    // UnityEngineDebug.__Log via raw-identifier import names; the translator
+    // should emit EXTERN with those exact strings, with no hardcoded table.
     try std.testing.expect(std.mem.indexOf(u8, out,
         "SystemConsole.__WriteLine__SystemString__SystemVoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "UnityEngineDebug.__Log__SystemString__SystemVoid") != null);
+    // Generic SystemString marshaling helper is declared once for all
+    // string arguments regardless of which extern they target.
+    try std.testing.expect(std.mem.indexOf(u8, out, "_marshal_str_tmp:") != null);
+    // Regression guard: the old hardcoded placeholder must be gone.
+    try std.testing.expect(std.mem.indexOf(u8, out, "__cwl_placeholder__") == null);
 
     // ---- memory infra was emitted ----
     try std.testing.expect(std.mem.indexOf(u8, out, "__G__memory_size_pages") != null);
