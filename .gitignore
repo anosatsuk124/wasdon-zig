@@ -1,3 +1,8 @@
 # Zig build outputs / caches
 .zig-cache/
 zig-out/
+
+# Auto-generated test fixture (produced by `zig build wasm-example` and
+# consumed by the wasm parser integration test via @embedFile)
+src/wasm/testdata/
+

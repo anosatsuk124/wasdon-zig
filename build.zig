@@ -28,6 +28,14 @@ pub fn build(b: *std.Build) void {
     // to our consumers. We must give it a name because a Zig package can expose
     // multiple modules and consumers will need to be able to specify which
     // module they want to access.
+    // Sub-library: WASM Core 1 binary parser. Kept as a separate module so
+    // the translator front-end and anything that consumes it through
+    // `@import("wasdon_zig").wasm` share a single source of truth.
+    const wasm_mod = b.addModule("wasm", .{
+        .root_source_file = b.path("src/wasm/root.zig"),
+        .target = target,
+    });
+
     const mod = b.addModule("wasdon_zig", .{
         // The root source file is the "entry point" of this module. Users of
         // this module will only be able to access public declarations contained
@@ -39,6 +47,9 @@ pub fn build(b: *std.Build) void {
         // Later on we'll use this module as the root module of a test executable
         // which requires us to specify a target.
         .target = target,
+        .imports = &.{
+            .{ .name = "wasm", .module = wasm_mod },
+        },
     });
 
     // Here we define an executable. An executable needs to have a root module
@@ -135,20 +146,35 @@ pub fn build(b: *std.Build) void {
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
+    // Test executable for the wasm sub-library.
+    const wasm_tests = b.addTest(.{
+        .root_module = wasm_mod,
+    });
+    const run_wasm_tests = b.addRunArtifact(wasm_tests);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_wasm_tests.step);
 
     // === wasm test bench ===
     // 「ConsoleWriteLine だけが import されている環境」を想定した
     // freestanding wasm バイナリ。翻訳器の入力フィクスチャとして使う。
     // `zig build wasm-example` で zig-out/wasm/bench.wasm が出力される。
+    //
+    // CPU モデルを `mvp` に固定することで、LLVM が生成するバイナリを
+    // **WebAssembly Core 1.0 / MVP** の opcode のみに制約する。
+    // デフォルトの `generic` は sign-ext / bulk-memory / multivalue /
+    // mutable-globals / nontrapping-fptoint / reference-types を有効化して
+    // ポスト MVP の opcode (0xC0-0xC4, 0xFC prefixed ops, 等) を出力し、
+    // Core 1 パーサが `UnknownOpcode` で弾いてしまう。
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
+        .cpu_model = .{ .explicit = &std.Target.wasm.cpu.mvp },
     });
     const wasm_exe = b.addExecutable(.{
         .name = "bench",
@@ -163,8 +189,14 @@ pub fn build(b: *std.Build) void {
     const wasm_install = b.addInstallArtifact(wasm_exe, .{
         .dest_dir = .{ .override = .{ .custom = "wasm" } },
     });
+    // Also drop the compiled fixture inside the wasm sub-library package
+    // tree so the integration test can pick it up via `@embedFile`
+    // (@embedFile refuses paths outside the package).
+    const copy_bench = b.addUpdateSourceFiles();
+    copy_bench.addCopyFileToSource(wasm_exe.getEmittedBin(), "src/wasm/testdata/bench.wasm");
     const wasm_step = b.step("wasm-example", "Build the example WASM test bench");
     wasm_step.dependOn(&wasm_install.step);
+    wasm_step.dependOn(&copy_bench.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
