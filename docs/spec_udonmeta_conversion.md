@@ -1,0 +1,400 @@
+# `__udon_meta` Content Design
+
+## Purpose
+
+`__udon_meta` is a static metadata blob that is independent of the computational semantics of the Wasm binary itself, and is intended to be read by a `WASM -> WAT -> UdonAssembly` translator.
+
+The metadata is mainly intended to express the following three kinds of information:
+
+* How state on the Wasm side should be treated as data-section variables on the Udon side
+* Which Udon event labels Wasm-side functions should correspond to
+* What synchronization policy and conversion options should apply to the UdonBehaviour as a whole
+
+---
+
+## Basic Policy
+
+* `__udon_meta` is an exported static byte blob
+* Its contents are UTF-8 JSON
+* If the translator finds `__udon_meta`, it decodes and uses it
+* If it is not found, lowering proceeds with default behavior
+* It is not intended to be read by the Wasm side at runtime
+* It is treated strictly as conversion-time metadata
+
+---
+
+## Top-Level Structure
+
+```json
+{
+  "version": 1,
+  "behaviour": {},
+  "fields": {},
+  "functions": {},
+  "options": {}
+}
+```
+
+---
+
+## `fields`
+
+`fields` describes attributes for variables that will ultimately be placed in the Udon data section.
+
+```json
+{
+  "fields": {
+    "<field-key>": {
+      "source": {
+        "kind": "global | symbol"
+      },
+      "udonName": "string",
+      "type": "bool | int | uint | float | string | object",
+      "export": false,
+      "sync": {
+        "enabled": false,
+        "mode": "none | linear | smooth"
+      },
+      "default": null,
+      "comment": "string"
+    }
+  }
+}
+```
+
+### `source`
+
+Indicates which Wasm-side state a field is generated from.
+
+#### When referring to a global
+
+```json
+{
+  "kind": "global",
+  "name": "score"
+}
+```
+
+#### When referring to a symbol name
+
+```json
+{
+  "kind": "symbol",
+  "name": "__state_owner_id"
+}
+```
+
+### `udonName`
+
+The name of the generated Udon variable. If omitted, the key name is used.
+
+### `type`
+
+A hint for the initial type emitted into the Udon data section.
+
+### `export`
+
+If `true`, `.export <name>` is attached to that variable.
+
+### `sync`
+
+Corresponds to `.sync <variableName>, <interpolationMode>` in Udon.
+
+* If `enabled = false`, no `.sync` is emitted
+* `mode = none | linear | smooth`
+
+If `enabled = true` but `mode` is missing, this should be treated as an error.
+
+### `default`
+
+An initial-value hint. It is used as-is only when it fits within Udon Assembly literal constraints.
+
+### `comment`
+
+A human-facing note. It has no effect on conversion semantics.
+
+---
+
+## `functions`
+
+`functions` provides label/export information in the Udon code section for Wasm-side functions.
+
+```json
+{
+  "functions": {
+    "<function-key>": {
+      "source": {
+        "kind": "export | symbol | name"
+      },
+      "label": "string",
+      "export": true,
+      "event": "Start | Update | Interact | custom",
+      "comment": "string"
+    }
+  }
+}
+```
+
+### `source`
+
+Specifies which Wasm function is being referred to.
+
+#### Referencing by export name
+
+```json
+{
+  "kind": "export",
+  "name": "on_start"
+}
+```
+
+#### Referencing by symbol name
+
+```json
+{
+  "kind": "symbol",
+  "name": "__wasm_entry_interact"
+}
+```
+
+#### Referencing by debug/name-based identifier
+
+```json
+{
+  "kind": "name",
+  "name": "interact"
+}
+```
+
+### `label`
+
+The label name to generate in the Udon code section.
+
+Examples:
+
+* `_start`
+* `_update`
+* `_interact`
+* `CustomEventFoo`
+
+### `export`
+
+If `true`, `.export <label>` is attached to that label.
+
+### `event`
+
+A logical event name. It may be used as auxiliary information when `label` is omitted.
+
+Default mapping examples:
+
+* `Start` -> `_start`
+* `Update` -> `_update`
+* `Interact` -> `_interact`
+* `custom` -> explicit `label` is required
+
+---
+
+## `behaviour`
+
+`behaviour` represents the lowering policy for the UdonBehaviour as a whole.
+
+```json
+{
+  "behaviour": {
+    "syncMode": "none | manual | continuous",
+    "comment": "string"
+  }
+}
+```
+
+### `syncMode`
+
+The default synchronization mode for the behaviour as a whole.
+
+This is not treated as a direct `.sync` line in Udon Assembly itself. Instead, it is treated as metadata for the translator or for reflected configuration of the generated component.
+
+---
+
+## `options`
+
+`options` contains auxiliary settings related to the behavior of the translator itself.
+
+```json
+{
+  "options": {
+    "strict": true,
+    "unknownFieldPolicy": "ignore | warn | error",
+    "unknownFunctionPolicy": "ignore | warn | error"
+  }
+}
+```
+
+---
+
+## Complete Example
+
+```json
+{
+  "version": 1,
+  "behaviour": {
+    "syncMode": "manual",
+    "comment": "Default behaviour sync mode"
+  },
+  "fields": {
+    "playerName": {
+      "source": {
+        "kind": "global",
+        "name": "player_name"
+      },
+      "udonName": "_playerName",
+      "type": "string",
+      "export": true,
+      "sync": {
+        "enabled": true,
+        "mode": "none"
+      },
+      "default": "Akane"
+    },
+    "doorOpen": {
+      "source": {
+        "kind": "symbol",
+        "name": "__state_door_open"
+      },
+      "udonName": "_doorOpen",
+      "type": "bool",
+      "export": false,
+      "sync": {
+        "enabled": true,
+        "mode": "smooth"
+      },
+      "default": null
+    },
+    "ownerId": {
+      "source": {
+        "kind": "global",
+        "name": "owner_id"
+      },
+      "udonName": "_ownerId",
+      "type": "int",
+      "export": false,
+      "sync": {
+        "enabled": false,
+        "mode": "none"
+      }
+    }
+  },
+  "functions": {
+    "start": {
+      "source": {
+        "kind": "export",
+        "name": "on_start"
+      },
+      "label": "_start",
+      "export": true,
+      "event": "Start"
+    },
+    "interact": {
+      "source": {
+        "kind": "export",
+        "name": "on_interact"
+      },
+      "label": "_interact",
+      "export": true,
+      "event": "Interact"
+    },
+    "customReset": {
+      "source": {
+        "kind": "symbol",
+        "name": "__entry_reset"
+      },
+      "label": "ResetState",
+      "export": true,
+      "event": "custom"
+    }
+  },
+  "options": {
+    "strict": true,
+    "unknownFieldPolicy": "warn",
+    "unknownFunctionPolicy": "warn"
+  }
+}
+```
+
+---
+
+## Conversion Rules
+
+### 1. Find `__udon_meta`
+
+* Find the exported static blob `__udon_meta`
+* Decode it as UTF-8 JSON
+* Treat decode failure as an error or warning
+
+### 2. Check `version`
+
+* Reject unsupported versions
+* If strict compatibility is desired, accept only `version == 1`
+
+### 3. Resolve `fields`
+
+* Resolve Wasm-side globals/symbols based on `source`
+* Generate the corresponding Udon data-section variables
+* If `export = true`, attach `.export <udonName>`
+* If `sync.enabled = true`, attach `.sync <udonName>, <mode>`
+
+### 4. Resolve `functions`
+
+* Resolve Wasm functions based on `source`
+* Generate the corresponding Udon code-section labels
+* If `export = true`, attach `.export <label>`
+
+### 5. Apply `behaviour.syncMode`
+
+* Reflect it in the synchronization setting of the generated UdonBehaviour
+* Since there is no direct corresponding line in Udon Assembly, it may be treated as out-of-assembly generation metadata
+
+---
+
+## Constraints
+
+* `fields[*].sync.mode` must allow only `none | linear | smooth`, matching the actual value domain of Udon Assembly `.sync`
+* `functions` event/export metadata applies to code labels and must not be confused with field sync metadata
+* `source.kind = "name"` is discouraged because it is fragile with respect to stripping and optimization
+* JSON is chosen for human readability, but could be replaced with CBOR or another format in the future if needed
+
+---
+
+## Minimal Implementation Example
+
+```json
+{
+  "version": 1,
+  "fields": {
+    "playerName": {
+      "source": {
+        "kind": "global",
+        "name": "player_name"
+      },
+      "udonName": "_playerName",
+      "type": "string",
+      "export": true,
+      "sync": {
+        "enabled": true,
+        "mode": "none"
+      }
+    }
+  },
+  "functions": {
+    "start": {
+      "source": {
+        "kind": "export",
+        "name": "on_start"
+      },
+      "label": "_start",
+      "export": true,
+      "event": "Start"
+    }
+  }
+}
+```
+
