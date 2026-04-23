@@ -156,11 +156,31 @@ pub const Asm = struct {
     // ---- code section ----
 
     pub fn label(self: *Asm, name: []const u8) !void {
+        if (self.lastItemIsLabel()) try self.nop();
         try self.items.append(self.allocator, .{ .label = name });
     }
 
     pub fn exportLabel(self: *Asm, name: []const u8) !void {
+        if (self.lastItemIsLabel()) try self.nop();
         try self.items.append(self.allocator, .{ .export_label = name });
+    }
+
+    /// Walk backwards through `items`, transparently skipping decorative
+    /// entries (`comment`, `export_label`). Returns true when the first
+    /// non-decorative entry encountered is a bare `label` — i.e. adding a
+    /// new label right now would produce two labels at the same bytecode
+    /// address, which Udon rejects as `AliasedSymbolException`.
+    fn lastItemIsLabel(self: *const Asm) bool {
+        var i = self.items.items.len;
+        while (i > 0) {
+            i -= 1;
+            switch (self.items.items[i]) {
+                .comment, .export_label => continue,
+                .label => return true,
+                .instr => return false,
+            }
+        }
+        return false;
     }
 
     pub fn comment(self: *Asm, text: []const u8) !void {
@@ -378,6 +398,45 @@ test "label layout assigns correct bytecode addresses" {
     try std.testing.expectEqual(@as(u32, 8), layout.get("l1").?);
     try std.testing.expectEqual(@as(u32, 12), layout.get("l2").?);
     try std.testing.expectEqual(@as(u32, 16), layout.get("l3").?);
+}
+
+test "consecutive labels get distinct addresses via implicit NOP" {
+    var a: Asm = .init(std.testing.allocator);
+    defer a.deinit();
+    try a.label("a"); // 0
+    try a.label("b"); // implicit NOP at 0, b @ 4
+    try a.label("c"); // implicit NOP at 4, c @ 8
+
+    var layout = try a.computeLayout(std.testing.allocator);
+    defer layout.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(u32, 0), layout.get("a").?);
+    try std.testing.expectEqual(@as(u32, 4), layout.get("b").?);
+    try std.testing.expectEqual(@as(u32, 8), layout.get("c").?);
+}
+
+test "export label right after its bare label pair does not collapse addresses" {
+    var a: Asm = .init(std.testing.allocator);
+    defer a.deinit();
+    try a.exportLabel("_start");
+    try a.label("_start"); // co-located with the export directive — no NOP expected
+    try a.nop();
+
+    var layout = try a.computeLayout(std.testing.allocator);
+    defer layout.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(u32, 0), layout.get("_start").?);
+}
+
+test "comment between two labels is transparent and still triggers NOP" {
+    var a: Asm = .init(std.testing.allocator);
+    defer a.deinit();
+    try a.label("a"); // 0
+    try a.comment("between");
+    try a.label("b"); // implicit NOP at 0, b @ 4
+
+    var layout = try a.computeLayout(std.testing.allocator);
+    defer layout.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(u32, 0), layout.get("a").?);
+    try std.testing.expectEqual(@as(u32, 4), layout.get("b").?);
 }
 
 test "jump label references resolve to hex addresses" {
