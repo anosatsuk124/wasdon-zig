@@ -112,6 +112,13 @@ const Translator = struct {
     block_counter: u32 = 0,
     call_site_counter: u32 = 0,
 
+    /// Monotonic counter for label suffixes that need to be unique across a
+    /// translation unit. Consumed by `Host.uniqueId()` — currently used by
+    /// `emitStringMarshal` so repeated `SystemString`-taking externs don't
+    /// collide on the same loop/end label (the UAssembly assembler rejects
+    /// duplicates at `VisitLabelStmt`).
+    unique_id_counter: u32 = 0,
+
     /// Per-call-site RAC declarations accumulated during lowering; resolved
     /// in `render` against the completed layout.
     rac_sites: std.ArrayList(RacSite) = .empty,
@@ -715,7 +722,7 @@ const Translator = struct {
         try self.asm_.addData(.{ .name = lower_import.marshal_str_tmp_name, .ty = tn.string, .init = .null_literal });
         try self.asm_.addData(.{ .name = lower_import.marshal_str_i_name, .ty = tn.int32, .init = .{ .int32 = 0 } });
         try self.asm_.addData(.{ .name = lower_import.marshal_str_addr_name, .ty = tn.int32, .init = .{ .int32 = 0 } });
-        try self.asm_.addData(.{ .name = lower_import.marshal_str_byte_name, .ty = tn.byte, .init = .{ .byte = 0 } });
+        try self.asm_.addData(.{ .name = lower_import.marshal_str_byte_name, .ty = tn.byte, .init = .null_literal });
         try self.asm_.addData(.{ .name = lower_import.marshal_str_cond_name, .ty = tn.boolean, .init = .null_literal });
         try self.asm_.addData(.{ .name = lower_import.marshal_encoding_name, .ty = tn.object, .init = .null_literal });
 
@@ -2463,6 +2470,7 @@ const HostBridge = struct {
         .jump = jumpFn,
         .jumpIfFalse = jumpIfFalseFn,
         .readByteFromMemory = readByteFromMemoryFn,
+        .uniqueId = uniqueId,
     };
 
     fn self_(ctx: *anyopaque) *HostBridge {
@@ -2524,6 +2532,12 @@ const HostBridge = struct {
             // caller can propagate without widening `lower_import.Error`.
             else => return error.OutOfMemory,
         };
+    }
+    fn uniqueId(ctx: *anyopaque) u32 {
+        const t = self_(ctx).t;
+        const id = t.unique_id_counter;
+        t.unique_id_counter += 1;
+        return id;
     }
 };
 
@@ -2787,6 +2801,56 @@ test "bench: i32.store8 expands to shift/mask RMW sequence" {
         "i32.store8 (simplified shift/mask placeholder)") == null);
     try std.testing.expect(std.mem.indexOf(u8, out,
         "i32.load8 (simplified shift/mask placeholder)") == null);
+}
+
+test "bench: no duplicate label definitions in rendered .code section" {
+    // UAssembly's `VisitLabelStmt` rejects duplicate labels with
+    // `AssemblyException: Duplicate label '...' detected`. Guard the whole
+    // code section — catch regressions in any lowering pass that might
+    // accidentally re-use a generated suffix.
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    defer seen.deinit(std.testing.allocator);
+    var it = std.mem.splitScalar(u8, out, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        // Only bare label-definition lines: "<name>:" with no further tokens.
+        if (line.len == 0) continue;
+        if (!std.mem.endsWith(u8, line, ":")) continue;
+        if (std.mem.indexOfAny(u8, line, " \t,")) |_| continue;
+        const name = line[0 .. line.len - 1];
+        const gop = try seen.getOrPut(std.testing.allocator, name);
+        if (gop.found_existing) {
+            std.debug.print("duplicate label: {s}\n", .{name});
+            try std.testing.expect(false);
+        }
+    }
+}
+
+test "bench: _marshal_str_byte scratch field is initialized to null (no SystemByte literals)" {
+    // docs/udon_specs.md §4.7: SystemByte は null / this 以外の初期値を指定できない。
+    // `0` を書くと UAssembly assembler が VisitDataDeclarationStmt で
+    // `AssemblyException: Type 'SystemByte' must be initialized to null or a this reference.`
+    // を投げる。bench は host import 経由の文字列 marshal を踏むので、
+    // `_marshal_str_byte: %SystemByte, null` が出力され、かつ任意の
+    // `%SystemByte, <digit>` は絶対に出てはならない。
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "_marshal_str_byte: %SystemByte, null") != null);
+
+    // Every `%SystemByte,` occurrence must be followed by `null` (or `this`).
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, out, i, "%SystemByte,")) |pos| {
+        const after = out[pos + "%SystemByte,".len ..];
+        const trimmed = std.mem.trimStart(u8, after, " ");
+        const is_null = std.mem.startsWith(u8, trimmed, "null");
+        const is_this = std.mem.startsWith(u8, trimmed, "this");
+        try std.testing.expect(is_null or is_this);
+        i = pos + 1;
+    }
 }
 
 test "bench: i32.load8_u expands to shift + mask 0xFF" {

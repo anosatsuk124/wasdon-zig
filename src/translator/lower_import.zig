@@ -90,6 +90,13 @@ pub const Host = struct {
         /// `out_slot` (a SystemByte scratch). The implementation delegates to
         /// the translator's shared byte-access preamble + shift/mask.
         readByteFromMemory: *const fn (ctx: *anyopaque, addr_slot: []const u8, out_slot: []const u8) Error!void,
+
+        /// Monotonic counter for unique label-suffix tags. Every call must
+        /// return a distinct `u32` for the lifetime of a translation unit.
+        /// Used by `emitStringMarshal` so repeated string-taking externs don't
+        /// collide on the same `__marshal_str_loop_<tag>__` label — the
+        /// UAssembly assembler rejects duplicate labels at `VisitLabelStmt`.
+        uniqueId: *const fn (ctx: *anyopaque) u32,
     };
 
     pub fn allocator(self: Host) std.mem.Allocator {
@@ -136,6 +143,9 @@ pub const Host = struct {
     }
     pub fn readByteFromMemory(self: Host, addr_slot: []const u8, out_slot: []const u8) Error!void {
         return self.vtable.readByteFromMemory(self.ctx, addr_slot, out_slot);
+    }
+    pub fn uniqueId(self: Host) u32 {
+        return self.vtable.uniqueId(self.ctx);
     }
 };
 
@@ -299,7 +309,11 @@ fn emitStringMarshal(host: Host, ptr_slot: []const u8, len_slot: []const u8) Err
     try host.externCall("SystemByteArray.__ctor__SystemInt32__SystemByteArray");
 
     // Byte-copy loop: for i in 0..len { bytes[i] = memory[ptr + i] }.
-    const tag: u32 = hashStr(ptr_slot) ^ hashStr(len_slot);
+    // Tag the labels with a monotonic id — the same (ptr_slot, len_slot) pair
+    // can legitimately appear across multiple calls within one function (the
+    // WASM locals that hold the args get reused), so a name-derived hash
+    // collides and trips the `Duplicate label` assembler exception.
+    const tag: u32 = host.uniqueId();
     const loop_head = try std.fmt.allocPrint(alloc, "__marshal_str_loop_{x}__", .{tag});
     const loop_end = try std.fmt.allocPrint(alloc, "__marshal_str_end_{x}__", .{tag});
 
@@ -356,7 +370,7 @@ fn declareMarshalScratch(host: Host) Error!void {
     try host.declareScratch(marshal_str_tmp_name, tn.string, .null_literal);
     try host.declareScratch(marshal_str_i_name, tn.int32, .{ .int32 = 0 });
     try host.declareScratch(marshal_str_addr_name, tn.int32, .{ .int32 = 0 });
-    try host.declareScratch(marshal_str_byte_name, tn.byte, .{ .byte = 0 });
+    try host.declareScratch(marshal_str_byte_name, tn.byte, .null_literal);
     try host.declareScratch(marshal_str_cond_name, tn.boolean, .null_literal);
     try host.declareScratch(marshal_encoding_name, .{ .prim = .object }, .null_literal);
 }
@@ -420,9 +434,13 @@ fn zeroLiteralFor(ty: TypeName) udon.asm_.Literal {
     return switch (ty.prim) {
         .int32 => .{ .int32 = 0 },
         .uint32 => .{ .uint32 = 0 },
-        .byte => .{ .byte = 0 },
         .single => .{ .single = 0.0 },
-        .string, .object, .int64, .uint64, .double, .boolean => .null_literal,
+        // SystemByte / SystemInt64 / SystemUInt64 / SystemBoolean: the
+        // UAssembly assembler rejects any non-null numeric initializer
+        // (docs/udon_specs.md §4.7). Scratch slots of these types must be
+        // declared as null — the value is produced by the EXTERN that
+        // writes into the slot.
+        .byte, .string, .object, .int64, .uint64, .double, .boolean => .null_literal,
         .void_ => .null_literal,
     };
 }
@@ -478,6 +496,7 @@ const MockHost = struct {
     decls: std.ArrayList([]const u8) = .empty,
     depth: u32 = 0,
     fn_name: []const u8 = "caller",
+    next_id: u32 = 0,
 
     fn init(a: std.mem.Allocator) MockHost {
         return .{ .ally = a };
@@ -507,6 +526,7 @@ const MockHost = struct {
         .jump = vt_jump,
         .jumpIfFalse = vt_jif,
         .readByteFromMemory = vt_readbyte,
+        .uniqueId = vt_unique,
     };
 
     fn self_(ctx: *anyopaque) *MockHost {
@@ -584,6 +604,12 @@ const MockHost = struct {
         try s.buf.appendSlice(s.ally, " -> ");
         try s.buf.appendSlice(s.ally, out);
         try s.buf.appendSlice(s.ally, "\n");
+    }
+    fn vt_unique(ctx: *anyopaque) u32 {
+        const s = self_(ctx);
+        const id = s.next_id;
+        s.next_id += 1;
+        return id;
     }
 };
 
@@ -694,4 +720,44 @@ test "signature mismatch: WASM arity disagrees with Udon sig" {
     };
     const ft: wasm.types.FuncType = .{ .params = &params, .results = &.{} };
     try std.testing.expectError(error.SignatureMismatch, emit(mh.host(), imp, ft));
+}
+
+// Two back-to-back calls to a SystemString-taking import — the same WASM locals
+// hold (ptr, len) both times — must not produce two labels with the same name.
+// The UAssembly assembler enforces this: `Duplicate label '...' detected` at
+// `VisitLabelStmt`. Previously the loop label was derived from
+// `hashStr(ptr_slot) ^ hashStr(len_slot)`, which collides when the same pair
+// of slot names is reused.
+test "two string-taking externs emit distinct marshal loop labels" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var mh = MockHost.init(arena.allocator());
+    defer mh.deinit();
+
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{};
+    const imp: wasm.module.Import = .{
+        .module = "env",
+        .name = "SystemConsole.__WriteLine__SystemString__SystemVoid",
+        .desc = .{ .func = 0 },
+    };
+    const ft: wasm.types.FuncType = .{ .params = &params, .results = &results };
+
+    mh.depth = 2;
+    try emit(mh.host(), imp, ft);
+    mh.depth = 2;
+    try emit(mh.host(), imp, ft);
+
+    // Scan every `LABEL __marshal_str_loop_...__` line and assert uniqueness.
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    defer seen.deinit(arena.allocator());
+    var it = std.mem.splitScalar(u8, mh.buf.items, '\n');
+    while (it.next()) |line| {
+        const prefix = "LABEL __marshal_str_loop_";
+        if (!std.mem.startsWith(u8, line, prefix)) continue;
+        const gop = try seen.getOrPut(arena.allocator(), line);
+        try expect(!gop.found_existing);
+    }
+    // And sanity-check: we really did emit two loops.
+    try std.testing.expectEqual(@as(u32, 2), seen.count());
 }

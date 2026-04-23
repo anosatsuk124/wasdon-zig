@@ -19,13 +19,16 @@ const type_name = @import("type_name.zig");
 const TypeName = type_name.TypeName;
 
 /// Every data-section literal we emit for WASM-side needs.
-/// `null_literal` is used for reference types that must stay null at assembly
-/// time (e.g. SystemObjectArray, SystemUInt32Array, SystemInt64 — see
-/// docs/udon_specs.md §4.7).
+/// `null_literal` is used for reference types and for the strict-initializer
+/// scalars (SystemByte, SystemSByte, SystemInt16/UInt16, SystemInt64/UInt64,
+/// SystemBoolean, SystemType) whose only legal non-`this` initial value is
+/// `null` — see docs/udon_specs.md §4.7. There is deliberately no byte-literal
+/// variant: the UAssembly assembler rejects any numeric initializer for a
+/// SystemByte field with `AssemblyException: Type 'SystemByte' must be
+/// initialized to null or a this reference.`
 pub const Literal = union(enum) {
     int32: i32,
     uint32: u32,
-    byte: u8,
     single: f32,
     string: []const u8,
     null_literal,
@@ -40,7 +43,6 @@ pub const Literal = union(enum) {
                     try writer.print("{d}u", .{v});
                 }
             },
-            .byte => |v| try writer.print("{d}", .{v}),
             .single => |v| try writer.print("{d}", .{v}),
             .string => |s| {
                 try writer.writeAll("\"");
@@ -480,4 +482,20 @@ test "uint32 literal above int32 range uses u suffix" {
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 2147483648u\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 4294967295u\n") != null);
+}
+
+// Per docs/udon_specs.md §4.7 the UAssembly assembler rejects any non-null,
+// non-`this` initializer for `SystemByte`. A literal `0` triggers
+// `AssemblyException: Type 'SystemByte' must be initialized to null or a this
+// reference.` at `VisitDataDeclarationStmt`. The `Literal` union therefore
+// offers no byte-literal variant; callers must pick `.null_literal`.
+test "byte data decl must render as null" {
+    var a: Asm = .init(std.testing.allocator);
+    defer a.deinit();
+    try a.addData(.{ .name = "_b", .ty = type_name.byte, .init = .null_literal });
+    const out = try renderToOwned(&a, std.testing.allocator);
+    defer std.testing.allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_b: %SystemByte, null\n") != null);
+    // No numeric-initialized SystemByte should ever appear in rendered output.
+    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemByte, 0") == null);
 }
