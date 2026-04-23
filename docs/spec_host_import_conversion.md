@@ -115,10 +115,23 @@ The two-level chunked memory model (`docs/spec_linear_memory.md`) stores WASM by
 **Data declarations (emitted once, shared across all call sites):**
 
 ```
-_marshal_str_ptr:    %SystemInt32, 0
-_marshal_str_len:    %SystemInt32, 0
-_marshal_str_bytes:  %SystemByteArray, null
-_marshal_str_tmp:    %SystemString, null
+_marshal_str_ptr:       %SystemInt32, 0
+_marshal_str_len:       %SystemInt32, 0
+_marshal_str_bytes:     %SystemByteArray, null
+_marshal_str_tmp:       %SystemString, null
+_marshal_str_i:         %SystemInt32, 0
+_marshal_str_addr:      %SystemInt32, 0
+_marshal_str_byte:      %SystemByte, 0
+_marshal_str_cond:      %SystemBoolean, null
+_marshal_encoding_utf8: %SystemObject, null   # cached UTF-8 Encoding instance
+```
+
+**One-shot cache (emitted once in memory-init, before any call site):**
+
+```
+# encoding := Encoding.UTF8 (static property getter).
+PUSH, _marshal_encoding_utf8
+EXTERN, "SystemTextEncoding.__get_UTF8__SystemTextEncoding"
 ```
 
 **Helper pattern (inline at each call site):**
@@ -134,19 +147,21 @@ PUSH, caller_S{n-1}
 PUSH, _marshal_str_len
 COPY
 
-# (b) Allocate a SystemByteArray of length `len` and copy bytes from the
-#     chunked memory. For word-aligned ranges a word-by-word loop is emitted
-#     (see spec_linear_memory.md §"Load/Store Expansion Rules" for the
-#     per-byte RMW form). The loop is elided from this doc for brevity; the
-#     resulting bytes land in _marshal_str_bytes.
+# (b) Allocate a SystemByteArray of length `len`.
+PUSH, _marshal_str_len
+PUSH, _marshal_str_bytes
+EXTERN, "SystemByteArray.__ctor__SystemInt32__SystemByteArray"
 
-# (c) Decode as UTF-8.
-PUSH, _marshal_str_bytes
-PUSH, _marshal_str_tmp
-EXTERN, "SystemTextEncoding.__get_UTF8__SystemTextEncoding"  # caches UTF8 singleton
-# ... or directly:
-PUSH, _marshal_str_bytes
-PUSH, _marshal_str_tmp
+# (c) Byte-copy loop: for i in 0..len { bytes[i] = *(byte*)(ptr + i) }.
+#     Each iteration reuses the i32.load8_u shift/mask preamble to extract
+#     a byte from the chunked memory model, then converts UInt32 → Int32 →
+#     SystemByte (udon_nodes.txt has no direct SystemUInt32→SystemByte).
+
+# (d) Decode as UTF-8. GetString is a non-static method; the encoding
+#     instance is PUSHed first as `this` (§6.2.6 of docs/udon_specs.md).
+PUSH, _marshal_encoding_utf8   # this
+PUSH, _marshal_str_bytes       # byte[] arg
+PUSH, _marshal_str_tmp         # out-result
 EXTERN, "SystemTextEncoding.__GetString__SystemByteArray__SystemString"
 ```
 
@@ -203,7 +218,11 @@ COPY
 PUSH, __on_interact_S1__     # len
 PUSH, _marshal_str_len
 COPY
+PUSH, _marshal_str_len
+PUSH, _marshal_str_bytes
+EXTERN, "SystemByteArray.__ctor__SystemInt32__SystemByteArray"
 # ... chunk loop copying `len` bytes into _marshal_str_bytes ...
+PUSH, _marshal_encoding_utf8   # this (UTF-8 encoding singleton)
 PUSH, _marshal_str_bytes
 PUSH, _marshal_str_tmp
 EXTERN, "SystemTextEncoding.__GetString__SystemByteArray__SystemString"
@@ -218,10 +237,15 @@ No return-value handling is needed because the signature's return type is `Syste
 ### Translator output (data section, relevant additions)
 
 ```
-_marshal_str_ptr:    %SystemInt32, 0
-_marshal_str_len:    %SystemInt32, 0
-_marshal_str_bytes:  %SystemByteArray, null
-_marshal_str_tmp:    %SystemString, null
+_marshal_str_ptr:       %SystemInt32, 0
+_marshal_str_len:       %SystemInt32, 0
+_marshal_str_bytes:     %SystemByteArray, null
+_marshal_str_tmp:       %SystemString, null
+_marshal_str_i:         %SystemInt32, 0
+_marshal_str_addr:      %SystemInt32, 0
+_marshal_str_byte:      %SystemByte, 0
+_marshal_str_cond:      %SystemBoolean, null
+_marshal_encoding_utf8: %SystemObject, null
 ```
 
 ## Alignment with `__udon_meta`
@@ -248,6 +272,7 @@ to let a WASM author keep friendly names (`log`) while the metadata routes them 
 - **SystemString init restrictions** (`docs/udon_specs.md` §4.7). `_marshal_str_tmp` is declared with initial value `null`; the first `GetString` EXTERN populates it before any read.
 - **UTF-8 validation.** This spec delegates validation to the decoding `EXTERN`. Translators targeting stricter hosts should precede the call with a bounds check against linear memory size.
 - **Name clash with numeric dispatch.** `lower_numeric.zig` currently hand-writes signature strings for WASM arithmetic (`i32.add` → `SystemInt32.__op_Addition__...`). Those strings must pass the same parser; a regression test loops the existing table through `extern_sig.parse` to catch drift.
+- **Widening aliases in the final EXTERN.** Some .NET methods expose only a broader overload on Udon even though a narrower one is legal in C# (e.g. `UnityEngine.Debug.Log(string)` is only exposed as `UnityEngineDebug.__Log__SystemObject__SystemVoid`). The translator keeps the narrower signature in the WASM import name — so marshaling still kicks in for `SystemString` args — but rewrites the final `EXTERN` immediate through a small alias table in `lower_import.zig`'s `resolveSignatureAlias`. `System.String` is-a `System.Object`, so passing the marshaled string to the Object overload is a legal implicit widening at runtime. Authors can rely on `__Log__SystemString__SystemVoid` in their import name without seeing a `not implemented yet` error from Udon.
 - **LLVM-emitted import names.** The Zig compiler preserves raw-identifier names verbatim when emitting WASM; no symbol mangling is applied for `extern "<module>" fn` declarations. Authors relying on other compilers (Rust, C) must verify the same round-trips.
 
 ## Future Work

@@ -50,11 +50,13 @@ SystemObjectArray.__GetValue__SystemInt32__SystemObject
 SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid
 
 SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array
-SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32
-SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid
+SystemUInt32Array.__Get__SystemInt32__SystemUInt32
+SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid
 ```
 
-Arithmetic, shift, mask, and comparison operations on `SystemInt32` / `SystemUInt32` use the usual operator-style EXTERN nodes (`SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32`, `SystemUInt32.__op_BitwiseAnd__SystemUInt32_SystemUInt32__SystemUInt32`, etc.).
+Note: Udon exposes typed-array element access only through the indexer-style `__Get__` / `__Set__` nodes on `SystemUInt32Array`. The inherited `SystemArray.GetValue`/`SetValue` nodes exist but are typed in terms of `SystemObject`; the typed `SystemUInt32` overloads are *not* exposed, so word loads/stores in linear memory must use the indexer form.
+
+Arithmetic, shift, mask, and comparison operations on `SystemInt32` / `SystemUInt32` use the usual operator-style EXTERN nodes. Note that `SystemUInt32` does not expose `__op_Bitwise*__` or `__op_OnesComplement__` — the translator uses `__op_LogicalAnd__` / `__op_LogicalOr__` / `__op_LogicalXor__` instead and synthesizes `~x` as `x XOR 0xFFFFFFFF` (`docs/udon_specs.md` §7).
 
 Note: a `SystemObjectArray.__GetValue__` result is typed as `SystemObject`. Before invoking inner EXTERNs it is assigned to a `SystemUInt32Array`-typed variable (`_mem_chunk` above); Udon accepts this object-to-concrete-array assignment.
 
@@ -82,10 +84,10 @@ The base access pattern to fetch one 32-bit word:
     PUSH, _mem_chunk
     PUSH, _mem_word_in_page
     PUSH, _mem_u32
-    EXTERN, "SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32"
+    EXTERN, "SystemUInt32Array.__Get__SystemInt32__SystemUInt32"
 ```
 
-A symmetrical pattern using `SystemUInt32Array.__SetValue__` is used to write a word.
+A symmetrical pattern using the typed-array indexer setter `SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid` is used to write a word. Note that `Set` takes the arguments in `(index, value)` order — opposite of the inherited `Array.SetValue(value, index)`. Udon does not expose a typed-`UInt32` overload of `SetValue` on `SystemUInt32Array`, so the indexer setter is mandatory for word writes.
 
 ## Load/Store Expansion Rules
 
@@ -141,7 +143,7 @@ All multi-byte accesses are little-endian (WASM is LE by specification). Every a
     PUSH, _mem_chunk
     PUSH, _mem_word_in_page
     PUSH, _result_u32
-    EXTERN, "SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32"
+    EXTERN, "SystemUInt32Array.__Get__SystemInt32__SystemUInt32"
 ```
 
 ### Example 2 — `i32.load8_u`
@@ -156,7 +158,7 @@ All multi-byte accesses are little-endian (WASM is LE by specification). Every a
     PUSH, _mem_chunk
     PUSH, _mem_word_in_page
     PUSH, _mem_u32
-    EXTERN, "SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32"
+    EXTERN, "SystemUInt32Array.__Get__SystemInt32__SystemUInt32"
 
     # shift = sub * 8
     PUSH, _mem_sub
@@ -187,7 +189,7 @@ All multi-byte accesses are little-endian (WASM is LE by specification). Every a
     PUSH, _mem_chunk
     PUSH, _mem_word_in_page
     PUSH, _mem_u32
-    EXTERN, "SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32"
+    EXTERN, "SystemUInt32Array.__Get__SystemInt32__SystemUInt32"
 
     # Build mask ~(0xFF << shift) and AND with word
     PUSH, _mem_sub
@@ -222,9 +224,9 @@ All multi-byte accesses are little-endian (WASM is LE by specification). Every a
 
     # Write back
     PUSH, _mem_chunk
-    PUSH, _mem_u32_new
     PUSH, _mem_word_in_page
-    EXTERN, "SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid"
+    PUSH, _mem_u32_new
+    EXTERN, "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid"
 ```
 
 ### Example 4 — `i64.load` aligned, within-chunk
@@ -239,7 +241,7 @@ All multi-byte accesses are little-endian (WASM is LE by specification). Every a
     PUSH, _mem_chunk
     PUSH, _mem_word_in_page
     PUSH, _mem_u32_lo
-    EXTERN, "SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32"
+    EXTERN, "SystemUInt32Array.__Get__SystemInt32__SystemUInt32"
 
     PUSH, _mem_word_in_page
     PUSH, _const_1
@@ -249,7 +251,7 @@ All multi-byte accesses are little-endian (WASM is LE by specification). Every a
     PUSH, _mem_chunk
     PUSH, _mem_word_hi_idx
     PUSH, _mem_u32_hi
-    EXTERN, "SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32"
+    EXTERN, "SystemUInt32Array.__Get__SystemInt32__SystemUInt32"
 
     # Combine into i64: (u64)hi << 32 | (u64)lo
     # Cast to ulong and shift/or via SystemUInt64.* EXTERNs
@@ -298,8 +300,8 @@ This confirms the initialization model that `spec_call_return_conversion.md` §8
 
 At translation time each WASM data segment is converted to a sequence of writes grouped by `page_idx`:
 
-- For each group, emit a single `SystemObjectArray.__GetValue__` to fetch the target chunk into `_mem_chunk`, then emit contiguous `SystemUInt32Array.__SetValue__` calls for every aligned word in that chunk.
-- For unaligned prefixes, suffixes, or byte-granular data, emit RMW sequences (one `SystemUInt32Array.__GetValue__` followed by mask/or/shift and a `SystemUInt32Array.__SetValue__`).
+- For each group, emit a single `SystemObjectArray.__GetValue__` to fetch the target chunk into `_mem_chunk`, then emit contiguous `SystemUInt32Array.__Set__` calls for every aligned word in that chunk.
+- For unaligned prefixes, suffixes, or byte-granular data, emit RMW sequences (one `SystemUInt32Array.__GetValue__` followed by mask/or/shift and a `SystemUInt32Array.__Set__`).
 - Consecutive constant zeros may be elided because chunks are zero-initialized.
 
 Large segments expand the code section significantly. A future revision may add a compression option (for example, run-length encoding of repeated bytes), but the initial implementation performs the straightforward expansion.
@@ -420,9 +422,9 @@ A module that grows memory by one page and writes/reads an i32 at address `0x100
     PUSH, _mem_chunk
     EXTERN, "SystemObjectArray.__GetValue__SystemInt32__SystemObject"
     PUSH, _mem_chunk
-    PUSH, _value
     PUSH, _const_0
-    EXTERN, "SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid"
+    PUSH, _value
+    EXTERN, "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid"
 
     # --- i32.load at addr 0x10000 ---
     PUSH, __G__memory
@@ -432,7 +434,7 @@ A module that grows memory by one page and writes/reads an i32 at address `0x100
     PUSH, _mem_chunk
     PUSH, _const_0
     PUSH, _loaded
-    EXTERN, "SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32"
+    EXTERN, "SystemUInt32Array.__Get__SystemInt32__SystemUInt32"
 
     PUSH, _loaded
     EXTERN, "UnityEngineDebug.__Log__SystemObject__SystemVoid"

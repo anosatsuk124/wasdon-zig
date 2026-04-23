@@ -168,7 +168,7 @@ Reuse the `SystemObjectArray` pattern from `docs/spec_linear_memory.md`:
 
 - The WASM function table is represented in Udon as a `SystemUInt32Array` whose elements are the hard-coded bytecode addresses of each entry point `__{fn}_entry__`.
   - Using `SystemObjectArray` is also possible but requires an extra extern to unbox each element from `object` to `uint`. `SystemUInt32Array` is recommended for simplicity.
-- Initialize the table itself in `_onEnable`, or at the start of an entry function, by calling `EXTERN, "SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array"` and using `SetValue` to fill each slot with the corresponding `__{fn}_entry__` value.
+- Initialize the table itself in `_onEnable`, or at the start of an entry function, by calling `EXTERN, "SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array"` and using the typed-array indexer setter `SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid` (arguments `(index, value)`) to fill each slot with the corresponding `__{fn}_entry__` value. The inherited `Array.SetValue(object, int)` has no typed `UInt32` overload on `SystemUInt32Array`, so the indexer setter is the only available write node.
   - The entry-point address is fixed in Pass A, so the most ergonomic approach is to use a data variable `__fn_entry_addr_F__: %SystemUInt32, 0x????u` initialized with that literal and copy from it.
 
 ### 7.2 Translation
@@ -178,7 +178,7 @@ Reuse the `SystemObjectArray` pattern from `docs/spec_linear_memory.md`:
 PUSH, __fn_table__
 PUSH, __caller_S{n}__               # index
 PUSH, __indirect_target__           # output (out)
-EXTERN, "SystemUInt32Array.__GetValue__SystemInt32__SystemUInt32"
+EXTERN, "SystemUInt32Array.__Get__SystemInt32__SystemUInt32"
 
 # Argument copy (same as §4 (a))
 ...

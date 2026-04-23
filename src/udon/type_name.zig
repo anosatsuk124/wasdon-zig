@@ -18,6 +18,7 @@ pub const Prim = enum {
     single,
     double,
     boolean,
+    byte,
     string,
     void_,
     object,
@@ -32,6 +33,7 @@ pub fn primName(p: Prim) []const u8 {
         .single => "SystemSingle",
         .double => "SystemDouble",
         .boolean => "SystemBoolean",
+        .byte => "SystemByte",
         .string => "SystemString",
         .void_ => "SystemVoid",
         .object => "SystemObject",
@@ -67,7 +69,8 @@ pub const void_: TypeName = .{ .prim = .void_ };
 pub const object: TypeName = .{ .prim = .object };
 pub const object_array: TypeName = .{ .prim = .object, .is_array = true };
 pub const uint32_array: TypeName = .{ .prim = .uint32, .is_array = true };
-pub const byte_array: TypeName = .{ .prim = .object, .is_array = true }; // not used, see u8 array fallback
+pub const byte: TypeName = .{ .prim = .byte };
+pub const byte_array: TypeName = .{ .prim = .byte, .is_array = true };
 
 /// Allocate a formatted Udon type name string. Caller owns memory.
 pub fn format(allocator: std.mem.Allocator, t: TypeName) ![]u8 {
@@ -98,6 +101,13 @@ test "TypeName.write array" {
     const s = try format(alloc, uint32_array);
     defer alloc.free(s);
     try std.testing.expectEqualStrings("SystemUInt32Array", s);
+}
+
+test "TypeName.write byte array" {
+    const alloc = std.testing.allocator;
+    const s = try format(alloc, byte_array);
+    defer alloc.free(s);
+    try std.testing.expectEqualStrings("SystemByteArray", s);
 }
 
 test "TypeName.eql" {

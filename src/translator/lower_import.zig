@@ -76,6 +76,20 @@ pub const Host = struct {
 
         /// Emit ANNOTATION, __unsupported__.
         annotateUnsupported: *const fn (ctx: *anyopaque) Error!void,
+
+        /// Emit a label definition (`name:`).
+        label: *const fn (ctx: *anyopaque, name: []const u8) Error!void,
+
+        /// Emit a JUMP, name instruction.
+        jump: *const fn (ctx: *anyopaque, name: []const u8) Error!void,
+
+        /// Emit a JUMP_IF_FALSE, name instruction.
+        jumpIfFalse: *const fn (ctx: *anyopaque, name: []const u8) Error!void,
+
+        /// Read a single byte from linear memory at address `addr_slot` into
+        /// `out_slot` (a SystemByte scratch). The implementation delegates to
+        /// the translator's shared byte-access preamble + shift/mask.
+        readByteFromMemory: *const fn (ctx: *anyopaque, addr_slot: []const u8, out_slot: []const u8) Error!void,
     };
 
     pub fn allocator(self: Host) std.mem.Allocator {
@@ -111,6 +125,18 @@ pub const Host = struct {
     pub fn annotateUnsupported(self: Host) Error!void {
         return self.vtable.annotateUnsupported(self.ctx);
     }
+    pub fn label(self: Host, name: []const u8) Error!void {
+        return self.vtable.label(self.ctx, name);
+    }
+    pub fn jump(self: Host, name: []const u8) Error!void {
+        return self.vtable.jump(self.ctx, name);
+    }
+    pub fn jumpIfFalse(self: Host, name: []const u8) Error!void {
+        return self.vtable.jumpIfFalse(self.ctx, name);
+    }
+    pub fn readByteFromMemory(self: Host, addr_slot: []const u8, out_slot: []const u8) Error!void {
+        return self.vtable.readByteFromMemory(self.ctx, addr_slot, out_slot);
+    }
 };
 
 /// Shared scratch variable names for `SystemString` marshaling. Declared
@@ -120,10 +146,20 @@ pub const marshal_str_ptr_name = "_marshal_str_ptr";
 pub const marshal_str_len_name = "_marshal_str_len";
 pub const marshal_str_bytes_name = "_marshal_str_bytes";
 pub const marshal_str_tmp_name = "_marshal_str_tmp";
+pub const marshal_str_i_name = "_marshal_str_i";
+pub const marshal_str_addr_name = "_marshal_str_addr";
+pub const marshal_str_byte_name = "_marshal_str_byte";
+pub const marshal_str_cond_name = "_marshal_str_cond";
+pub const marshal_encoding_name = "_marshal_encoding_utf8";
 
-/// EXTERN signature for "UTF-8 byte array → System.String". See
-/// `docs/spec_host_import_conversion.md` §3. The exact form depends on what
-/// the Udon runtime exposes; we emit the widely-attested 1-arg form.
+/// Static property getter that caches the UTF-8 encoding singleton.
+pub const utf8_property_sig =
+    "SystemTextEncoding.__get_UTF8__SystemTextEncoding";
+
+/// EXTERN signature for "UTF-8 byte array → System.String" on a UTF-8
+/// encoding instance. `SystemTextEncoding.GetString(byte[])` is a non-static
+/// method; see `docs/udon_specs.md` §6.2.6 — the encoding instance is
+/// pushed first as `this`, then the byte[] arg, then the out-string slot.
 pub const utf8_decode_sig =
     "SystemTextEncoding.__GetString__SystemByteArray__SystemString";
 
@@ -232,7 +268,7 @@ fn emitGenericExtern(
     for (pushed_args.items) |arg_sym| try host.push(arg_sym);
     if (result_scratch) |rs| try host.push(rs);
 
-    try host.externCall(sig.raw);
+    try host.externCall(resolveSignatureAlias(sig.raw));
 
     // Update stack.
     var i: u32 = 0;
@@ -248,6 +284,7 @@ fn emitGenericExtern(
 }
 
 fn emitStringMarshal(host: Host, ptr_slot: []const u8, len_slot: []const u8) Error!void {
+    const alloc = host.allocator();
     try host.comment("marshal SystemString from (ptr, len)");
     try host.push(ptr_slot);
     try host.push(marshal_str_ptr_name);
@@ -255,11 +292,58 @@ fn emitStringMarshal(host: Host, ptr_slot: []const u8, len_slot: []const u8) Err
     try host.push(len_slot);
     try host.push(marshal_str_len_name);
     try host.copy();
-    // Byte-copy loop into _marshal_str_bytes is elided here; a complete
-    // implementation would expand into a word-loop over chunked memory
-    // (see docs/spec_linear_memory.md §"Load/Store Expansion Rules"). The
-    // decode EXTERN below assumes _marshal_str_bytes has been populated.
-    try host.comment("(byte-copy from linear memory into _marshal_str_bytes — TODO full loop)");
+
+    // Allocate _marshal_str_bytes := new byte[_marshal_str_len].
+    try host.push(marshal_str_len_name);
+    try host.push(marshal_str_bytes_name);
+    try host.externCall("SystemByteArray.__ctor__SystemInt32__SystemByteArray");
+
+    // Byte-copy loop: for i in 0..len { bytes[i] = memory[ptr + i] }.
+    const tag: u32 = hashStr(ptr_slot) ^ hashStr(len_slot);
+    const loop_head = try std.fmt.allocPrint(alloc, "__marshal_str_loop_{x}__", .{tag});
+    const loop_end = try std.fmt.allocPrint(alloc, "__marshal_str_end_{x}__", .{tag});
+
+    // i := 0
+    try host.push("__c_i32_0");
+    try host.push(marshal_str_i_name);
+    try host.copy();
+
+    try host.label(loop_head);
+    // cond := (i < len) — emit as (!(i >= len)) via JUMP_IF_FALSE.
+    try host.push(marshal_str_i_name);
+    try host.push(marshal_str_len_name);
+    try host.push(marshal_str_cond_name);
+    try host.externCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
+    try host.push(marshal_str_cond_name);
+    try host.jumpIfFalse(loop_end);
+
+    // addr := ptr + i
+    try host.push(marshal_str_ptr_name);
+    try host.push(marshal_str_i_name);
+    try host.push(marshal_str_addr_name);
+    try host.externCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+
+    // _marshal_str_byte := memory[addr]
+    try host.readByteFromMemory(marshal_str_addr_name, marshal_str_byte_name);
+
+    // bytes[i] := _marshal_str_byte
+    try host.push(marshal_str_bytes_name);
+    try host.push(marshal_str_i_name);
+    try host.push(marshal_str_byte_name);
+    try host.externCall("SystemByteArray.__Set__SystemInt32_SystemByte__SystemVoid");
+
+    // i := i + 1
+    try host.push(marshal_str_i_name);
+    try host.push("__c_i32_1");
+    try host.push(marshal_str_i_name);
+    try host.externCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+
+    try host.jump(loop_head);
+    try host.label(loop_end);
+
+    // Decode as UTF-8: encoding.GetString(bytes) → tmp.
+    // Instance call: first PUSH is `this` (the UTF-8 encoding singleton).
+    try host.push(marshal_encoding_name);
     try host.push(marshal_str_bytes_name);
     try host.push(marshal_str_tmp_name);
     try host.externCall(utf8_decode_sig);
@@ -270,9 +354,39 @@ fn declareMarshalScratch(host: Host) Error!void {
     try host.declareScratch(marshal_str_len_name, tn.int32, .{ .int32 = 0 });
     try host.declareScratch(marshal_str_bytes_name, tn.byte_array, .null_literal);
     try host.declareScratch(marshal_str_tmp_name, tn.string, .null_literal);
+    try host.declareScratch(marshal_str_i_name, tn.int32, .{ .int32 = 0 });
+    try host.declareScratch(marshal_str_addr_name, tn.int32, .{ .int32 = 0 });
+    try host.declareScratch(marshal_str_byte_name, tn.byte, .{ .byte = 0 });
+    try host.declareScratch(marshal_str_cond_name, tn.boolean, .null_literal);
+    try host.declareScratch(marshal_encoding_name, .{ .prim = .object }, .null_literal);
 }
 
 // -------------------- type mapping helpers --------------------
+
+/// Map a parsed extern signature string to the actual Udon node name when
+/// a widening alias is needed. Udon's node list occasionally exposes only a
+/// broader overload (e.g. `SystemObject` instead of `SystemString`) because
+/// the narrower signature would be covered by implicit widening in C#. The
+/// translator accepts the narrower form in the WASM import name (which
+/// drives marshaling: SystemString still triggers UTF-8 decoding into
+/// `_marshal_str_tmp`), and rewrites only the final `EXTERN` string so the
+/// dispatched node matches what Udon actually provides.
+///
+/// Returning the unchanged input for every non-aliased signature keeps the
+/// common path zero-cost; aliases are meant to be rare.
+fn resolveSignatureAlias(sig: []const u8) []const u8 {
+    const aliases = [_]struct { from: []const u8, to: []const u8 }{
+        .{
+            // UnityEngine.Debug.Log has only the Object overload exposed.
+            .from = "UnityEngineDebug.__Log__SystemString__SystemVoid",
+            .to = "UnityEngineDebug.__Log__SystemObject__SystemVoid",
+        },
+    };
+    for (aliases) |a| {
+        if (std.mem.eql(u8, a.from, sig)) return a.to;
+    }
+    return sig;
+}
 
 fn expectedWasmParamCount(args: []const extern_sig.ArgSpec) u32 {
     var n: u32 = 0;
@@ -302,9 +416,11 @@ fn udonTypeFor(name: []const u8) TypeName {
 }
 
 fn zeroLiteralFor(ty: TypeName) udon.asm_.Literal {
+    if (ty.is_array) return .null_literal;
     return switch (ty.prim) {
         .int32 => .{ .int32 = 0 },
         .uint32 => .{ .uint32 = 0 },
+        .byte => .{ .byte = 0 },
         .single => .{ .single = 0.0 },
         .string, .object, .int64, .uint64, .double, .boolean => .null_literal,
         .void_ => .null_literal,
@@ -387,6 +503,10 @@ const MockHost = struct {
         .externCall = vt_extern,
         .comment = vt_comment,
         .annotateUnsupported = vt_annot,
+        .label = vt_label,
+        .jump = vt_jump,
+        .jumpIfFalse = vt_jif,
+        .readByteFromMemory = vt_readbyte,
     };
 
     fn self_(ctx: *anyopaque) *MockHost {
@@ -439,6 +559,32 @@ const MockHost = struct {
         const s = self_(ctx);
         try s.buf.appendSlice(s.ally, "ANNOTATION __unsupported__\n");
     }
+    fn vt_label(ctx: *anyopaque, name: []const u8) Error!void {
+        const s = self_(ctx);
+        try s.buf.appendSlice(s.ally, "LABEL ");
+        try s.buf.appendSlice(s.ally, name);
+        try s.buf.appendSlice(s.ally, "\n");
+    }
+    fn vt_jump(ctx: *anyopaque, name: []const u8) Error!void {
+        const s = self_(ctx);
+        try s.buf.appendSlice(s.ally, "JUMP ");
+        try s.buf.appendSlice(s.ally, name);
+        try s.buf.appendSlice(s.ally, "\n");
+    }
+    fn vt_jif(ctx: *anyopaque, name: []const u8) Error!void {
+        const s = self_(ctx);
+        try s.buf.appendSlice(s.ally, "JUMP_IF_FALSE ");
+        try s.buf.appendSlice(s.ally, name);
+        try s.buf.appendSlice(s.ally, "\n");
+    }
+    fn vt_readbyte(ctx: *anyopaque, addr: []const u8, out: []const u8) Error!void {
+        const s = self_(ctx);
+        try s.buf.appendSlice(s.ally, "READBYTE ");
+        try s.buf.appendSlice(s.ally, addr);
+        try s.buf.appendSlice(s.ally, " -> ");
+        try s.buf.appendSlice(s.ally, out);
+        try s.buf.appendSlice(s.ally, "\n");
+    }
 };
 
 test "generic extern: (int, int) -> int pass-through" {
@@ -490,12 +636,29 @@ test "generic extern: SystemString arg consumes two i32s and marshals" {
     try expect(std.mem.indexOf(u8, out, "_marshal_str_tmp") != null);
     try expect(std.mem.indexOf(u8, out,
         "EXTERN SystemConsole.__WriteLine__SystemString__SystemVoid") != null);
-    // Scratch decls registered.
+    // Byte array allocated + populated via the read-byte helper.
+    try expect(std.mem.indexOf(u8, out,
+        "EXTERN SystemByteArray.__ctor__SystemInt32__SystemByteArray") != null);
+    try expect(std.mem.indexOf(u8, out, "READBYTE _marshal_str_addr") != null);
+    try expect(std.mem.indexOf(u8, out,
+        "EXTERN SystemByteArray.__Set__SystemInt32_SystemByte__SystemVoid") != null);
+    // Instance method: encoding pushed as `this` before GetString.
+    const gs_pos = std.mem.indexOf(u8, out,
+        "EXTERN SystemTextEncoding.__GetString__SystemByteArray__SystemString").?;
+    const this_pos = std.mem.lastIndexOf(u8, out[0..gs_pos], "PUSH _marshal_encoding_utf8").?;
+    _ = this_pos; // just verify it exists before the GetString EXTERN
+    // Scratch decls registered, including encoding and the new counter/byte.
     var saw_tmp = false;
+    var saw_enc = false;
+    var saw_byte = false;
     for (mh.decls.items) |d| {
         if (std.mem.eql(u8, d, marshal_str_tmp_name)) saw_tmp = true;
+        if (std.mem.eql(u8, d, marshal_encoding_name)) saw_enc = true;
+        if (std.mem.eql(u8, d, marshal_str_byte_name)) saw_byte = true;
     }
     try expect(saw_tmp);
+    try expect(saw_enc);
+    try expect(saw_byte);
     try std.testing.expectEqual(@as(u32, 0), mh.depth);
 }
 

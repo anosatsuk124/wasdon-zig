@@ -38,7 +38,7 @@ pub fn lookup(inst: wasm.Instruction) ?Entry {
         // ---- i32 binary (arithmetic / bitwise / shift) ----
         .i32_add => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32" },
         .i32_sub => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32" },
-        .i32_mul => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_Multiply__SystemInt32_SystemInt32__SystemInt32" },
+        .i32_mul => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32" },
         .i32_div_s => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32" },
         .i32_div_u => .{ .arity = .binary, .operand_ty = tn.uint32, .result_ty = tn.uint32, .sig = "SystemUInt32.__op_Division__SystemUInt32_SystemUInt32__SystemUInt32" },
         .i32_rem_s => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_Modulus__SystemInt32_SystemInt32__SystemInt32" },
@@ -65,7 +65,7 @@ pub fn lookup(inst: wasm.Instruction) ?Entry {
         // ---- i64 binary ----
         .i64_add => .{ .arity = .binary, .operand_ty = tn.int64, .result_ty = tn.int64, .sig = "SystemInt64.__op_Addition__SystemInt64_SystemInt64__SystemInt64" },
         .i64_sub => .{ .arity = .binary, .operand_ty = tn.int64, .result_ty = tn.int64, .sig = "SystemInt64.__op_Subtraction__SystemInt64_SystemInt64__SystemInt64" },
-        .i64_mul => .{ .arity = .binary, .operand_ty = tn.int64, .result_ty = tn.int64, .sig = "SystemInt64.__op_Multiply__SystemInt64_SystemInt64__SystemInt64" },
+        .i64_mul => .{ .arity = .binary, .operand_ty = tn.int64, .result_ty = tn.int64, .sig = "SystemInt64.__op_Multiplication__SystemInt64_SystemInt64__SystemInt64" },
         .i64_and => .{ .arity = .binary, .operand_ty = tn.int64, .result_ty = tn.int64, .sig = "SystemInt64.__op_LogicalAnd__SystemInt64_SystemInt64__SystemInt64" },
         .i64_or => .{ .arity = .binary, .operand_ty = tn.int64, .result_ty = tn.int64, .sig = "SystemInt64.__op_LogicalOr__SystemInt64_SystemInt64__SystemInt64" },
         .i64_xor => .{ .arity = .binary, .operand_ty = tn.int64, .result_ty = tn.int64, .sig = "SystemInt64.__op_LogicalXor__SystemInt64_SystemInt64__SystemInt64" },
@@ -75,7 +75,9 @@ pub fn lookup(inst: wasm.Instruction) ?Entry {
         .i64_div_s => .{ .arity = .binary, .operand_ty = tn.int64, .result_ty = tn.int64, .sig = "SystemInt64.__op_Division__SystemInt64_SystemInt64__SystemInt64" },
         .i64_div_u => .{ .arity = .binary, .operand_ty = tn.uint64, .result_ty = tn.uint64, .sig = "SystemUInt64.__op_Division__SystemUInt64_SystemUInt64__SystemUInt64" },
         .i64_rem_s => .{ .arity = .binary, .operand_ty = tn.int64, .result_ty = tn.int64, .sig = "SystemInt64.__op_Modulus__SystemInt64_SystemInt64__SystemInt64" },
-        .i64_rem_u => .{ .arity = .binary, .operand_ty = tn.uint64, .result_ty = tn.uint64, .sig = "SystemUInt64.__op_Modulus__SystemUInt64_SystemUInt64__SystemUInt64" },
+        // i64.rem_u: Udon には SystemUInt64.__op_Modulus__ が存在しないため、
+        // translate.zig 側で a - (a/b)*b の 3-EXTERN シーケンスに展開する。
+        // この lookup テーブルからは意図的に除外する。
 
         // ---- i64 comparisons (result bool) ----
         .i64_eq => .{ .arity = .binary, .operand_ty = tn.int64, .result_ty = tn.boolean, .sig = "SystemInt64.__op_Equality__SystemInt64_SystemInt64__SystemBoolean" },
@@ -92,7 +94,7 @@ pub fn lookup(inst: wasm.Instruction) ?Entry {
         // ---- f64 binary ----
         .f64_add => .{ .arity = .binary, .operand_ty = tn.double, .result_ty = tn.double, .sig = "SystemDouble.__op_Addition__SystemDouble_SystemDouble__SystemDouble" },
         .f64_sub => .{ .arity = .binary, .operand_ty = tn.double, .result_ty = tn.double, .sig = "SystemDouble.__op_Subtraction__SystemDouble_SystemDouble__SystemDouble" },
-        .f64_mul => .{ .arity = .binary, .operand_ty = tn.double, .result_ty = tn.double, .sig = "SystemDouble.__op_Multiply__SystemDouble_SystemDouble__SystemDouble" },
+        .f64_mul => .{ .arity = .binary, .operand_ty = tn.double, .result_ty = tn.double, .sig = "SystemDouble.__op_Multiplication__SystemDouble_SystemDouble__SystemDouble" },
         .f64_div => .{ .arity = .binary, .operand_ty = tn.double, .result_ty = tn.double, .sig = "SystemDouble.__op_Division__SystemDouble_SystemDouble__SystemDouble" },
         .f64_floor => .{ .arity = .unary, .operand_ty = tn.double, .result_ty = tn.double, .sig = "SystemMath.__Floor__SystemDouble__SystemDouble" },
 

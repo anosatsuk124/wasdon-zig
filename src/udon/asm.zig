@@ -25,6 +25,7 @@ const TypeName = type_name.TypeName;
 pub const Literal = union(enum) {
     int32: i32,
     uint32: u32,
+    byte: u8,
     single: f32,
     string: []const u8,
     null_literal,
@@ -39,6 +40,7 @@ pub const Literal = union(enum) {
                     try writer.print("{d}u", .{v});
                 }
             },
+            .byte => |v| try writer.print("{d}", .{v}),
             .single => |v| try writer.print("{d}", .{v}),
             .string => |s| {
                 try writer.writeAll("\"");

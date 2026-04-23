@@ -261,7 +261,7 @@ test "parse method name with single underscores" {
 }
 
 test "raw matches input" {
-    const name = "SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid";
+    const name = "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid";
     const opt = try parseAlloc(name);
     try expect(opt != null);
     const s = opt.?;
@@ -276,7 +276,7 @@ test "numeric dispatch table round-trips through parser" {
     const numeric_sigs = [_][]const u8{
         "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
         "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
-        "SystemInt32.__op_Multiply__SystemInt32_SystemInt32__SystemInt32",
+        "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32",
         "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32",
         "SystemUInt32.__op_Division__SystemUInt32_SystemUInt32__SystemUInt32",
         "SystemInt32.__op_Modulus__SystemInt32_SystemInt32__SystemInt32",
@@ -288,7 +288,7 @@ test "numeric dispatch table round-trips through parser" {
         "SystemUInt32.__op_RightShift__SystemUInt32_SystemInt32__SystemUInt32",
         "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean",
         "SystemInt64.__op_Addition__SystemInt64_SystemInt64__SystemInt64",
-        "SystemDouble.__op_Multiply__SystemDouble_SystemDouble__SystemDouble",
+        "SystemDouble.__op_Multiplication__SystemDouble_SystemDouble__SystemDouble",
         "SystemMath.__Floor__SystemDouble__SystemDouble",
     };
     for (numeric_sigs) |sig_str| {
