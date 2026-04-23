@@ -131,6 +131,17 @@ const Translator = struct {
     /// `analyzeRecursion()`. See `docs/spec_call_return_conversion.md` §8.2.
     is_recursive: []bool = &.{},
 
+    /// Udon variable names for the linear-memory outer array and its
+    /// companion scalars. Defaults follow `docs/spec_linear_memory.md`; if
+    /// `__udon_meta.options.memory.udonName` is set, the outer array and all
+    /// companions are renamed in lockstep per
+    /// `docs/spec_udonmeta_conversion.md` §options.memory. Populated by
+    /// `resolveMemoryNames()`.
+    memory_udon_name: []const u8 = "__G__memory",
+    memory_size_pages_name: []const u8 = "__G__memory_size_pages",
+    memory_max_pages_name: []const u8 = "__G__memory_max_pages",
+    memory_initial_pages_name: []const u8 = "__G__memory_initial_pages",
+
     const EventBinding = struct {
         /// WASM export name (e.g. "on_update").
         wasm_export: []const u8,
@@ -176,6 +187,7 @@ const Translator = struct {
     fn build(self: *Translator) Error!void {
         try self.resolveFunctionNames();
         try self.resolveGlobalNames();
+        try self.resolveMemoryNames();
         try self.resolveEventBindings();
         try self.resolveIndirectFns();
         try self.analyzeRecursion();
@@ -290,6 +302,20 @@ const Translator = struct {
             i += 1;
         }
         self.global_udon_names = buf;
+    }
+
+    /// Resolve the Udon variable name of the linear-memory outer array and
+    /// its companion scalars. When `__udon_meta.options.memory.udonName` is
+    /// provided, companions inherit the same prefix
+    /// (`{base}_size_pages`, `{base}_max_pages`, `{base}_initial_pages`) per
+    /// `docs/spec_udonmeta_conversion.md` §options.memory.
+    fn resolveMemoryNames(self: *Translator) Error!void {
+        const m = self.meta orelse return;
+        const base = m.options.memory.udon_name orelse return;
+        self.memory_udon_name = base;
+        self.memory_size_pages_name = try std.fmt.allocPrint(self.aa(), "{s}_size_pages", .{base});
+        self.memory_max_pages_name = try std.fmt.allocPrint(self.aa(), "{s}_max_pages", .{base});
+        self.memory_initial_pages_name = try std.fmt.allocPrint(self.aa(), "{s}_initial_pages", .{base});
     }
 
     fn resolveEventBindings(self: *Translator) Error!void {
@@ -429,14 +455,10 @@ const Translator = struct {
             break :blk mem.min;
         };
 
-        const mem_name = blk: {
-            if (self.meta) |m| if (m.options.memory.udon_name) |un| break :blk un;
-            break :blk "__G__memory";
-        };
-        try self.asm_.addData(.{ .name = mem_name, .ty = tn.object_array, .init = .null_literal });
-        try self.asm_.addData(.{ .name = "__G__memory_size_pages", .ty = tn.int32, .init = .{ .int32 = 0 } });
-        try self.asm_.addData(.{ .name = "__G__memory_max_pages", .ty = tn.int32, .init = .{ .int32 = @intCast(max_pages) } });
-        try self.asm_.addData(.{ .name = "__G__memory_initial_pages", .ty = tn.int32, .init = .{ .int32 = @intCast(initial_pages) } });
+        try self.asm_.addData(.{ .name = self.memory_udon_name, .ty = tn.object_array, .init = .null_literal });
+        try self.asm_.addData(.{ .name = self.memory_size_pages_name, .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = self.memory_max_pages_name, .ty = tn.int32, .init = .{ .int32 = @intCast(max_pages) } });
+        try self.asm_.addData(.{ .name = self.memory_initial_pages_name, .ty = tn.int32, .init = .{ .int32 = @intCast(initial_pages) } });
         // Scratch slots used by every memory access.
         try self.asm_.addData(.{ .name = "_mem_page_idx", .ty = tn.int32, .init = .{ .int32 = 0 } });
         try self.asm_.addData(.{ .name = "_mem_word_in_page", .ty = tn.int32, .init = .{ .int32 = 0 } });
@@ -614,8 +636,8 @@ const Translator = struct {
         if (self.mod.memories.len == 0) return;
         try self.asm_.comment("memory init (allocate outer + initial chunks)");
         // outer = new SystemObjectArray(max_pages)
-        try self.asm_.push("__G__memory_max_pages");
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_max_pages_name);
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.extern_("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray");
         // Loop would be ideal; for simplicity emit a straight-line allocation
         // for every initial page. We don't know initial_pages at code-gen
@@ -635,15 +657,14 @@ const Translator = struct {
             try self.asm_.push("__c_i32_16384");
             try self.asm_.push("_mem_chunk");
             try self.asm_.extern_("SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array");
-            try self.asm_.push("__G__memory");
+            try self.asm_.push(self.memory_udon_name);
             try self.asm_.push("_mem_chunk");
             try self.asm_.push(idx_name);
             try self.asm_.extern_("SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid");
         }
-        // __G__memory_size_pages = initial
-        const init_name = "__G__memory_initial_pages";
-        try self.asm_.push(init_name);
-        try self.asm_.push("__G__memory_size_pages");
+        // memory size = initial
+        try self.asm_.push(self.memory_initial_pages_name);
+        try self.asm_.push(self.memory_size_pages_name);
         try self.asm_.copy();
         // Apply every data segment as a byte-by-byte sequence of i32.store8-
         // equivalent writes. Bench's data segments are small; we emit one
@@ -1404,7 +1425,7 @@ const Translator = struct {
     fn emitMemorySize(self: *Translator, ctx: *FuncCtx) Error!void {
         ctx.push();
         const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
-        try self.asm_.push("__G__memory_size_pages");
+        try self.asm_.push(self.memory_size_pages_name);
         try self.asm_.push(dst);
         try self.asm_.copy();
     }
@@ -1425,7 +1446,7 @@ const Translator = struct {
         const result = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
 
         // _mg_old = __G__memory_size_pages
-        try self.asm_.push("__G__memory_size_pages");
+        try self.asm_.push(self.memory_size_pages_name);
         try self.asm_.push("_mg_old");
         try self.asm_.copy();
 
@@ -1437,7 +1458,7 @@ const Translator = struct {
 
         // if _mg_new > __G__memory_max_pages: result = -1; goto end
         try self.asm_.push("_mg_new");
-        try self.asm_.push("__G__memory_max_pages");
+        try self.asm_.push(self.memory_max_pages_name);
         try self.asm_.push("_mg_cmp");
         try self.asm_.extern_("SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean");
         try self.asm_.push("_mg_cmp");
@@ -1467,7 +1488,7 @@ const Translator = struct {
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array");
         // __G__memory[_mg_i] = _mem_chunk
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mg_i");
         try self.asm_.extern_("SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid");
@@ -1481,7 +1502,7 @@ const Translator = struct {
         try self.asm_.label(done_lbl);
         // __G__memory_size_pages = _mg_new
         try self.asm_.push("_mg_new");
-        try self.asm_.push("__G__memory_size_pages");
+        try self.asm_.push(self.memory_size_pages_name);
         try self.asm_.copy();
         // result = _mg_old
         try self.asm_.push("_mg_old");
@@ -1518,7 +1539,7 @@ const Translator = struct {
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
         // outer[page_idx] → _mem_chunk
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
@@ -1600,7 +1621,7 @@ const Translator = struct {
         // Fall-through: unaligned within chunk.
         try self.asm_.label(slow_lbl);
         // chunk := outer[page_idx]
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
@@ -1624,7 +1645,7 @@ const Translator = struct {
         // Straddle branch.
         try self.asm_.label(straddle_lbl);
         // lo_chunk := outer[page_idx]
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
@@ -1639,7 +1660,7 @@ const Translator = struct {
         try self.asm_.push("_mem_word_in_page_hi");
         try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
         // hi_chunk := outer[page_idx + 1]
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_word_in_page_hi");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
@@ -1652,7 +1673,7 @@ const Translator = struct {
 
         // Fast branch.
         try self.asm_.label(fast_lbl);
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
@@ -1721,7 +1742,7 @@ const Translator = struct {
         try self.asm_.push("__c_i32_2");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
@@ -1789,7 +1810,7 @@ const Translator = struct {
 
         // Unaligned within-chunk: read both words from same chunk.
         try self.asm_.label(slow_lbl);
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
@@ -1822,7 +1843,7 @@ const Translator = struct {
         // Straddle: read lo from current chunk[16383], hi from next chunk[0].
         try self.asm_.label(straddle_lbl);
         // lo_chunk := outer[page_idx]  (store in _mem_chunk temporarily, but we need both)
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
@@ -1840,7 +1861,7 @@ const Translator = struct {
         try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
         // Stash lo_chunk elsewhere: we have only one _mem_chunk slot; emit another fetch later.
         // hi_chunk := outer[page_idx + 1]
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_word_in_page_hi");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
@@ -1856,7 +1877,7 @@ const Translator = struct {
         try self.asm_.push("__c_i32_0");
         try self.asm_.extern_("SystemUInt32Array.__SetValue__SystemUInt32_SystemInt32__SystemVoid");
         // Re-fetch lo_chunk := outer[page_idx] and write lo_out[16383].
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
@@ -1868,7 +1889,7 @@ const Translator = struct {
 
         // Fast branch.
         try self.asm_.label(fast_lbl);
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
@@ -1972,7 +1993,7 @@ const Translator = struct {
         try self.asm_.push("_mem_shift");
         try self.asm_.extern_("SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32");
         // _mem_chunk := __G__memory[page_idx]
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
@@ -2147,7 +2168,7 @@ const Translator = struct {
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
         // _mem_chunk := __G__memory[page_idx]
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
@@ -2233,7 +2254,7 @@ const Translator = struct {
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
         // _mem_chunk := __G__memory[page_idx]
-        try self.asm_.push("__G__memory");
+        try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
@@ -2513,7 +2534,9 @@ test "translate bench.wasm end-to-end (structural)" {
     try std.testing.expect(std.mem.indexOf(u8, out, "simplified — single shared indirect target") == null);
 
     // ---- memory infra was emitted ----
-    try std.testing.expect(std.mem.indexOf(u8, out, "__G__memory_size_pages") != null);
+    // bench sets `options.memory.udonName = "_memory"`, so companion scalars
+    // are renamed in lockstep per docs/spec_udonmeta_conversion.md §options.memory.
+    try std.testing.expect(std.mem.indexOf(u8, out, "_memory_size_pages") != null);
     try std.testing.expect(std.mem.indexOf(u8, out,
         "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray") != null);
     try std.testing.expect(std.mem.indexOf(u8, out,
@@ -2606,7 +2629,9 @@ test "bench: memory.grow allocates inner chunks via SystemUInt32Array ctor" {
     try std.testing.expect(std.mem.indexOf(u8, after,
         "SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid") != null);
     // page counter の更新と、-1 (失敗時) のコンスタント
-    try std.testing.expect(std.mem.indexOf(u8, after, "__G__memory_size_pages") != null);
+    // bench の __udon_meta で memory.udonName = "_memory" を指定しているので
+    // companion スカラも lockstep で改名される。
+    try std.testing.expect(std.mem.indexOf(u8, after, "_memory_size_pages") != null);
 
     // 未実装プレースホルダは残っていないこと
     try std.testing.expect(std.mem.indexOf(u8, after,
