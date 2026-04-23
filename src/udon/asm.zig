@@ -32,7 +32,13 @@ pub const Literal = union(enum) {
     pub fn write(self: Literal, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
             .int32 => |v| try writer.print("{d}", .{v}),
-            .uint32 => |v| try writer.print("0x{X:0>8}u", .{v}),
+            .uint32 => |v| {
+                if (v <= std.math.maxInt(i32)) {
+                    try writer.print("{d}", .{v});
+                } else {
+                    try writer.print("{d}u", .{v});
+                }
+            },
             .single => |v| try writer.print("{d}", .{v}),
             .string => |s| {
                 try writer.writeAll("\"");
@@ -391,11 +397,26 @@ test "jump label references resolve to hex addresses" {
     try std.testing.expect(std.mem.indexOf(u8, out, "JUMP, 0x0000001C") != null); // done @ 28
 }
 
-test "uint32 literal formatted with u suffix" {
+test "uint32 literal within int32 range is plain decimal" {
     var a: Asm = .init(std.testing.allocator);
     defer a.deinit();
     try a.addData(.{ .name = "__ret_addr_0__", .ty = type_name.uint32, .init = .{ .uint32 = 0x6C } });
+    try a.addData(.{ .name = "__zero__", .ty = type_name.uint32, .init = .{ .uint32 = 0 } });
+    try a.addData(.{ .name = "__max_i32__", .ty = type_name.uint32, .init = .{ .uint32 = 0x7FFFFFFF } });
     const out = try renderToOwned(&a, std.testing.allocator);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 0x0000006Cu") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 108\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 0\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 2147483647\n") != null);
+}
+
+test "uint32 literal above int32 range uses u suffix" {
+    var a: Asm = .init(std.testing.allocator);
+    defer a.deinit();
+    try a.addData(.{ .name = "__big__", .ty = type_name.uint32, .init = .{ .uint32 = 0x80000000 } });
+    try a.addData(.{ .name = "__max__", .ty = type_name.uint32, .init = .{ .uint32 = 0xFFFFFFFF } });
+    const out = try renderToOwned(&a, std.testing.allocator);
+    defer std.testing.allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 2147483648u\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 4294967295u\n") != null);
 }
