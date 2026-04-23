@@ -131,6 +131,12 @@ const Translator = struct {
     /// `analyzeRecursion()`. See `docs/spec_call_return_conversion.md` §8.2.
     is_recursive: []bool = &.{},
 
+    /// Per defined-function peak abstract stack depth, captured from
+    /// `FuncCtx.max_emitted_depth` at the end of each function's codegen.
+    /// Indexed by `def_idx` (i.e. `fn_idx - num_imported_funcs`). Drives
+    /// `__fn_Sd__` data-slot emission after all functions are lowered.
+    fn_max_stack_depth: []u32 = &.{},
+
     /// Udon variable names for the linear-memory outer array and its
     /// companion scalars. Defaults follow `docs/spec_linear_memory.md`; if
     /// `__udon_meta.options.memory.udonName` is set, the outer array and all
@@ -172,6 +178,7 @@ const Translator = struct {
         self.event_bindings.deinit(self.gpa);
         self.indirect_fns.deinit(self.gpa);
         if (self.is_recursive.len > 0) self.gpa.free(self.is_recursive);
+        if (self.fn_max_stack_depth.len > 0) self.gpa.free(self.fn_max_stack_depth);
         self.asm_.deinit();
         self.arena.deinit();
     }
@@ -191,6 +198,8 @@ const Translator = struct {
         try self.resolveEventBindings();
         try self.resolveIndirectFns();
         try self.analyzeRecursion();
+        self.fn_max_stack_depth = try self.gpa.alloc(u32, self.mod.codes.len);
+        @memset(self.fn_max_stack_depth, 0);
         try self.emitCommonData();
         try self.emitGlobalsData();
         try self.emitMemoryData();
@@ -199,6 +208,7 @@ const Translator = struct {
         try self.emitEventEntries();
         try self.emitDefinedFunctions();
         try self.emitIndirectTrampolines();
+        try self.emitFunctionStackSlots();
         // Unsupported-opcode sink.
         try self.asm_.addData(.{
             .name = "__unsupported__",
@@ -547,17 +557,28 @@ const Translator = struct {
                 const n = try names.returnSlot(self.aa(), fn_name, @intCast(i));
                 try self.asm_.addData(.{ .name = n, .ty = udonTypeOf(r), .init = zeroLit(r) });
             }
-            // A conservative upper bound on S slots. The WASM validator
-            // guarantees maximum depth is bounded by (body length) but we
-            // estimate more tightly as the body length itself.
-            const max_depth = estimateMaxStackDepth(code.body);
+            // S-slot decls are deferred until after codegen; see
+            // `emitFunctionStackSlots`.
+            const ra = try names.returnAddrSlot(self.aa(), fn_name);
+            try self.asm_.addData(.{ .name = ra, .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        }
+    }
+
+    /// Emit `__fn_Sd__` data declarations for every defined function using the
+    /// exact peak abstract stack depth observed during codegen. Must be called
+    /// after `emitDefinedFunctions` so `fn_max_stack_depth` is populated. The
+    /// rendered data section stays inside `.data_start` regardless of
+    /// insertion order (see `udon/asm.zig` `render`).
+    fn emitFunctionStackSlots(self: *Translator) Error!void {
+        for (0..self.mod.codes.len) |def_idx| {
+            const fn_idx: u32 = self.num_imported_funcs + @as(u32, @intCast(def_idx));
+            const fn_name = self.fn_names[fn_idx];
+            const max_depth = self.fn_max_stack_depth[def_idx];
             var d: u32 = 0;
             while (d < max_depth) : (d += 1) {
                 const n = try names.stackSlot(self.aa(), fn_name, d);
                 try self.asm_.addData(.{ .name = n, .ty = tn.int32, .init = .{ .int32 = 0 } });
             }
-            const ra = try names.returnAddrSlot(self.aa(), fn_name);
-            try self.asm_.addData(.{ .name = ra, .ty = tn.uint32, .init = .{ .uint32 = 0 } });
         }
     }
 
@@ -796,6 +817,8 @@ const Translator = struct {
         // on their own RA slot (per §4).
         const ra = try names.returnAddrSlot(self.aa(), fn_name);
         try self.asm_.jumpIndirect(ra);
+
+        self.fn_max_stack_depth[def_idx] = ctx.max_emitted_depth;
     }
 
     fn collectFrameSlots(
@@ -2414,45 +2437,6 @@ fn blockResultArity(bt: wasm.types.BlockType) u32 {
         .value => 1,
         .type_index => 0, // we don't look up the type index here
     };
-}
-
-/// Very rough upper bound; WASM validator ensures the actual stack never
-/// exceeds body-size. Used only for pre-allocating S-slot data decls.
-fn estimateMaxStackDepth(body: []const Instruction) u32 {
-    var depth: u32 = 0;
-    var maxd: u32 = 0;
-    for (body) |ins| {
-        switch (ins) {
-            .i32_const, .i64_const, .f32_const, .f64_const, .local_get, .global_get, .memory_size => {
-                depth += 1;
-                if (depth > maxd) maxd = depth;
-            },
-            .drop, .local_set, .global_set => if (depth > 0) {
-                depth -= 1;
-            },
-            .block => |b| {
-                const inner = estimateMaxStackDepth(b.body);
-                if (depth + inner > maxd) maxd = depth + inner;
-            },
-            .loop => |b| {
-                const inner = estimateMaxStackDepth(b.body);
-                if (depth + inner > maxd) maxd = depth + inner;
-            },
-            .if_ => |b| {
-                if (depth > 0) depth -= 1; // cond
-                const inner_t = estimateMaxStackDepth(b.then_body);
-                if (depth + inner_t > maxd) maxd = depth + inner_t;
-                if (b.else_body) |eb| {
-                    const inner_e = estimateMaxStackDepth(eb);
-                    if (depth + inner_e > maxd) maxd = depth + inner_e;
-                }
-            },
-            else => {},
-        }
-    }
-    // Pad generously to avoid undercount on complex code. The cost is only
-    // extra data decls — safe but not free.
-    return @max(maxd, 8) + 4;
 }
 
 // --------------------- tests ---------------------
