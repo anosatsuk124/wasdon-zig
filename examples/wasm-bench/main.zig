@@ -26,7 +26,7 @@ extern "env" fn @"UnityEngineDebug.__Log__SystemString__SystemVoid"(
 ) void;
 
 fn log(s: []const u8) void {
-    @"SystemConsole.__WriteLine__SystemString__SystemVoid"(s.ptr, s.len);
+    @"UnityEngineDebug.__Log__SystemString__SystemVoid"(s.ptr, s.len);
 }
 
 var fmt_buf: [512]u8 = undefined;
