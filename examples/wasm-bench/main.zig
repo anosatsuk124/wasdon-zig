@@ -43,6 +43,7 @@ const udon_meta_json =
     \\  },
     \\  "options": {
     \\    "strict": false,
+    \\    "recursion": "stack",
     \\    "memory": { "initialPages": 1, "maxPages": 24, "udonName": "_memory" }
     \\  }
     \\}
@@ -262,38 +263,22 @@ fn test_64bit_and_float() void {
 }
 
 export fn on_start() void {
+    // Udon の 1 イベントあたり 10 秒 VM 予算は EXTERN の山でできている
+    // std.fmt.bufPrint 経路で簡単に食いつぶされる。on_start は「起動時に
+    // 最低限ここまで動くことを保証したい」ラインだけに絞り、残りの
+    // 機能テストは `on_interact` で 1 押し 1 テストの step 方式で流す。
     log("=== on_start begin ===");
 
-    // プリミティブ経路 (std.fmt を通らないもの) から順に。
+    // (1) std.fmt を通らない log だけの sanity check。
     test_nofmt_simple();
-    test_fmt_int_hand();
 
-    // 手書き fast-path と @memcpy 経路。
+    // (2) 自作 Writer 相当の fast-path / slice-field 経路。
     test_manual_fastpath();
-    test_memcpy_direct();
-
-    // Writer レイアウトを模した struct / vtable / slice-field 経路。
-    test_writer_like_struct();
-    test_vtable_indirect();
     test_wl_slice_write();
-    test_wl_slice_memcpy();
-    test_wl_slice_err();
 
-    // std.Io.Writer 実体 + std.fmt.bufPrint の段階的確認。
-    // i64.const 修正 (Udon spec §4.7 を踏まえた _onEnable 合成) 後は
-    // stage2..4 も完走するはず。
+    // (3) std.Io.Writer + std.fmt.bufPrint の段階別動作確認。ここまで
+    //     通れば本番の logf が機能することが確認できる。
     test_real_logf();
-
-    // std.fmt.bufPrint を踏む logf を使うブロック。
-    test_fmt_single();
-    test_arithmetic();
-    test_control_flow();
-    test_globals();
-    test_recursion();
-    test_memory();
-    test_indirect_call();
-    test_struct();
-    test_64bit_and_float();
 
     log("=== on_start end ===");
 }
@@ -305,14 +290,8 @@ export fn on_update() void {
     _ = counter;
 }
 
-// on_interact を押すたびに診断 phase を進める。
-//   step 0 : test_nofmt_simple  — bufPrint を通らない log だけの確認
-//   step 1 : test_fmt_single    — logf を 1 回だけ。bufPrint 通る
-//   step 2 : test_fmt_int_hand  — 自作 int→ASCII 経由の log。std.fmt 不使用
-//   step 3 : 元の test_arithmetic を 1 回
-//   step 4 : 元の test_control_flow を 1 回
-//   ...
-// 押した回数で何段階まで通ったか分かる。
+// on_interact を押すたびに次のテストを走らせる。step マッピングは
+// `on_interact` 本体を参照。押した回数で何段階まで通ったかが分かる。
 var interact_step: i32 = 0;
 
 fn test_nofmt_simple() void {
@@ -591,20 +570,27 @@ fn test_real_logf() void {
 }
 
 export fn on_interact() void {
+    // 1 クリック = 1 step = 1 テスト。各 on_interact 呼び出しは独立した
+    // 10 秒 VM 予算を持つので、logf 多用 / 再帰 / memory.grow を踏むような
+    // 重いテストもここで単独で走らせれば完走する。
     const step = interact_step;
     interact_step +%= 1;
     switch (step) {
-        0 => test_nofmt_simple(),
-        1 => test_fmt_single(),
-        2 => test_fmt_int_hand(),
-        3 => test_arithmetic(),
-        4 => test_control_flow(),
-        5 => test_globals(),
-        6 => test_recursion(),
-        7 => test_memory(),
-        8 => test_indirect_call(),
-        9 => test_struct(),
-        10 => test_64bit_and_float(),
+        0 => test_fmt_int_hand(), // 自作 int→ASCII。std.fmt 不使用。
+        1 => test_memcpy_direct(), // @memcpy 経由の byte copy。
+        2 => test_writer_like_struct(), // struct field + fast path。
+        3 => test_vtable_indirect(), // static vtable 経由の indirect call。
+        4 => test_wl_slice_memcpy(), // slice field + @memcpy。
+        5 => test_wl_slice_err(), // Error!u32 戻り値 + try/catch。
+        6 => test_fmt_single(), // 実 logf を 1 回。
+        7 => test_arithmetic(), // 算術 + logf 複数。
+        8 => test_control_flow(), // if / while / br_table。
+        9 => test_globals(), // i32 / i64 global 読み書き。
+        10 => test_recursion(), // factorial + fib。再帰コスト高。
+        11 => test_memory(), // linear memory + memory.grow。
+        12 => test_indirect_call(), // fn pointer array。
+        13 => test_struct(), // struct / ポインタ / ネスト。
+        14 => test_64bit_and_float(), // i64 / f64 演算。
         else => log("(no more steps)"),
     }
     counter +%= 1;

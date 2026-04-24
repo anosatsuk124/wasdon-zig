@@ -490,6 +490,10 @@ const Translator = struct {
             .init = .{ .uint32 = 0 },
         });
         // Call stack for recursion support (see spec_call_return_conversion.md §8.2).
+        // Size is a fixed upper bound on (max recursion depth) * (max saved
+        // slots per frame). 4096 slots ≈ 64 frames of ~60 slots, which is
+        // well above anything the bench exercises; grow this if a recursive
+        // function overflows at runtime.
         try self.asm_.addData(.{
             .name = "__call_stack__",
             .ty = tn.object_array,
@@ -499,6 +503,11 @@ const Translator = struct {
             .name = "__call_stack_top__",
             .ty = tn.int32,
             .init = .{ .int32 = 0 },
+        });
+        try self.asm_.addData(.{
+            .name = "__call_stack_size__",
+            .ty = tn.int32,
+            .init = .{ .int32 = 4096 },
         });
     }
 
@@ -900,6 +909,7 @@ const Translator = struct {
             try self.asm_.label("_onEnable");
             try self.emit64BitConstInits();
             try self.emitMemoryInit();
+            try self.emitCallStackInit();
             try self.asm_.jumpAddr(0xFFFFFFFC);
         }
 
@@ -910,6 +920,7 @@ const Translator = struct {
             if (std.mem.eql(u8, ev.udon_label, "_onEnable")) {
                 try self.emit64BitConstInits();
                 try self.emitMemoryInit();
+                try self.emitCallStackInit();
             }
             // Invoke the function: no arguments (all entry functions in bench
             // have no params). Save no return value.
@@ -1082,6 +1093,28 @@ const Translator = struct {
         try self.asm_.push(page_idx_slot);
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+    }
+
+    /// Allocate `__call_stack__` with a fixed capacity so the caller-side
+    /// recursion spill has a non-null receiver. Only emitted when some
+    /// function is actually recursive AND `options.recursion == .stack`;
+    /// otherwise the spill is never used and the 4096-slot array would
+    /// just waste heap on every UdonBehaviour.
+    fn emitCallStackInit(self: *Translator) Error!void {
+        const m = self.meta orelse return;
+        if (m.options.recursion != .stack) return;
+        var any_recursive = false;
+        for (self.is_recursive) |b| {
+            if (b) {
+                any_recursive = true;
+                break;
+            }
+        }
+        if (!any_recursive) return;
+        try self.asm_.comment("recursion: call stack init");
+        try self.asm_.push("__call_stack_size__");
+        try self.asm_.push("__call_stack__");
+        try self.asm_.extern_("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray");
     }
 
     fn emitMemoryInit(self: *Translator) Error!void {
@@ -1388,9 +1421,12 @@ const Translator = struct {
         defer ctx.blocks.deinit(self.gpa);
         defer ctx.stack_types.deinit(self.gpa);
 
-        if (self.shouldSpill(fn_idx)) {
-            try self.emitPrologueSpill(&ctx, code);
-        }
+        // Recursion spill is caller-saved (see `emitCall` / `emitCallIndirect`),
+        // not callee-saved. A callee-saved prologue would snapshot the
+        // post-arg-write state (P / RA already set to the callee's inputs),
+        // so an epilogue restore would only revert to "the caller-set inner
+        // args" — which never matches the outer call's pre-call frame.
+        // Wrapping each nested call site on the caller side avoids that.
 
         try self.emitInstrs(&ctx, code.body);
 
@@ -1398,9 +1434,6 @@ const Translator = struct {
         // (Only if any results are declared.)
         try self.emitFunctionReturn(&ctx);
         try self.asm_.label(exit);
-        if (self.shouldSpill(fn_idx)) {
-            try self.emitEpilogueRestore(&ctx, code);
-        }
         // Emit the indirect jump back. All defined functions use JUMP_INDIRECT
         // on their own RA slot (per §4).
         const ra = try names.returnAddrSlot(self.aa(), fn_name);
@@ -1409,32 +1442,40 @@ const Translator = struct {
         self.fn_max_stack_depth[def_idx] = ctx.max_emitted_depth;
     }
 
+    /// Collect caller's P / L / RA slots (in that order). Excludes R: the
+    /// return-value slot is output-only from the caller's perspective, and
+    /// must not be clobbered by a restore after the call — the callee has
+    /// just written its fresh return value there. Excludes S: WASM value
+    /// stack is per-function but its live-across-call content is not
+    /// saved here (fib-style recursion keeps nothing live across the call;
+    /// functions that need S preserved would need per-call-site live-depth
+    /// analysis).
     fn collectFrameSlots(
         self: *Translator,
         ctx: *FuncCtx,
-        code: wasm.module.Code,
         slots: *std.ArrayList([]const u8),
     ) Error!void {
         const fn_name = ctx.fn_name;
         for (ctx.params, 0..) |_, i|
             try slots.append(self.gpa, try names.param(self.aa(), fn_name, @intCast(i)));
         var li: u32 = 0;
-        for (code.locals) |lg| {
+        for (ctx.locals) |lg| {
             for (0..lg.count) |_| {
                 try slots.append(self.gpa, try names.local(self.aa(), fn_name, li));
                 li += 1;
             }
         }
-        for (ctx.results, 0..) |_, i|
-            try slots.append(self.gpa, try names.returnSlot(self.aa(), fn_name, @intCast(i)));
         try slots.append(self.gpa, try names.returnAddrSlot(self.aa(), fn_name));
     }
 
-    fn emitPrologueSpill(self: *Translator, ctx: *FuncCtx, code: wasm.module.Code) Error!void {
-        try self.asm_.comment("recursion: prologue spill");
+    /// Caller-side spill (see `spec_call_return_conversion.md` §8.2). Push
+    /// the caller's P / L / RA onto `__call_stack__` right before a call
+    /// site overwrites the (possibly aliased) callee P / RA slots.
+    fn emitCallerSaveFrame(self: *Translator, ctx: *FuncCtx) Error!void {
+        try self.asm_.comment("recursion: caller-save frame");
         var slots: std.ArrayList([]const u8) = .empty;
         defer slots.deinit(self.gpa);
-        try self.collectFrameSlots(ctx, code, &slots);
+        try self.collectFrameSlots(ctx, &slots);
 
         for (slots.items) |slot| {
             // __call_stack__[__call_stack_top__] = slot
@@ -1450,11 +1491,14 @@ const Translator = struct {
         }
     }
 
-    fn emitEpilogueRestore(self: *Translator, ctx: *FuncCtx, code: wasm.module.Code) Error!void {
-        try self.asm_.comment("recursion: epilogue restore");
+    /// Caller-side restore. Pop in reverse order so the frame comes back
+    /// exactly as it was at the save point, regardless of how deeply the
+    /// callee (transitively) re-entered this function.
+    fn emitCallerRestoreFrame(self: *Translator, ctx: *FuncCtx) Error!void {
+        try self.asm_.comment("recursion: caller-restore frame");
         var slots: std.ArrayList([]const u8) = .empty;
         defer slots.deinit(self.gpa);
-        try self.collectFrameSlots(ctx, code, &slots);
+        try self.collectFrameSlots(ctx, &slots);
 
         var i = slots.items.len;
         while (i > 0) {
@@ -2351,6 +2395,15 @@ const Translator = struct {
         // Direct call
         const callee_name = self.fn_names[fn_idx];
         const callee_ty = self.functionType(fn_idx);
+
+        // Caller-saved frame spill. A recursive caller's P / L / RA are
+        // aliased with every invocation's slots, so nested calls would
+        // stomp them. Save before the arg/RA copy (which overwrites the
+        // aliased slots) and restore before we read the callee's R slots
+        // (which are NOT in the saved frame — their fresh value survives).
+        const save = self.shouldSpill(ctx.fn_idx);
+        if (save) try self.emitCallerSaveFrame(ctx);
+
         // 1. Copy S slots (top of stack = last arg) → callee P slots.
         const n_args: u32 = @intCast(callee_ty.params.len);
         var i: u32 = 0;
@@ -2381,6 +2434,8 @@ const Translator = struct {
         const entry = try names.entryLabel(self.aa(), callee_name);
         try self.asm_.jump(entry);
         try self.asm_.label(ret_label);
+
+        if (save) try self.emitCallerRestoreFrame(ctx);
 
         // 4. Copy R slots back into caller's S slots.
         const n_res: u32 = @intCast(callee_ty.results.len);
@@ -2427,6 +2482,10 @@ const Translator = struct {
         try self.asm_.push("__indirect_target__");
         try self.asm_.extern_("SystemUInt32Array.__Get__SystemInt32__SystemUInt32");
 
+        // Caller-saved spill for recursive callers (see `emitCall`).
+        const save = self.shouldSpill(ctx.fn_idx);
+        if (save) try self.emitCallerSaveFrame(ctx);
+
         // (b) Copy caller S slots → shared __ind_P*.
         var i: u32 = 0;
         while (i < n_args) : (i += 1) {
@@ -2454,6 +2513,8 @@ const Translator = struct {
         // (d) JUMP_INDIRECT.
         try self.asm_.jumpIndirect("__indirect_target__");
         try self.asm_.label(ret_label);
+
+        if (save) try self.emitCallerRestoreFrame(ctx);
 
         // (e) Copy shared __ind_R* back into caller S slots.
         var r: u32 = 0;
