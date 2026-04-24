@@ -459,18 +459,56 @@ const Translator = struct {
         }
     }
 
+    /// Minimum number of pages the WASM module's own data segments demand.
+    /// If any segment places bytes at or beyond page N, the outer
+    /// SystemObjectArray must have at least N+1 slots — otherwise the very
+    /// first runtime read of those bytes throws
+    /// `SystemObjectArray.__GetValue__: Index has to be between upper and
+    /// lower bound of the array.` The meta-supplied initial/max are clamped
+    /// up to this floor so a user-authored `__udon_meta` that undercounts
+    /// pages cannot produce broken bytecode.
+    fn requiredPagesForData(self: *const Translator) u32 {
+        var max_end: u32 = 0;
+        for (self.mod.datas) |d| {
+            const offset = wasm.const_eval.evalConstI32(self.mod, d.offset) catch continue;
+            if (offset < 0) continue;
+            const end = @as(u32, @intCast(offset)) + @as(u32, @intCast(d.init.len));
+            if (end > max_end) max_end = end;
+        }
+        if (max_end == 0) return 0;
+        const page: u32 = 65536;
+        return (max_end + page - 1) / page;
+    }
+
+    /// Effective initial page count — honors the meta's preference but never
+    /// drops below the WASM memory's declared min nor the highest page any
+    /// data segment occupies. Used by both `emitMemoryData` (for the
+    /// rendered `__G__memory_initial_pages` literal) and `emitMemoryInit`
+    /// (to unroll the correct number of chunk allocations).
+    fn effectiveInitialPages(self: *const Translator) u32 {
+        if (self.mod.memories.len == 0) return 0;
+        const mem = self.mod.memories[0];
+        const floor = @max(mem.min, self.requiredPagesForData());
+        const pref: u32 = if (self.meta) |m| (m.options.memory.initial_pages orelse mem.min) else mem.min;
+        return @max(pref, floor);
+    }
+
+    /// Effective max page count — clamped up to `effectiveInitialPages()` so
+    /// the outer `SystemObjectArray` always has room for the initial chunks.
+    fn effectiveMaxPages(self: *const Translator) u32 {
+        if (self.mod.memories.len == 0) return 0;
+        const mem = self.mod.memories[0];
+        const pref: u32 = if (self.meta) |m|
+            (m.options.memory.max_pages orelse (mem.max orelse self.options.default_max_pages))
+        else
+            (mem.max orelse self.options.default_max_pages);
+        return @max(pref, self.effectiveInitialPages());
+    }
+
     fn emitMemoryData(self: *Translator) Error!void {
         if (self.mod.memories.len == 0) return;
-        const mem = self.mod.memories[0];
-        const max_pages: u32 = blk: {
-            if (self.meta) |m| if (m.options.memory.max_pages) |v| break :blk v;
-            if (mem.max) |v| break :blk v;
-            break :blk self.options.default_max_pages;
-        };
-        const initial_pages: u32 = blk: {
-            if (self.meta) |m| if (m.options.memory.initial_pages) |v| break :blk v;
-            break :blk mem.min;
-        };
+        const initial_pages: u32 = self.effectiveInitialPages();
+        const max_pages: u32 = self.effectiveMaxPages();
 
         try self.asm_.addData(.{ .name = self.memory_udon_name, .ty = tn.object_array, .init = .null_literal });
         try self.asm_.addData(.{ .name = self.memory_size_pages_name, .ty = tn.int32, .init = .{ .int32 = 0 } });
@@ -482,6 +520,10 @@ const Translator = struct {
         try self.asm_.addData(.{ .name = "_mem_chunk", .ty = tn.uint32_array, .init = .null_literal });
         try self.asm_.addData(.{ .name = "_mem_u32", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
         try self.asm_.addData(.{ .name = "_mem_addr", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        // Effective address = base + memarg.offset, used by every
+        // load/store whose memarg.offset != 0. Materialized once per op so
+        // the page/word decomposition below sees the adjusted value.
+        try self.asm_.addData(.{ .name = "_mem_eff_addr", .ty = tn.int32, .init = .{ .int32 = 0 } });
         // Common i32 constants we'll need to PUSH.
         try self.asm_.addData(.{ .name = "__c_i32_0", .ty = tn.int32, .init = .{ .int32 = 0 } });
         try self.asm_.addData(.{ .name = "__c_i32_1", .ty = tn.int32, .init = .{ .int32 = 1 } });
@@ -525,6 +567,14 @@ const Translator = struct {
         // Scratch + constants for generic (unaligned / page-straddle) word access.
         try self.asm_.addData(.{ .name = "__c_i32_16383", .ty = tn.int32, .init = .{ .int32 = 16383 } });
         try self.asm_.addData(.{ .name = "__c_i32_65532", .ty = tn.int32, .init = .{ .int32 = 65532 } });
+        // Straddle thresholds: i64 access (8 bytes) straddles when
+        // byte_in_page > 65528; i16 (2 bytes) straddles when == 65535.
+        try self.asm_.addData(.{ .name = "__c_i32_65528", .ty = tn.int32, .init = .{ .int32 = 65528 } });
+        try self.asm_.addData(.{ .name = "__c_i32_65535", .ty = tn.int32, .init = .{ .int32 = 65535 } });
+        // Byte offset of addr within its 32-bit word — reused by straddle
+        // dispatch to decide whether the high half spills to outer[page+1].
+        try self.asm_.addData(.{ .name = "_mem_byte_in_page", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_page_idx_hi", .ty = tn.int32, .init = .{ .int32 = 0 } });
         try self.asm_.addData(.{ .name = "_mlw_lo", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
         try self.asm_.addData(.{ .name = "_mlw_hi", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
         try self.asm_.addData(.{ .name = "_mlw_shift", .ty = tn.int32, .init = .{ .int32 = 0 } });
@@ -634,14 +684,40 @@ const Translator = struct {
     // ---- code: events ----
 
     fn emitEventEntries(self: *Translator) Error!void {
-        // For every event binding, emit a dedicated entry that performs memory
-        // initialization (once, on _start only) and then jumps into the
-        // corresponding defined function as a non-returning tail call.
+        // Memory (and associated) setup must run before any user event.
+        // Per docs/udon_specs.md §9.1 and docs/spec_linear_memory.md §4 it
+        // belongs in `_onEnable`, which VRChat fires before `_start` / any
+        // other event.
+        //
+        // If the user's __udon_meta maps a function to `_onEnable`, the
+        // init is prepended to that entry so their body still runs after
+        // setup. Otherwise we synthesize a standalone `_onEnable` whose
+        // only job is to run `emitMemoryInit`. Previously this was gated
+        // on `_start`, which silently skipped init whenever a program had
+        // no `_start` binding — the outer `SystemObjectArray` then stayed
+        // null and any subsequent memory read threw
+        // `SystemObjectArray.__GetValue__...: Index has to be between upper
+        // and lower bound of the array`.
+        var user_binds_on_enable = false;
+        for (self.event_bindings.items) |ev| {
+            if (std.mem.eql(u8, ev.udon_label, "_onEnable")) {
+                user_binds_on_enable = true;
+                break;
+            }
+        }
+
+        if (!user_binds_on_enable) {
+            try self.asm_.exportLabel("_onEnable");
+            try self.asm_.label("_onEnable");
+            try self.emitMemoryInit();
+            try self.asm_.jumpAddr(0xFFFFFFFC);
+        }
+
         for (self.event_bindings.items) |ev| {
             const fn_idx = self.findExportedFunc(ev.wasm_export) orelse continue;
             try self.asm_.exportLabel(ev.udon_label);
             try self.asm_.label(ev.udon_label);
-            if (std.mem.eql(u8, ev.udon_label, "_start")) {
+            if (std.mem.eql(u8, ev.udon_label, "_onEnable")) {
                 try self.emitMemoryInit();
             }
             // Invoke the function: no arguments (all entry functions in bench
@@ -676,11 +752,7 @@ const Translator = struct {
         // allocation and rely on the runtime to lazily grow. A production
         // translator would unroll up to initial_pages; bench uses 1 page so
         // this is exact.
-        const initial: u32 = blk: {
-            if (self.meta) |m| if (m.options.memory.initial_pages) |v| break :blk v;
-            if (self.mod.memories.len > 0) break :blk self.mod.memories[0].min;
-            break :blk 1;
-        };
+        const initial: u32 = self.effectiveInitialPages();
         var p: u32 = 0;
         while (p < initial) : (p += 1) {
             const idx_name = try std.fmt.allocPrint(self.aa(), "__mem_init_idx_{d}", .{p});
@@ -697,11 +769,13 @@ const Translator = struct {
         try self.asm_.push(self.memory_initial_pages_name);
         try self.asm_.push(self.memory_size_pages_name);
         try self.asm_.copy();
-        // Apply every data segment as a byte-by-byte sequence of i32.store8-
-        // equivalent writes. Bench's data segments are small; we emit one
-        // RMW per byte. Future: batch into word-sized writes.
-        for (self.mod.datas) |d| {
-            try self.emitDataSegmentInit(d);
+        // Write every declared data segment into linear memory. Aligned
+        // full-word writes go through SystemUInt32Array.__Set directly;
+        // unaligned head / tail bytes fall back to shift/mask RMW. Each
+        // page is fetched from the outer SystemObjectArray at most once
+        // per segment.
+        for (self.mod.datas, 0..) |d, i| {
+            try self.emitDataSegmentInit(d, @intCast(i));
         }
         try self.emitFunctionTableInit();
         try self.emitMarshalScratchInit();
@@ -781,13 +855,126 @@ const Translator = struct {
         }
     }
 
-    fn emitDataSegmentInit(self: *Translator, d: wasm.module.Data) Error!void {
-        const offset = wasm.const_eval.evalConstI32(self.mod, d.offset) catch 0;
-        if (offset < 0) return;
-        // For large segments, emit a comment summary and skip detailed RMW to
-        // keep the generated asm manageable. Data segments in bench hold
-        // format strings and the __udon_meta JSON, all read-only at runtime.
-        try self.asm_.comment(try std.fmt.allocPrint(self.aa(), "data segment: offset={d} len={d} (RMW init elided)", .{ offset, d.init.len }));
+    fn emitDataSegmentInit(self: *Translator, d: wasm.module.Data, seg_id: u32) Error!void {
+        const offset_i = wasm.const_eval.evalConstI32(self.mod, d.offset) catch return;
+        if (offset_i < 0) return;
+        if (d.init.len == 0) return;
+
+        const offset: u32 = @intCast(offset_i);
+        const len: u32 = @intCast(d.init.len);
+        const end: u32 = offset + len;
+
+        try self.asm_.comment(try std.fmt.allocPrint(self.aa(),
+            "data segment: offset={d} len={d}", .{ offset, len }));
+
+        // Track which outer page's chunk is currently in `_mem_chunk`. A
+        // null means we must fetch before the next access.
+        var last_page: ?u32 = null;
+        var addr: u32 = offset;
+        var op_idx: u32 = 0;
+
+        while (addr < end) : (op_idx += 1) {
+            const page: u32 = addr / 65536;
+            const byte_in_page: u32 = addr % 65536;
+            const sub: u32 = addr % 4;
+            const word_in_page: u32 = byte_in_page / 4;
+
+            const can_word = (sub == 0) and
+                (addr + 4 <= end) and
+                ((byte_in_page + 4) <= 65536);
+
+            // Fetch outer[page] → _mem_chunk whenever the page changes.
+            if (last_page == null or last_page.? != page) {
+                const page_name = try std.fmt.allocPrint(self.aa(),
+                    "__ds_page_{d}_{d}", .{ seg_id, page });
+                try self.asm_.addData(.{
+                    .name = page_name,
+                    .ty = tn.int32,
+                    .init = .{ .int32 = @intCast(page) },
+                });
+                try self.asm_.push(self.memory_udon_name);
+                try self.asm_.push(page_name);
+                try self.asm_.push("_mem_chunk");
+                try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+                last_page = page;
+            }
+
+            // Word-index constant, re-declared per op to keep names unique.
+            const widx_name = try std.fmt.allocPrint(self.aa(),
+                "__ds_widx_{d}_{d}", .{ seg_id, op_idx });
+            try self.asm_.addData(.{
+                .name = widx_name,
+                .ty = tn.int32,
+                .init = .{ .int32 = @intCast(word_in_page) },
+            });
+
+            if (can_word) {
+                const off_in_seg = addr - offset;
+                const w: u32 = @as(u32, d.init[off_in_seg]) |
+                    (@as(u32, d.init[off_in_seg + 1]) << 8) |
+                    (@as(u32, d.init[off_in_seg + 2]) << 16) |
+                    (@as(u32, d.init[off_in_seg + 3]) << 24);
+                const val_name = try std.fmt.allocPrint(self.aa(),
+                    "__ds_word_{d}_{d}", .{ seg_id, op_idx });
+                try self.asm_.addData(.{
+                    .name = val_name,
+                    .ty = tn.uint32,
+                    .init = .{ .uint32 = w },
+                });
+                try self.asm_.push("_mem_chunk");
+                try self.asm_.push(widx_name);
+                try self.asm_.push(val_name);
+                try self.asm_.extern_("SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid");
+                addr += 4;
+            } else {
+                // Byte-level RMW: mirrors emitMemStoreByte but with
+                // translation-time-known shift/mask baked into constants.
+                const off_in_seg = addr - offset;
+                const byte_val: u8 = d.init[off_in_seg];
+                const shift_bits: u5 = @intCast(sub * 8);
+                const mask: u32 = @as(u32, 0xFF) << shift_bits;
+                const inv_mask: u32 = ~mask;
+                const shifted_byte: u32 = @as(u32, byte_val) << shift_bits;
+
+                const inv_name = try std.fmt.allocPrint(self.aa(),
+                    "__ds_invm_{d}_{d}", .{ seg_id, op_idx });
+                const or_name = try std.fmt.allocPrint(self.aa(),
+                    "__ds_orbyte_{d}_{d}", .{ seg_id, op_idx });
+                try self.asm_.addData(.{
+                    .name = inv_name,
+                    .ty = tn.uint32,
+                    .init = .{ .uint32 = inv_mask },
+                });
+                try self.asm_.addData(.{
+                    .name = or_name,
+                    .ty = tn.uint32,
+                    .init = .{ .uint32 = shifted_byte },
+                });
+
+                // _mem_u32 = chunk[word_in_page]
+                try self.asm_.push("_mem_chunk");
+                try self.asm_.push(widx_name);
+                try self.asm_.push("_mem_u32");
+                try self.asm_.extern_("SystemUInt32Array.__Get__SystemInt32__SystemUInt32");
+                // _mem_u32_cleared = _mem_u32 & ~mask
+                try self.asm_.push("_mem_u32");
+                try self.asm_.push(inv_name);
+                try self.asm_.push("_mem_u32_cleared");
+                try self.asm_.extern_("SystemUInt32.__op_LogicalAnd__SystemUInt32_SystemUInt32__SystemUInt32");
+                // _mem_u32_new = _mem_u32_cleared | shifted_byte
+                try self.asm_.push("_mem_u32_cleared");
+                try self.asm_.push(or_name);
+                try self.asm_.push("_mem_u32_new");
+                try self.asm_.extern_("SystemUInt32.__op_LogicalOr__SystemUInt32_SystemUInt32__SystemUInt32");
+                // chunk[word_in_page] = _mem_u32_new
+                try self.asm_.push("_mem_chunk");
+                try self.asm_.push(widx_name);
+                try self.asm_.push("_mem_u32_new");
+                try self.asm_.extern_("SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid");
+
+                addr += 1;
+            }
+        }
     }
 
     fn findExportedFunc(self: *Translator, name: []const u8) ?u32 {
@@ -1601,17 +1788,52 @@ const Translator = struct {
         try self.asm_.label(end_lbl);
     }
 
-    fn emitMemLoadWord(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
-        const memarg = ins.i32_load;
-        if (memarg.@"align" >= 2) {
-            return self.emitMemLoadWordFast(ctx);
+    /// Lazily declare a `__c_i32_off_<N>` constant carrying the memarg
+    /// offset value. Idempotent across calls; reuses an existing decl if
+    /// one already exists for the same value. Used by `applyMemOffset`.
+    fn getOrDeclareOffsetConst(self: *Translator, offset: u32) Error![]const u8 {
+        const name = try std.fmt.allocPrint(self.aa(), "__c_i32_off_{d}", .{offset});
+        for (self.asm_.datas.items) |d| {
+            if (std.mem.eql(u8, d.name, name)) return name;
         }
-        return self.emitMemLoadWordGeneric(ctx);
+        // WASM adds offset (u32) to base mod 2^32; SystemInt32.__op_Addition
+        // wraps the same way, so store the raw bit pattern even when the
+        // high bit is set.
+        try self.asm_.addData(.{
+            .name = name,
+            .ty = tn.int32,
+            .init = .{ .int32 = @bitCast(offset) },
+        });
+        return name;
     }
 
-    fn emitMemLoadWordFast(self: *Translator, ctx: *FuncCtx) Error!void {
+    /// If `offset != 0`, emit `_mem_eff_addr := addr_slot + __c_i32_off_<N>`
+    /// and return `"_mem_eff_addr"`. Otherwise return `addr_slot` unchanged.
+    /// Every caller of `emitMem*` must funnel through this so the WASM
+    /// `memarg.offset` is honored in the page/word decomposition that
+    /// follows.
+    fn applyMemOffset(self: *Translator, addr_slot: []const u8, offset: u32) Error![]const u8 {
+        if (offset == 0) return addr_slot;
+        const k = try self.getOrDeclareOffsetConst(offset);
+        try self.asm_.push(addr_slot);
+        try self.asm_.push(k);
+        try self.asm_.push("_mem_eff_addr");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        return "_mem_eff_addr";
+    }
+
+    fn emitMemLoadWord(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
+        const memarg = ins.i32_load;
+        const raw_addr = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
+        if (memarg.@"align" >= 2) {
+            return self.emitMemLoadWordFast(ctx, addr_slot);
+        }
+        return self.emitMemLoadWordGeneric(ctx, addr_slot);
+    }
+
+    fn emitMemLoadWordFast(self: *Translator, ctx: *FuncCtx, addr_slot: []const u8) Error!void {
         try self.asm_.comment("i32.load (aligned, within-chunk fast path)");
-        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
         ctx.pop();
         // page_idx := addr >> 16
         try self.asm_.push(addr_slot);
@@ -1645,7 +1867,7 @@ const Translator = struct {
     /// Per `docs/spec_linear_memory.md` §6.1, dispatches at runtime into one
     /// of three branches based on `sub = addr & 3` and whether the 4-byte
     /// window crosses a page boundary.
-    fn emitMemLoadWordGeneric(self: *Translator, ctx: *FuncCtx) Error!void {
+    fn emitMemLoadWordGeneric(self: *Translator, ctx: *FuncCtx, addr_slot: []const u8) Error!void {
         try self.asm_.comment("i32.load (generic: 3-branch alignment/straddle dispatch)");
         const id = self.block_counter;
         self.block_counter += 1;
@@ -1654,7 +1876,6 @@ const Translator = struct {
         const straddle_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mlw_straddle_{d}__", .{ ctx.fn_name, id });
         const end_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mlw_end_{d}__", .{ ctx.fn_name, id });
 
-        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
         ctx.pop();
         ctx.push();
         const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
@@ -1807,17 +2028,20 @@ const Translator = struct {
 
     fn emitMemStoreWord(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
         const memarg = ins.i32_store;
-        if (memarg.@"align" >= 2) {
-            return self.emitMemStoreWordFast(ctx);
-        }
-        return self.emitMemStoreWordGeneric(ctx);
-    }
-
-    fn emitMemStoreWordFast(self: *Translator, ctx: *FuncCtx) Error!void {
-        try self.asm_.comment("i32.store (aligned, within-chunk fast path)");
         const val = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
         ctx.pop();
-        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const raw_addr = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        // Offset must be applied *before* we pop the address slot, since
+        // the downstream fast/generic helpers pop it themselves.
+        const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
+        if (memarg.@"align" >= 2) {
+            return self.emitMemStoreWordFast(ctx, addr_slot, val);
+        }
+        return self.emitMemStoreWordGeneric(ctx, addr_slot, val);
+    }
+
+    fn emitMemStoreWordFast(self: *Translator, ctx: *FuncCtx, addr_slot: []const u8, val: []const u8) Error!void {
+        try self.asm_.comment("i32.store (aligned, within-chunk fast path)");
         ctx.pop();
         try self.asm_.push(addr_slot);
         try self.asm_.push("__c_i32_16");
@@ -1843,7 +2067,7 @@ const Translator = struct {
 
     /// Generic i32.store that handles unaligned access and page-straddle
     /// via a 3-branch RMW (read-modify-write) of two adjacent words.
-    fn emitMemStoreWordGeneric(self: *Translator, ctx: *FuncCtx) Error!void {
+    fn emitMemStoreWordGeneric(self: *Translator, ctx: *FuncCtx, addr_slot: []const u8, val: []const u8) Error!void {
         try self.asm_.comment("i32.store (generic: 3-branch alignment/straddle RMW)");
         const id = self.block_counter;
         self.block_counter += 1;
@@ -1851,10 +2075,6 @@ const Translator = struct {
         const slow_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_msw_slow_{d}__", .{ ctx.fn_name, id });
         const straddle_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_msw_straddle_{d}__", .{ ctx.fn_name, id });
         const end_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_msw_end_{d}__", .{ ctx.fn_name, id });
-
-        const val = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
-        ctx.pop();
-        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
         ctx.pop();
 
         // Decompose address (same as load).
@@ -2130,7 +2350,13 @@ const Translator = struct {
             else => false,
         };
         try self.asm_.comment(if (signed) "i32.load8_s" else "i32.load8_u");
-        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const raw_addr = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const memarg = switch (ins) {
+            .i32_load8_u => |m| m,
+            .i32_load8_s => |m| m,
+            else => unreachable,
+        };
+        const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
         ctx.pop();
 
         try self.emitByteAccessPreamble(addr_slot);
@@ -2164,11 +2390,12 @@ const Translator = struct {
     }
 
     fn emitMemStoreByte(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
-        _ = ins;
         try self.asm_.comment("i32.store8");
+        const memarg = ins.i32_store8;
         const val = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
         ctx.pop();
-        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const raw_addr = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
         ctx.pop();
 
         try self.emitByteAccessPreamble(addr_slot);
@@ -2218,11 +2445,12 @@ const Translator = struct {
     }
 
     fn emitMemStore16(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
-        _ = ins;
         try self.asm_.comment("i32.store16");
+        const memarg = ins.i32_store16;
         const val = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
         ctx.pop();
-        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const raw_addr = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
         ctx.pop();
 
         try self.emitByteAccessPreamble(addr_slot);
@@ -2272,45 +2500,77 @@ const Translator = struct {
     }
 
     fn emitMemLoadI64(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
-        _ = ins;
-        try self.asm_.comment("i64.load (aligned, within-chunk fast path)");
-        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        try self.asm_.comment("i64.load (with runtime page-straddle dispatch)");
+        const memarg = ins.i64_load;
+        const raw_addr = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
         ctx.pop();
+
+        const id = self.block_counter;
+        self.block_counter += 1;
+        const straddle_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mli_straddle_{d}__", .{ ctx.fn_name, id });
+        const within_page_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mli_within_{d}__", .{ ctx.fn_name, id });
+        const hi_done_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mli_hidone_{d}__", .{ ctx.fn_name, id });
 
         // page_idx := addr >> 16
         try self.asm_.push(addr_slot);
         try self.asm_.push("__c_i32_16");
         try self.asm_.push("_mem_page_idx");
         try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
-        // word_in_page := (addr & 0xFFFF) >> 2
+        // byte_in_page := addr & 0xFFFF
         try self.asm_.push(addr_slot);
         try self.asm_.push("__c_i32_0xFFFF");
-        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("_mem_byte_in_page");
         try self.asm_.extern_("SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32");
-        try self.asm_.push("_mem_word_in_page");
+        // word_in_page := byte_in_page >> 2
+        try self.asm_.push("_mem_byte_in_page");
         try self.asm_.push("__c_i32_2");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
-        // _mem_chunk := __G__memory[page_idx]
+        // _mem_chunk := outer[page_idx]
         try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
-        // _mem_u32 := _mem_chunk[word_in_page]      (lo)
+        // _mem_u32 := _mem_chunk[word_in_page]   (lo word — always in page)
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.push("_mem_u32");
         try self.asm_.extern_("SystemUInt32Array.__Get__SystemInt32__SystemUInt32");
-        // _mem_word_in_page_hi := word_in_page + 1
+        // Straddle if byte_in_page > 65528 (last 8-byte window spills into page+1).
+        try self.asm_.push("_mem_byte_in_page");
+        try self.asm_.push("__c_i32_65528");
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.extern_("SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean");
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.jumpIfFalse(within_page_lbl);
+        try self.asm_.jump(straddle_lbl);
+        try self.asm_.label(within_page_lbl);
+        // Within page: hi word is _mem_chunk[word_in_page + 1].
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.push("__c_i32_1");
         try self.asm_.push("_mem_word_in_page_hi");
         try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        // _mem_u32_hi := _mem_chunk[word_in_page + 1]
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page_hi");
         try self.asm_.push("_mem_u32_hi");
         try self.asm_.extern_("SystemUInt32Array.__Get__SystemInt32__SystemUInt32");
+        try self.asm_.jump(hi_done_lbl);
+        // Straddle: hi word is outer[page_idx + 1][0].
+        try self.asm_.label(straddle_lbl);
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("_mem_page_idx_hi");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push(self.memory_udon_name);
+        try self.asm_.push("_mem_page_idx_hi");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push("_mem_u32_hi");
+        try self.asm_.extern_("SystemUInt32Array.__Get__SystemInt32__SystemUInt32");
+        try self.asm_.label(hi_done_lbl);
         // _mem_i64_lo := (i64)_mem_u32
         try self.asm_.push("_mem_u32");
         try self.asm_.push("_mem_i64_lo");
@@ -2334,11 +2594,12 @@ const Translator = struct {
     }
 
     fn emitMemStoreI64(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
-        _ = ins;
         try self.asm_.comment("i64.store (aligned, within-chunk fast path)");
+        const memarg = ins.i64_store;
         const val = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
         ctx.pop();
-        const addr_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const raw_addr = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
         ctx.pop();
 
         // _mem_hi_i64 := val >> 32 (arithmetic; bit pattern for high word is what we want)
@@ -2362,41 +2623,69 @@ const Translator = struct {
         try self.asm_.push("_mem_st_hi_u32");
         try self.asm_.copy();
 
+        const id = self.block_counter;
+        self.block_counter += 1;
+        const straddle_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_msi_straddle_{d}__", .{ ctx.fn_name, id });
+        const within_page_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_msi_within_{d}__", .{ ctx.fn_name, id });
+        const hi_done_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_msi_hidone_{d}__", .{ ctx.fn_name, id });
+
         // address decomposition
-        // page_idx := addr >> 16
         try self.asm_.push(addr_slot);
         try self.asm_.push("__c_i32_16");
         try self.asm_.push("_mem_page_idx");
         try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
-        // word_in_page := (addr & 0xFFFF) >> 2
         try self.asm_.push(addr_slot);
         try self.asm_.push("__c_i32_0xFFFF");
-        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("_mem_byte_in_page");
         try self.asm_.extern_("SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32");
-        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("_mem_byte_in_page");
         try self.asm_.push("__c_i32_2");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
-        // _mem_chunk := __G__memory[page_idx]
+        // outer[page_idx] → _mem_chunk
         try self.asm_.push(self.memory_udon_name);
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
-        // _mem_chunk[word_in_page] := _mem_st_lo_u32
+        // Lo word goes to the current chunk unconditionally.
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.push("_mem_st_lo_u32");
         try self.asm_.extern_("SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid");
-        // _mem_word_in_page_hi := word_in_page + 1
+        // Straddle when byte_in_page > 65528 (hi word in page+1).
+        try self.asm_.push("_mem_byte_in_page");
+        try self.asm_.push("__c_i32_65528");
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.extern_("SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean");
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.jumpIfFalse(within_page_lbl);
+        try self.asm_.jump(straddle_lbl);
+        try self.asm_.label(within_page_lbl);
+        // Within-page: hi word is chunk[word_in_page + 1].
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.push("__c_i32_1");
         try self.asm_.push("_mem_word_in_page_hi");
         try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        // _mem_chunk[word_in_page + 1] := _mem_st_hi_u32
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page_hi");
         try self.asm_.push("_mem_st_hi_u32");
         try self.asm_.extern_("SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid");
+        try self.asm_.jump(hi_done_lbl);
+        try self.asm_.label(straddle_lbl);
+        // Straddle: hi word is outer[page_idx + 1][0].
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("_mem_page_idx_hi");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push(self.memory_udon_name);
+        try self.asm_.push("_mem_page_idx_hi");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push("_mem_st_hi_u32");
+        try self.asm_.extern_("SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid");
+        try self.asm_.label(hi_done_lbl);
     }
 
     // ---- helpers ----
@@ -3143,6 +3432,76 @@ test "translate simple add module" {
     try std.testing.expect(std.mem.indexOf(u8, out, "JUMP_INDIRECT, __add_RA__") != null);
 }
 
+// Runtime regression: a module whose only event binding is `_update` (no
+// `_start`) used to skip memory initialization entirely, so the outer
+// `SystemObjectArray` stayed null. The first `i32.load` inside `_update`
+// then tried `SystemObjectArray.__GetValue__...` on null and the Udon VM
+// threw: "Index has to be between upper and lower bound of the array."
+//
+// Per docs/udon_specs.md §9.1 and docs/spec_linear_memory.md §4, memory
+// setup is specified to run at `_onEnable`. The translator therefore must
+// synthesize a `_onEnable` event that initializes memory whenever the user
+// did not already bind one.
+test "memory init runs under _onEnable even when only _update is bound" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Minimal function: i32.const 0; i32.load (drops — we don't care about
+    // the value, just that a memory read is in the event path).
+    const types_ = try a.alloc(wasm.types.FuncType, 1);
+    types_[0] = .{ .params = &.{}, .results = &.{} };
+    const funcs = try a.alloc(u32, 1);
+    funcs[0] = 0;
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .i32_const = 0 };
+    body[1] = .{ .i32_load = .{ .@"align" = 2, .offset = 0 } };
+    body[2] = .drop;
+    body[3] = .return_;
+    const codes = try a.alloc(wasm.module.Code, 1);
+    codes[0] = .{ .locals = &.{}, .body = body };
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "tick", .desc = .{ .func = 0 } };
+    const memories = try a.alloc(wasm.types.MemType, 1);
+    memories[0] = .{ .min = 1, .max = null };
+
+    const mod: wasm.Module = .{
+        .types_ = types_,
+        .funcs = funcs,
+        .codes = codes,
+        .exports = exports,
+        .memories = memories,
+    };
+
+    // Meta: bind `tick` → `_update` (no _start binding).
+    const meta_fns = try a.alloc(wasm.udon_meta.Function, 1);
+    meta_fns[0] = .{
+        .key = "tick",
+        .source = .{ .kind = .@"export", .name = "tick" },
+        .label = "_update",
+    };
+    const meta: wasm.UdonMeta = .{ .version = 1, .functions = meta_fns };
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, meta, &buf.writer, .{});
+    const out = buf.written();
+
+    // A `_onEnable` export must exist so VRChat runs memory setup before
+    // `_update` ever fires.
+    try std.testing.expect(std.mem.indexOf(u8, out, ".export _onEnable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_onEnable:") != null);
+
+    // Memory init externs must appear at least once — outer array ctor and
+    // at least one inner chunk allocation.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid") != null);
+}
+
 test "bench: every emitted EXTERN exists in Udon node list" {
     // testdata/udon_nodes.txt は VRChat SDK3 から Editor スクリプトで
     // ダンプした全 EXTERN ノード一覧 (LF 正規化済)。
@@ -3193,4 +3552,637 @@ test "bench: every emitted EXTERN exists in Udon node list" {
         for (missing.items) |m| std.debug.print("  {s}\n", .{m});
         return error.UnknownExternEmitted;
     }
+}
+
+// ----------------------------------------------------------------
+// Data segment init + page allocation sizing (TDD for bench PC 28160 fix)
+//
+// Runtime regression: bench crashed at
+//   EXTERN SystemObjectArray.__GetValue__SystemInt32__SystemObject
+//   Index has to be between upper and lower bound of the array.
+// because (a) the outer `_memory` array was sized to maxPages=16 but the
+// WASM placed rodata at offset 1048576 (page 16, needs ≥17 pages), and (b)
+// data segments were never written into linear memory — `emitDataSegmentInit`
+// only emitted a comment. See the plan file for the full picture.
+// ----------------------------------------------------------------
+
+/// Build a minimal module with one memory and one data segment at `offset`
+/// containing `init` bytes. Caller keeps the arena alive for the module's
+/// lifetime.
+fn buildSingleDataModule(
+    a: std.mem.Allocator,
+    mem_min: u32,
+    offset_const: i32,
+    data_bytes: []const u8,
+) !wasm.Module {
+    const memories = try a.alloc(wasm.types.MemType, 1);
+    memories[0] = .{ .min = mem_min, .max = null };
+
+    const offset_expr = try a.alloc(Instruction, 1);
+    offset_expr[0] = .{ .i32_const = offset_const };
+
+    const datas = try a.alloc(wasm.module.Data, 1);
+    datas[0] = .{ .memory_index = 0, .offset = offset_expr, .init = data_bytes };
+
+    return .{
+        .memories = memories,
+        .datas = datas,
+    };
+}
+
+/// Extract the literal integer value after a `<name>: %<type>, ` prefix line.
+fn findDataDeclInt(out: []const u8, name: []const u8) !i64 {
+    var it = std.mem.splitScalar(u8, out, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        const prefix = try std.fmt.allocPrint(std.testing.allocator, "{s}: %", .{name});
+        defer std.testing.allocator.free(prefix);
+        if (!std.mem.startsWith(u8, line, prefix)) continue;
+        const comma = std.mem.lastIndexOfScalar(u8, line, ',') orelse continue;
+        var rest = line[comma + 1 ..];
+        rest = std.mem.trim(u8, rest, " \t\r");
+        // Strip trailing 'u' for uint32 literals.
+        if (rest.len > 0 and rest[rest.len - 1] == 'u') rest = rest[0 .. rest.len - 1];
+        return try std.fmt.parseInt(i64, rest, 10);
+    }
+    return error.TestExpectedEqual;
+}
+
+test "bench: no data segment is left uninitialized" {
+    // Regression: `RMW init elided` was a placeholder that the translator
+    // used to emit when skipping data segment writes. With
+    // `emitDataSegmentInit` now implemented, that marker must never appear
+    // in a real translation output.
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "RMW init elided") == null);
+    // And the rodata word constants must be present.
+    try std.testing.expect(std.mem.indexOf(u8, out, "__ds_word_") != null);
+}
+
+test "bench: linear memory allocates at least 17 pages" {
+    // bench's rodata lives on page 16 (offset 1048576+), so initial_pages
+    // and max_pages must both be ≥ 17 even though the bundled __udon_meta
+    // requests `{initialPages: 1, maxPages: 16}` — the translator must
+    // clamp those up against the WASM data segments' actual footprint.
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+    // bench renames memory companions via meta.options.memory.udonName=
+    // "_memory", so the scalars appear unprefixed.
+    const initial = try findDataDeclInt(out, "_memory_initial_pages");
+    const max_p = try findDataDeclInt(out, "_memory_max_pages");
+    try std.testing.expect(initial >= 17);
+    try std.testing.expect(max_p >= 17);
+}
+
+test "bench: onEnable init writes rodata word into linear memory" {
+    // The first Log call in `on_start` dereferences a string pointer into
+    // rodata on page 16; for that read to succeed, `_onEnable` must have
+    // written the corresponding words during init. Structural check: the
+    // init window references at least one `__ds_word_*` constant and
+    // contains a matching GetValue→Set pair.
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+    const body = onEnableBody(out);
+    try std.testing.expect(body.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, body, "PUSH, __ds_word_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body,
+        "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body,
+        "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
+}
+
+test "data segment at page 16 widens initial_pages to 17" {
+    // A module declaring memory min=1 but whose data segment lives on page
+    // 16 (offset 1048576) must end up with initial_pages ≥ 17 so the outer
+    // SystemObjectArray actually contains a chunk for that page.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var eight_bytes: [8]u8 = undefined;
+    @memset(&eight_bytes, 0x41);
+    const mod = try buildSingleDataModule(a, 1, 1048576, &eight_bytes);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const initial = try findDataDeclInt(out, "__G__memory_initial_pages");
+    const max_p = try findDataDeclInt(out, "__G__memory_max_pages");
+    try std.testing.expect(initial >= 17);
+    try std.testing.expect(max_p >= 17);
+}
+
+/// Return the slice of `out` between `_onEnable:` and its terminating
+/// `JUMP, 0xFFFFFFFC`. Data segment init must live in this window so that
+/// VRChat runs it before any other event fires.
+fn onEnableBody(out: []const u8) []const u8 {
+    const anchor = "_onEnable:\n";
+    const start = std.mem.indexOf(u8, out, anchor) orelse return "";
+    const from = start + anchor.len;
+    const end_needle = "JUMP, 0xFFFFFFFC";
+    const rel = std.mem.indexOf(u8, out[from..], end_needle) orelse return out[from..];
+    return out[from .. from + rel];
+}
+
+fn countOccurrences(hay: []const u8, needle: []const u8) usize {
+    if (needle.len == 0) return 0;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i + needle.len <= hay.len) {
+        if (std.mem.eql(u8, hay[i .. i + needle.len], needle)) {
+            n += 1;
+            i += needle.len;
+        } else {
+            i += 1;
+        }
+    }
+    return n;
+}
+
+test "data segment emits word-aligned stores into linear memory" {
+    // One word (0x44332211, LE) written at offset 0x100 (page 0). The
+    // translator must no longer elide initialization: we require (a) a
+    // `__ds_word_*` u32 constant decl carrying the packed value, (b) a
+    // GetValue-then-Set pair in the `_onEnable` window that writes that
+    // constant into the chunk.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const bytes: [4]u8 = .{ 0x11, 0x22, 0x33, 0x44 };
+    const mod = try buildSingleDataModule(a, 1, 0x100, &bytes);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "RMW init elided") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__ds_word_") != null);
+    // LE packed value 0x44332211 = 1144201745.
+    try std.testing.expect(std.mem.indexOf(u8, out, "1144201745") != null);
+
+    const body = onEnableBody(out);
+    try std.testing.expect(body.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, body,
+        "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body,
+        "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
+    // At least one PUSH of a __ds_word_ constant must appear in the init.
+    try std.testing.expect(std.mem.indexOf(u8, body, "PUSH, __ds_word_") != null);
+}
+
+test "data segment with tail bytes emits byte RMW for the remainder" {
+    // One aligned word + 2 tail bytes. Translator must write the word as
+    // one UInt32Array.__Set, then read-modify-write the trailing 2 bytes
+    // (XOR-based ~mask per Udon's UInt32 op set).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const bytes: [6]u8 = .{ 0x11, 0x22, 0x33, 0x44, 0x55, 0x66 };
+    const mod = try buildSingleDataModule(a, 1, 0x100, &bytes);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body = onEnableBody(out);
+    try std.testing.expect(body.len > 0);
+
+    // Word path: at least one UInt32Array.__Set.
+    try std.testing.expect(std.mem.indexOf(u8, body,
+        "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
+    // Byte-RMW path: mask-and-or over UInt32 (XOR is used to build ~mask).
+    try std.testing.expect(std.mem.indexOf(u8, body,
+        "SystemUInt32.__op_LogicalOr__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body,
+        "SystemUInt32.__op_LogicalAnd__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+}
+
+test "data segment spanning two pages splits at page boundary" {
+    // Write 4 bytes starting 2 bytes before the page-0/page-1 boundary
+    // (offset 65534). The translator must fetch two distinct outer chunks:
+    // one for page 0 (for the leading 2 bytes) and one for page 1 (for the
+    // trailing 2 bytes). Count GetValue occurrences in the init window.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const bytes: [4]u8 = .{ 0xAA, 0xBB, 0xCC, 0xDD };
+    const mod = try buildSingleDataModule(a, 2, 65534, &bytes);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body = onEnableBody(out);
+    try std.testing.expect(body.len > 0);
+    const gets = countOccurrences(body,
+        "SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+    try std.testing.expect(gets >= 2);
+}
+
+// ----------------------------------------------------------------
+// memarg.offset handling — TDD for the PC 28160 OOB crash.
+//
+// Runtime regression: bench.wasm crashed with
+//   SystemObjectArray.__GetValue__  Index has to be between upper and lower
+//   bound of the array.
+// because `emitMem*` ignored `memarg.offset`, so `i32.store offset=N` wrote
+// every stack-frame slot to the same base address. Subsequent reads returned
+// corrupted pointers; when one of those was fed back into a narrow load,
+// `addr >> 16` produced a negative / oversized page index and the outer
+// array fell over. Every memory op must add its memarg offset to the base
+// address before the page/word decomposition runs.
+// ----------------------------------------------------------------
+
+/// Build a minimal single-function module: params → body → return. `body`
+/// must match the declared param/result types. Caller keeps the arena alive.
+fn buildOneFuncMemModule(
+    a: std.mem.Allocator,
+    params_ty: []const ValType,
+    results_ty: []const ValType,
+    body: []Instruction,
+) !wasm.Module {
+    const memories = try a.alloc(wasm.types.MemType, 1);
+    memories[0] = .{ .min = 1, .max = null };
+
+    const params_dup = try a.dupe(ValType, params_ty);
+    const results_dup = try a.dupe(ValType, results_ty);
+    const types_ = try a.alloc(wasm.types.FuncType, 1);
+    types_[0] = .{ .params = params_dup, .results = results_dup };
+
+    const funcs = try a.alloc(u32, 1);
+    funcs[0] = 0;
+
+    const codes = try a.alloc(wasm.module.Code, 1);
+    codes[0] = .{ .locals = &.{}, .body = body };
+
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "probe", .desc = .{ .func = 0 } };
+
+    return .{
+        .types_ = types_,
+        .funcs = funcs,
+        .codes = codes,
+        .exports = exports,
+        .memories = memories,
+    };
+}
+
+/// Return the slice of `out` that contains the body of the `probe` function
+/// — everything between `__probe_entry__:` and the next label line.
+fn probeFnBody(out: []const u8) []const u8 {
+    const anchor = "__probe_entry__:";
+    const start = std.mem.indexOf(u8, out, anchor) orelse return "";
+    const from = start + anchor.len;
+    // Stop at `JUMP_INDIRECT` (function end) so we don't capture callers.
+    const end_needle = "JUMP_INDIRECT";
+    const rel = std.mem.indexOf(u8, out[from..], end_needle) orelse return out[from..];
+    return out[from .. from + rel];
+}
+
+/// Assert that within `haystack` the first occurrence of `first` comes
+/// strictly before `second`. Used for ordering assertions where we want
+/// `Addition` (effective-addr compute) to precede page_idx `RightShift`.
+fn expectOrdered(haystack: []const u8, first: []const u8, second: []const u8) !void {
+    const i = std.mem.indexOf(u8, haystack, first) orelse return error.TestExpectedEqual;
+    const j = std.mem.indexOf(u8, haystack[i..], second) orelse return error.TestExpectedEqual;
+    _ = j;
+}
+
+test "i32.load applies memarg.offset to effective address" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // fn(addr: i32) -> i32 { local.get 0; i32.load offset=16 align=2; end }
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .i32_load = .{ .@"align" = 2, .offset = 16 } };
+    body[2] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+
+    // There must be an Addition EXTERN that produces `_mem_eff_addr`
+    // before page_idx is computed via the right-shift step.
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_eff_addr") != null);
+    try expectOrdered(body_out,
+        "_mem_eff_addr",
+        "SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+
+    // A constant carrying the offset value `16` must be declared.
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_off_16:") != null);
+}
+
+test "i32.load with zero offset emits no Addition (no-op offset)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .i32_load = .{ .@"align" = 2, .offset = 0 } };
+    body[2] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    // No _mem_eff_addr use in a zero-offset access.
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_eff_addr") == null);
+}
+
+test "i32.store applies memarg.offset to effective address" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // fn(addr: i32, val: i32) { local.get 0; local.get 1; i32.store offset=8; end }
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .{ .i32_store = .{ .@"align" = 2, .offset = 8 } };
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_eff_addr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_off_8:") != null);
+}
+
+test "i32.load8_u applies memarg.offset to effective address" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .i32_load8_u = .{ .@"align" = 0, .offset = 5 } };
+    body[2] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_eff_addr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_off_5:") != null);
+}
+
+test "i32.store8 applies memarg.offset to effective address" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .{ .i32_store8 = .{ .@"align" = 0, .offset = 3 } };
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_eff_addr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_off_3:") != null);
+}
+
+test "i32.store16 applies memarg.offset to effective address" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .{ .i32_store16 = .{ .@"align" = 1, .offset = 4 } };
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_eff_addr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_off_4:") != null);
+}
+
+test "i64.load applies memarg.offset to effective address" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .i64_load = .{ .@"align" = 3, .offset = 32 } };
+    body[2] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{.i64};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_eff_addr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_off_32:") != null);
+}
+
+test "i64.store applies memarg.offset to effective address" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .{ .i64_store = .{ .@"align" = 3, .offset = 24 } };
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i64 };
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_eff_addr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_off_24:") != null);
+}
+
+// ----------------------------------------------------------------
+// Page-straddle handling for multi-byte access.
+//
+// `emitMemLoadI64` / `emitMemStoreI64` previously fetched `chunk[word+1]`
+// unconditionally — but when `word_in_page == 16383`, the hi word lives in
+// *page+1*, not the current chunk. Hitting that case throws the same
+// `SystemObjectArray.__GetValue__` / `SystemUInt32Array.__Get__` OOB we saw
+// in bench. The same boundary exists for `i32.store16` when
+// `byte_in_page == 65535` (1 byte in page N, 1 byte in page N+1). Each op
+// must dispatch on address at runtime and fetch the second chunk from
+// `outer[page+1]` when needed.
+// ----------------------------------------------------------------
+
+test "i64.load emits runtime page-straddle dispatch (second outer GetValue)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .i64_load = .{ .@"align" = 3, .offset = 0 } };
+    body[2] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{.i64};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    // Two outer GetValue calls — one for the lo chunk, one for the hi
+    // chunk (straddle path). Without straddle support there is only one.
+    const gets = countOccurrences(body_out,
+        "SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+    try std.testing.expect(gets >= 2);
+    // The straddle branch must advance the page index: a literal 1
+    // Addition into `_mem_page_idx_hi` (or reuse of `_mem_word_in_page_hi`
+    // for page+1) is acceptable — the shape we insist on is a `+ 1` that
+    // feeds back into an outer `GetValue`.
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
+}
+
+test "i64.store emits runtime page-straddle dispatch (second outer GetValue)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .{ .i64_store = .{ .@"align" = 3, .offset = 0 } };
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i64 };
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    const gets = countOccurrences(body_out,
+        "SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+    try std.testing.expect(gets >= 2);
+}
+
+test "bench: on_interact body applies memarg.offset before memory ops" {
+    // Regression: the bench emits `i32.store offset=N` for arg spills into
+    // the stack frame. Each such store must be preceded by an Addition that
+    // produces the effective address. We look for at least one Addition
+    // between consecutive `# i32.store` comment markers in on_interact.
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    const anchor = "__on_interact_entry__:";
+    const start = std.mem.indexOf(u8, out, anchor) orelse return error.TestExpectedEqual;
+    const from = start + anchor.len;
+    const end_needle = "JUMP_INDIRECT";
+    const rel = std.mem.indexOf(u8, out[from..], end_needle) orelse return error.TestExpectedEqual;
+    const body_out = out[from .. from + rel];
+
+    // On a healthy build the on_interact body must contain `_mem_eff_addr`
+    // references — at minimum from the arg-spill stores into the new stack
+    // frame (e.g. storing the format-string pointer and counter value).
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_eff_addr") != null);
+}
+
+test "meta initialPages/maxPages clamped up by data segment requirement" {
+    // Per docs/spec_udonmeta_conversion.md the meta can customize memory
+    // sizing, but it must never shrink below what the WASM module's own
+    // data segments demand — otherwise the outer array is too small and
+    // SystemObjectArray.__GetValue throws at first rodata read.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var bytes: [4]u8 = .{ 0x11, 0x22, 0x33, 0x44 };
+    const mod = try buildSingleDataModule(a, 1, 1048576, &bytes);
+
+    var meta: wasm.UdonMeta = .{ .version = 1 };
+    meta.options.memory.initial_pages = 1;
+    meta.options.memory.max_pages = 16;
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, meta, &buf.writer, .{});
+    const out = buf.written();
+
+    const initial = try findDataDeclInt(out, "__G__memory_initial_pages");
+    const max_p = try findDataDeclInt(out, "__G__memory_max_pages");
+    try std.testing.expect(initial >= 17);
+    try std.testing.expect(max_p >= 17);
 }
