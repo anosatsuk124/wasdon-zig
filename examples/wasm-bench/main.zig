@@ -1,4 +1,4 @@
-//! WASM テストベンチ。
+//! WASM test bench.
 const std = @import("std");
 
 extern "env" fn @"UnityEngineDebug.__Log__SystemString__SystemVoid"(
@@ -17,16 +17,12 @@ fn logf(comptime format: []const u8, args: anytype) void {
     log(s);
 }
 
-// グローバル (翻訳器の __G__ 命名規則テスト用)。
-// `export` を付けて WASM global として明示的にエクスポートする。
 export var counter: i32 = 0;
 export var accum: i64 = 0;
 export var update_tick: i32 = 0;
 
-// リニアメモリで使う static buffer
 var scratch: [256]u32 = [_]u32{0} ** 256;
 
-// __udon_meta: data segment + 2 export 関数 (どちらも i32 を返す)
 const udon_meta_json =
     \\{
     \\  "version": 1,
@@ -57,7 +53,6 @@ export fn __udon_meta_len() u32 {
     return @intCast(udon_meta_json.len);
 }
 
-// ==== test_arithmetic: 整数算術と比較 ====
 fn test_arithmetic() void {
     log("== arithmetic ==");
     logf("1 + 2 = {d}", .{1 + 2});
@@ -69,7 +64,6 @@ fn test_arithmetic() void {
     logf("0xABCD ^ 0x00FF = 0x{x}", .{@as(u32, 0xABCD) ^ 0x00FF});
 }
 
-// ==== test_control_flow: if / while / switch (br_table) ====
 fn test_control_flow() void {
     log("== control_flow ==");
 
@@ -97,7 +91,6 @@ fn test_control_flow() void {
     logf("sum of odd 1..10 = {d}", .{sum}); // 25
 }
 
-// ==== test_globals: グローバル変数の読み書き ====
 fn test_globals() void {
     log("== globals ==");
     counter = 0;
@@ -111,7 +104,6 @@ fn test_globals() void {
     logf("accum = {d}", .{accum}); // 15
 }
 
-// ==== test_recursion: factorial / fibonacci ====
 fn factorial(n: i32) i32 {
     if (n <= 1) return 1;
     return n * factorial(n - 1);
@@ -128,7 +120,6 @@ fn test_recursion() void {
     logf("fib(10) = {d}", .{fib(10)}); // 55
 }
 
-// ==== test_memory: linear memory への i32 / 部分バイトアクセスと memory.grow ====
 fn test_memory() void {
     log("== memory ==");
 
@@ -152,7 +143,6 @@ fn test_memory() void {
     logf("memory.size after  = {d} pages", .{after});
 }
 
-// ==== test_indirect_call: function pointer 経由 (call_indirect) ====
 fn double_it(x: i32) i32 {
     return x * 2;
 }
@@ -175,9 +165,6 @@ fn test_indirect_call() void {
     logf("add_one(99) = {d}", .{ops[2](99)}); // 100
 }
 
-// ==== test_struct: 構造体のフィールドアクセス / by-value 渡し / by-pointer 渡し ====
-// 翻訳器から見ると構造体は linear memory 上のオフセットアクセスに展開される。
-// 各フィールドの i32.load/store offset=N が期待通り生成されるか確認するためのフィクスチャ。
 const Point = struct {
     x: i32,
     y: i32,
@@ -190,12 +177,10 @@ const Rect = struct {
 };
 
 fn point_area(p: Point) i32 {
-    // by-value: wasm ABI 上は { x, y } が 2 つの i32 param に展開される。
     return p.x * p.y;
 }
 
 fn point_translate(p: *Point, dx: i32, dy: i32) void {
-    // by-pointer: linear memory の offset=0 / offset=4 への store にコンパイルされる。
     p.x += dx;
     p.y += dy;
 }
@@ -213,24 +198,19 @@ var g_rect: Rect = .{
 fn test_struct() void {
     log("== struct ==");
 
-    // (1) by-value の単純な field access
     const p: Point = .{ .x = 6, .y = 7 };
     logf("point_area({{6,7}}) = {d}", .{point_area(p)}); // 42
 
-    // (2) by-pointer の read-modify-write (linear memory offset store)
     var q: Point = .{ .x = 10, .y = 20 };
     point_translate(&q, 3, 4);
     logf("q after translate = ({d}, {d})", .{ q.x, q.y }); // (13, 24)
 
-    // (3) ネストした構造体 + 読み取り専用ポインタ
     logf("rect_width(g_rect) = {d}", .{rect_width(&g_rect)}); // 10
     logf("g_rect.tag = 0x{x}", .{g_rect.tag}); // 1234
 
-    // (4) struct の in-place 更新 (const default value がメモリにコピーされることの確認)
     g_rect.tag += 1;
     logf("g_rect.tag after inc = 0x{x}", .{g_rect.tag}); // 1235
 
-    // (5) 配列内 struct のインデックスアクセス (複数要素のオフセット計算)
     var points: [3]Point = .{
         .{ .x = 1, .y = 1 },
         .{ .x = 2, .y = 4 },
@@ -241,12 +221,10 @@ fn test_struct() void {
     while (i < points.len) : (i += 1) sum += point_area(points[i]);
     logf("sum of areas = {d}", .{sum}); // 1 + 8 + 27 = 36
 
-    // (6) ポインタ経由で配列要素の構造体を書き換える
     point_translate(&points[1], 100, 200);
     logf("points[1] after translate = ({d}, {d})", .{ points[1].x, points[1].y }); // (102, 204)
 }
 
-// ==== test_64bit_and_float: i64 / f64 演算 ====
 fn test_64bit_and_float() void {
     log("== 64bit_and_float ==");
     const a: i64 = 0x1_0000_0000;
@@ -263,21 +241,15 @@ fn test_64bit_and_float() void {
 }
 
 export fn on_start() void {
-    // Udon の 1 イベントあたり 10 秒 VM 予算は EXTERN の山でできている
-    // std.fmt.bufPrint 経路で簡単に食いつぶされる。on_start は「起動時に
-    // 最低限ここまで動くことを保証したい」ラインだけに絞り、残りの
-    // 機能テストは `on_interact` で 1 押し 1 テストの step 方式で流す。
+    // Stay within Udon's 10 s per-event VM budget; heavier tests run one
+    // per click via `on_interact`.
     log("=== on_start begin ===");
 
-    // (1) std.fmt を通らない log だけの sanity check。
     test_nofmt_simple();
 
-    // (2) 自作 Writer 相当の fast-path / slice-field 経路。
     test_manual_fastpath();
     test_wl_slice_write();
 
-    // (3) std.Io.Writer + std.fmt.bufPrint の段階別動作確認。ここまで
-    //     通れば本番の logf が機能することが確認できる。
     test_real_logf();
 
     log("=== on_start end ===");
@@ -285,13 +257,9 @@ export fn on_start() void {
 
 export fn on_update() void {
     update_tick += 1;
-    // logf は含めない。on_update は毎フレームなので、意図せず重くなる
-    // 経路を避ける。必要なら後で有効化。
     _ = counter;
 }
 
-// on_interact を押すたびに次のテストを走らせる。step マッピングは
-// `on_interact` 本体を参照。押した回数で何段階まで通ったかが分かる。
 var interact_step: i32 = 0;
 
 fn test_nofmt_simple() void {
@@ -302,15 +270,12 @@ fn test_nofmt_simple() void {
     log("nofmt_simple done");
 }
 
-// bufPrint を 1 回だけ通す最小ケース。formatInt も通らず、literal のみ。
 fn test_fmt_single() void {
     log("-- fmt_single --");
     logf("plain: {s}", .{"hi"});
     log("fmt_single done");
 }
 
-// 自作の int→ASCII。std.fmt を通らないが、linear memory への store8 と
-// u32/i32 の割り算・剰余を踏むので translator の numeric 経路を試せる。
 var int_log_buf: [16]u8 = undefined;
 
 fn int_to_ascii(value: i32) []const u8 {
@@ -344,9 +309,7 @@ var fast_buf: [512]u8 = undefined;
 var fast_end: u32 = 0;
 
 fn write_fast(bytes: []const u8) void {
-    // Writer.write の fast path 条件と同型
     if (fast_end + bytes.len <= fast_buf.len) {
-        // @memcpy 相当の inline byte copy
         var i: u32 = 0;
         const n: u32 = @intCast(bytes.len);
         while (i < n) : (i += 1) {
@@ -367,7 +330,6 @@ fn test_manual_fastpath() void {
     log("manual fastpath done");
 }
 
-// @memcpy を直接呼ぶバージョン。translator の memcpy helper (fn23) 経路を試す。
 fn test_memcpy_direct() void {
     log("-- memcpy direct --");
     const src = "abcdefg";
@@ -376,25 +338,13 @@ fn test_memcpy_direct() void {
     log("memcpy direct done");
 }
 
-// ==== Writer-like struct テスト ====
-// Zig stdlib の `std.Io.Writer` 構造体と**完全に同一のメモリレイアウト**を
-// 持つ自作 struct を使い、ポインタ経由で fast path 相当のコードを実行する。
-//
-// Writer のレイアウト:
-//   vtable: *const VTable  @0  (4 bytes)
-//   buffer: []u8           @4..11 (ptr @4, len @8)
-//   end: usize             @12 (4 bytes)
-//
-// Phase B.2 で manual fastpath (グローバル変数) は完走した。
-// もしこの struct 越し fast path もハングすれば → struct ポインタの field
-// load が translator で誤動作している決定的証拠。
-// 完走すれば → 問題は Zig stdlib Writer 固有 (vtable dispatch or LLVM が
-// 別の形で emit している)。
+// Same memory layout as `std.Io.Writer`:
+// vtable: *const VTable @0, buffer: []u8 @4..11, end: usize @12.
 const WriterLike = struct {
-    vtable: u32, // unused, layout dummy @0
-    buf_ptr: u32, // unused, layout dummy @4
-    buf_len: u32, // @8 — like w.buffer.len
-    end: u32, // @12 — like w.end
+    vtable: u32,
+    buf_ptr: u32,
+    buf_len: u32,
+    end: u32,
 };
 
 fn wl_write(w: *WriterLike, bytes: []const u8) void {
@@ -419,9 +369,6 @@ fn test_writer_like_struct() void {
     log("writer-like done");
 }
 
-// ==== vtable dispatch テスト ====
-// static vtable を経由した関数呼び出しが Udon で動くかを確認する。
-// Zig stdlib の `w.vtable.drain(...)` パターンを最小形で再現。
 const WlVTable = struct {
     trivial: *const fn (*WriterLike) u32,
 };
@@ -436,21 +383,17 @@ fn test_vtable_indirect() void {
     log("-- vtable indirect --");
     var w = WriterLike{ .vtable = 0, .buf_ptr = 0, .buf_len = 321, .end = 0 };
     const result = wl_vtable_impl.trivial(&w);
-    log(int_to_ascii(@intCast(result))); // 321 出てほしい
+    log(int_to_ascii(@intCast(result))); // 321
     log("vtable indirect done");
 }
 
-// ==== Zig Writer により近い: slice field を struct に埋め込む ====
-// 本物の `std.Io.Writer` は `buffer: []u8` というスライスフィールドを持つ。
-// 自作 WriterLike は buf_ptr/buf_len を分解して持っていたが、実際の Writer に
-// 合わせて slice field に変更して再現を試みる。
+// Embeds a `buffer: []u8` slice field like `std.Io.Writer` does.
 const WlWithSlice = struct {
-    vtable: u32, // @0
-    buffer: []u8, // @4 (ptr), @8 (len) — slice field
-    end: u32, // @12
+    vtable: u32,
+    buffer: []u8,
+    end: u32,
 };
 
-// Writer.write の fast path を slice-field 経由 + inline byte copy で再現
 fn wl_slice_write(w: *WlWithSlice, bytes: []const u8) void {
     if (w.end + bytes.len <= w.buffer.len) {
         var i: u32 = 0;
@@ -473,8 +416,6 @@ fn test_wl_slice_write() void {
     log("wl slice write done");
 }
 
-// Writer.write の fast path を @memcpy 二段スライスで再現
-// `@memcpy(w.buffer[w.end..][0..bytes.len], bytes)` は Zig 本体の emit と同一
 fn wl_slice_memcpy(w: *WlWithSlice, bytes: []const u8) void {
     if (w.end + bytes.len <= w.buffer.len) {
         @memcpy(w.buffer[w.end..][0..bytes.len], bytes);
@@ -493,8 +434,6 @@ fn test_wl_slice_memcpy() void {
     log("wl slice memcpy done");
 }
 
-// Error!usize 戻り値付きバージョン。Writer.write の signature と完全に一致
-// (void → usize の違いだけ。error union + try/catch も試す)。
 fn wl_slice_err(w: *WlWithSlice, bytes: []const u8) error{Failed}!u32 {
     if (w.end + bytes.len <= w.buffer.len) {
         @memcpy(w.buffer[w.end..][0..bytes.len], bytes);
@@ -570,27 +509,26 @@ fn test_real_logf() void {
 }
 
 export fn on_interact() void {
-    // 1 クリック = 1 step = 1 テスト。各 on_interact 呼び出しは独立した
-    // 10 秒 VM 予算を持つので、logf 多用 / 再帰 / memory.grow を踏むような
-    // 重いテストもここで単独で走らせれば完走する。
+    // One click = one step = one test. Each invocation gets its own 10 s
+    // VM budget, so heavy tests finish as long as they run solo.
     const step = interact_step;
     interact_step +%= 1;
     switch (step) {
-        0 => test_fmt_int_hand(), // 自作 int→ASCII。std.fmt 不使用。
-        1 => test_memcpy_direct(), // @memcpy 経由の byte copy。
-        2 => test_writer_like_struct(), // struct field + fast path。
-        3 => test_vtable_indirect(), // static vtable 経由の indirect call。
-        4 => test_wl_slice_memcpy(), // slice field + @memcpy。
-        5 => test_wl_slice_err(), // Error!u32 戻り値 + try/catch。
-        6 => test_fmt_single(), // 実 logf を 1 回。
-        7 => test_arithmetic(), // 算術 + logf 複数。
-        8 => test_control_flow(), // if / while / br_table。
-        9 => test_globals(), // i32 / i64 global 読み書き。
-        10 => test_recursion(), // factorial + fib。再帰コスト高。
-        11 => test_memory(), // linear memory + memory.grow。
-        12 => test_indirect_call(), // fn pointer array。
-        13 => test_struct(), // struct / ポインタ / ネスト。
-        14 => test_64bit_and_float(), // i64 / f64 演算。
+        0 => test_fmt_int_hand(),
+        1 => test_memcpy_direct(),
+        2 => test_writer_like_struct(),
+        3 => test_vtable_indirect(),
+        4 => test_wl_slice_memcpy(),
+        5 => test_wl_slice_err(),
+        6 => test_fmt_single(),
+        7 => test_arithmetic(),
+        8 => test_control_flow(),
+        9 => test_globals(),
+        10 => test_recursion(),
+        11 => test_memory(),
+        12 => test_indirect_call(),
+        13 => test_struct(),
+        14 => test_64bit_and_float(),
         else => log("(no more steps)"),
     }
     counter +%= 1;
