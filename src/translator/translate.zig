@@ -1717,10 +1717,33 @@ const Translator = struct {
 
         switch (entry.arity) {
             .binary => {
+                // Pop rhs, pop lhs, then push the result's WASM value type so
+                // `dst` is named against the post-op state. Boolean-returning
+                // comparisons over non-i32 operands (e.g. `i64.eq`, `f64.lt`)
+                // used to leave `ctx.stack_types` holding the lhs's type — a
+                // later i32 op at the same depth then emitted an `_i64__`-
+                // named SystemInt64 slot where WASM actually held the i32
+                // boolean result, cascading into an "Int32 as UInt32" crash
+                // at the next unsigned EXTERN. Re-deriving `dst` after the
+                // post-op push keeps the slot name in sync with the type.
                 const rhs_depth = ctx.depth - 1;
                 const lhs_depth = ctx.depth - 2;
                 const rhs = try ctx.slotAt(self.aa(), rhs_depth);
                 const lhs = try ctx.slotAt(self.aa(), lhs_depth);
+                const lhs_vt = ctx.typeAt(lhs_depth);
+
+                const result_vt: ValType = if (is_bool_result) .i32 else switch (entry.result_ty.prim) {
+                    .int32, .uint32 => .i32,
+                    .int64, .uint64 => .i64,
+                    .single => .f32,
+                    .double => .f64,
+                    else => unreachable,
+                };
+
+                ctx.pop(); // rhs
+                ctx.pop(); // lhs
+                try ctx.push(result_vt);
+                const dst = if (result_vt == lhs_vt) lhs else try ctx.slotAt(self.aa(), lhs_depth);
 
                 if (is_u32) {
                     try self.emitI32ToU32(lhs, "_num_lhs_u32");
@@ -1733,13 +1756,13 @@ const Translator = struct {
                     if (std.meta.eql(entry.result_ty, tn.uint32)) {
                         try self.asm_.push("_num_res_u32");
                         try self.asm_.extern_(entry.sig);
-                        try self.emitU32ToI32("_num_res_u32", lhs);
+                        try self.emitU32ToI32("_num_res_u32", dst);
                     } else if (is_bool_result) {
                         try self.asm_.push("_cmp_bool");
                         try self.asm_.extern_(entry.sig);
-                        try self.emitBoolToI32(lhs);
+                        try self.emitBoolToI32(dst);
                     } else {
-                        try self.asm_.push(lhs);
+                        try self.asm_.push(dst);
                         try self.asm_.extern_(entry.sig);
                     }
                 } else if (is_u64) {
@@ -1759,13 +1782,13 @@ const Translator = struct {
                     if (std.meta.eql(entry.result_ty, tn.uint64)) {
                         try self.asm_.push("_num_res_u64");
                         try self.asm_.extern_(entry.sig);
-                        try self.emitU64ToI64("_num_res_u64", lhs);
+                        try self.emitU64ToI64("_num_res_u64", dst);
                     } else if (is_bool_result) {
                         try self.asm_.push("_cmp_bool");
                         try self.asm_.extern_(entry.sig);
-                        try self.emitBoolToI32(lhs);
+                        try self.emitBoolToI32(dst);
                     } else {
-                        try self.asm_.push(lhs);
+                        try self.asm_.push(dst);
                         try self.asm_.extern_(entry.sig);
                     }
                 } else if (is_bool_result) {
@@ -1774,7 +1797,7 @@ const Translator = struct {
                     try self.asm_.push(rhs);
                     try self.asm_.push("_cmp_bool");
                     try self.asm_.extern_(entry.sig);
-                    try self.emitBoolToI32(lhs);
+                    try self.emitBoolToI32(dst);
                 } else {
                     // Signed / float arithmetic — operands already have the
                     // right type on the Int32/Int64/Double stack slot, except
@@ -1786,17 +1809,75 @@ const Translator = struct {
                     } else rhs;
                     try self.asm_.push(lhs);
                     try self.asm_.push(rhs_slot);
-                    try self.asm_.push(lhs);
+                    try self.asm_.push(dst);
                     try self.asm_.extern_(entry.sig);
                 }
-                ctx.pop(); // rhs consumed, lhs slot becomes new top
             },
             .unary => {
+                // A unary numeric op pops one operand and pushes one
+                // result; net depth is unchanged but the WASM value type
+                // at the top of the stack can change (e.g. `i64.extend_i32_u`
+                // goes i32 → i64). The source and destination stack slots
+                // therefore differ whenever the WASM result value type
+                // differs from the source, and we must keep `ctx.stack_types`
+                // in sync so later ops see the correct type.
+                //
+                // Same three shapes as the binary branch:
+                //   * unsigned operand → route through `_num_lhs_uN` scratch
+                //     (Udon rejects an Int32 slot used as a UInt32 param).
+                //   * unsigned result  → land in `_num_res_uN` then convert
+                //     the bit pattern back into the Int32/Int64 stack slot.
+                //   * otherwise        → push operand, push dst, extern.
+                //
+                // Prior to this fix the branch reused the source slot for
+                // both input and output, which miscompiled every type-
+                // changing conversion: the emitted code named a slot like
+                // `__fn_S1_i32__` for both args of `ToInt64(UInt32)`, but
+                // by the time the sequence executed the same stack position
+                // actually held the i64 result of an earlier conversion,
+                // producing "Cannot retrieve heap variable of type 'Int32'
+                // as type 'UInt32'" at runtime. Reproduced by the f64
+                // formatter path under `test_64bit_and_float`.
                 const d = ctx.depth - 1;
-                const s = try ctx.slotAt(self.aa(), d);
-                try self.asm_.push(s);
-                try self.asm_.push(s);
-                try self.asm_.extern_(entry.sig);
+                const src_vt = ctx.typeAt(d);
+                const src = try ctx.slotAt(self.aa(), d);
+
+                const in_slot: []const u8 = if (std.meta.eql(entry.operand_ty, tn.uint32)) blk: {
+                    try self.emitI32ToU32(src, "_num_lhs_u32");
+                    break :blk "_num_lhs_u32";
+                } else if (std.meta.eql(entry.operand_ty, tn.uint64)) blk: {
+                    try self.emitI64ToU64(src, "_num_lhs_u64");
+                    break :blk "_num_lhs_u64";
+                } else src;
+
+                const result_vt: ValType = switch (entry.result_ty.prim) {
+                    .int32, .uint32 => .i32,
+                    .int64, .uint64 => .i64,
+                    .single => .f32,
+                    .double => .f64,
+                    else => unreachable,
+                };
+                if (src_vt != result_vt) {
+                    ctx.pop();
+                    try ctx.push(result_vt);
+                }
+                const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
+
+                if (std.meta.eql(entry.result_ty, tn.uint32)) {
+                    try self.asm_.push(in_slot);
+                    try self.asm_.push("_num_res_u32");
+                    try self.asm_.extern_(entry.sig);
+                    try self.emitU32ToI32("_num_res_u32", dst);
+                } else if (std.meta.eql(entry.result_ty, tn.uint64)) {
+                    try self.asm_.push(in_slot);
+                    try self.asm_.push("_num_res_u64");
+                    try self.asm_.extern_(entry.sig);
+                    try self.emitU64ToI64("_num_res_u64", dst);
+                } else {
+                    try self.asm_.push(in_slot);
+                    try self.asm_.push(dst);
+                    try self.asm_.extern_(entry.sig);
+                }
             },
         }
     }
@@ -4205,6 +4286,96 @@ test "bench: i64 conversions dispatch via SystemConvert" {
         "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
     try std.testing.expect(std.mem.indexOf(u8, out,
         "SystemConvert.__ToInt64__SystemUInt32__SystemInt64") != null);
+}
+
+test "i64.extend_i32_u passes a UInt32 source, not a reused stack slot" {
+    // Regression guard for "Cannot retrieve heap variable of type 'Int32'
+    // as type 'UInt32'" at runtime on the `ToInt64(UInt32)` EXTERN.
+    //
+    // The generic unary branch used to push the current stack slot twice
+    // (once as the UInt32 input and once as the Int64 output). When the
+    // stack slot was an Int32 (the common case for `i64.extend_i32_u`
+    // right after an `i32.or`), Udon's heap type check rejected the read
+    // as "Int32 as UInt32". After the fix the input is routed through a
+    // BitConverter-backed `_num_lhs_u32` (SystemUInt32) scratch and the
+    // output lands in a fresh Int64 stack slot.
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    // Walk the file and check: each `EXTERN, "...ToInt64__SystemUInt32..."`
+    // must be preceded by `PUSH, _num_lhs_u32` (or the memory-load paths'
+    // equivalent `_mem_u32` / `_mem_u32_hi` — both are declared UInt32).
+    var it = std.mem.splitScalar(u8, out, '\n');
+    var prev_push_1: []const u8 = "";
+    var prev_push_2: []const u8 = "";
+    const needle = "SystemConvert.__ToInt64__SystemUInt32__SystemInt64";
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (std.mem.indexOf(u8, line, needle)) |_| {
+            // The EXTERN's first PUSHed slot must be UInt32-typed. We
+            // allow the three scratches the emitter currently produces:
+            // `_num_lhs_u32` (numeric-op branch), `_mem_u32` / `_mem_u32_hi`
+            // (i64.load straddle path).
+            const src = std.mem.trim(u8, prev_push_2, " \t\r,");
+            const ok = std.mem.endsWith(u8, src, "_num_lhs_u32") or
+                std.mem.endsWith(u8, src, "_mem_u32") or
+                std.mem.endsWith(u8, src, "_mem_u32_hi");
+            if (!ok) {
+                std.debug.print("bad ToInt64(UInt32) source: {s}\n", .{src});
+                try std.testing.expect(false);
+            }
+            // And the source must not equal the destination: same-slot
+            // lowering was the original defect.
+            try std.testing.expect(!std.mem.eql(u8, prev_push_1, prev_push_2));
+        }
+        if (std.mem.startsWith(u8, line, "PUSH,")) {
+            prev_push_2 = prev_push_1;
+            prev_push_1 = line;
+        }
+    }
+}
+
+test "i64 comparisons update the stack slot type to i32 (bool-result)" {
+    // Regression guard for stack-type bookkeeping across `i64.eq`,
+    // `i64.gt_s` and friends. Pre-fix the binary branch popped only the
+    // rhs, leaving `ctx.stack_types[lhs_depth]` stuck on i64 even though
+    // WASM had pushed an i32 boolean at that position. A subsequent i32
+    // op at the same depth then named the slot `__fn_Sd_i64__` (pushing
+    // the i64-typed slot into SystemInt32 params) and the following
+    // `i64.extend_i32_u` read that same Int64 slot as UInt32, throwing
+    // "Cannot retrieve heap variable of type 'Int64' as type 'UInt32'"
+    // (which appeared as the original bug's "Int32 as UInt32" report
+    // because the un-fixed unary branch named the slot with the *pre-*
+    // eq i32 type).
+    //
+    // After the fix the bool-result landing slot is re-named to `_i32__`
+    // so the subsequent `SystemInt32.__op_LogicalOr__...` finds a
+    // SystemInt32 slot and nothing downstream crosses the type check.
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    // `SystemConvert.__ToInt32__SystemBoolean__SystemInt32` is the
+    // universal BoolToI32 widening after every comparison. Its
+    // destination slot (the PUSH immediately before the EXTERN) must
+    // never be typed `_i64__` / `_f32__` / `_f64__` — the WASM type at
+    // that point is always i32.
+    var it = std.mem.splitScalar(u8, out, '\n');
+    var prev: []const u8 = "";
+    const needle = "SystemConvert.__ToInt32__SystemBoolean__SystemInt32";
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (std.mem.indexOf(u8, line, needle)) |_| {
+            const dst = std.mem.trim(u8, prev, " \t\r,");
+            if (std.mem.endsWith(u8, dst, "_i64__") or
+                std.mem.endsWith(u8, dst, "_f32__") or
+                std.mem.endsWith(u8, dst, "_f64__"))
+            {
+                std.debug.print("BoolToI32 writes into non-i32 slot: {s}\n", .{dst});
+                try std.testing.expect(false);
+            }
+        }
+        if (std.mem.startsWith(u8, line, "PUSH,")) prev = line;
+    }
 }
 
 test "synthesized self-recursive function spills frame when recursion=stack" {
