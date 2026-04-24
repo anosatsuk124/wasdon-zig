@@ -1,11 +1,4 @@
 //! WASM テストベンチ。
-//!
-//! 想定ホスト環境は「.NET の `Console.WriteLine(string)` だけが import されている」。
-//! WASM 側はその一引数を `(ptr, len)` のペアで渡す。Udon 翻訳器側ではこの import を
-//! `SystemConsole.__WriteLine__SystemString__SystemVoid` EXTERN にマップし、
-//! linear memory モデル (`docs/spec_linear_memory.md`) から `len` バイトを読み出して
-//! SystemString に詰め直してから push する想定。
-
 const std = @import("std");
 
 // Import 名そのものを Udon extern シグネチャとして記述し、翻訳器側で
@@ -298,6 +291,7 @@ export fn on_start() void {
 
 export fn on_update() void {
     update_tick += 1;
+    logf("updated! counter = {d}", .{counter});
 }
 
 export fn on_interact() void {
