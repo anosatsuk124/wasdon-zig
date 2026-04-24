@@ -69,6 +69,16 @@ pub const Error = error{
 /// the WASM module has no `max` on its memory and the meta is silent.
 pub const Options = struct {
     default_max_pages: u32 = 16,
+    /// When true, every memory op emits a preamble that records the
+    /// effective byte address and a unique site id into
+    /// `_mem_oob_addr` / `_mem_oob_site` before the bounds check, and
+    /// `__mem_oob_trap__` formats those into the error message. A uasm
+    /// comment `; mem op site=N fn=F wasm_idx=I op=... kind=...`
+    /// precedes each preamble so the logged `site=N` can be mapped back
+    /// to the source instruction via grep. Off by default — the preamble
+    /// adds 2 COPY + one i32 const addData per memory op plus a few
+    /// String fields for the trap message.
+    mem_oob_diagnostics: bool = false,
 };
 
 pub fn translate(
@@ -144,6 +154,16 @@ const Translator = struct {
     /// `__fn_Sd__` data-slot emission after all functions are lowered.
     fn_max_stack_depth: []u32 = &.{},
 
+    /// Per (def_idx, depth) bitmask of `ValType`s that were observed at
+    /// that stack position during codegen. Bits: i32=1, i64=2, f32=4,
+    /// f64=8. Populated by `FuncCtx.push` via `recordSlotType`. Drives
+    /// typed `__fn_Sd_{i32|i64|f32|f64}__` declarations in
+    /// `emitFunctionStackSlots` so each runtime value lives in a slot of
+    /// its exact type — avoiding the Udon type-tag mismatch that triggers
+    /// "Cannot retrieve heap variable of type X as type Y" when the same
+    /// untyped slot is reused for different value types.
+    fn_slot_type_bits: []std.ArrayListUnmanaged(u8) = &.{},
+
     /// Udon variable names for the linear-memory outer array and its
     /// companion scalars. Defaults follow `docs/spec_linear_memory.md`; if
     /// `__udon_meta.options.memory.udonName` is set, the outer array and all
@@ -154,6 +174,57 @@ const Translator = struct {
     memory_size_pages_name: []const u8 = "__G__memory_size_pages",
     memory_max_pages_name: []const u8 = "__G__memory_max_pages",
     memory_initial_pages_name: []const u8 = "__G__memory_initial_pages",
+
+    /// Monotonic counter used by `recordMemOpSite` to mint a fresh
+    /// `__mem_site_<N>: SystemInt32 = <N>` constant per memory op when
+    /// `options.mem_oob_diagnostics` is on. The logged `site=N` maps
+    /// back to a uasm comment line that names the WASM source location.
+    mem_op_site_counter: u32 = 0,
+
+    /// Deduplicated i64 constants that need runtime initialization in
+    /// `_onEnable`. Udon spec §4.7 forbids non-null literal initializers for
+    /// `SystemInt64` heap variables, so any `i64.const V` with V != 0 must
+    /// be synthesized at startup from two `SystemInt32` halves (which *do*
+    /// accept arbitrary literal initializers) via BitConverter + UInt64 OR.
+    /// Keyed by raw i64 value for dedup so shared constants (shift counts,
+    /// error tags) pay the synthesis cost once.
+    i64_consts: std.AutoHashMapUnmanaged(i64, []const u8) = .empty,
+
+    /// Ordered list of i64 constants for deterministic init emission in
+    /// `_onEnable`. Mirrors `i64_consts` entries in insertion order; each
+    /// element carries the resolved slot name and the helper Int32 slot
+    /// names for the hi/lo halves (owned by the arena allocator).
+    i64_const_inits: std.ArrayListUnmanaged(Const64Init) = .empty,
+
+    /// Deduplicated f64 constants. Same restriction as i64: Udon spec §4.7
+    /// forbids non-null `SystemDouble` literals, so every non-0.0 f64.const
+    /// is synthesized at `_onEnable` time. Keyed by the raw 64-bit pattern
+    /// (`@bitCast(f64)`) rather than the float value itself so `NaN != NaN`
+    /// doesn't defeat AutoHashMap, and `-0.0` / `+0.0` stay distinct
+    /// (they differ in bit 63, which matters for WASM `f64.const`
+    /// reproducibility even though they compare equal).
+    f64_consts: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
+
+    /// Ordered list of f64 constants, mirroring `i64_const_inits` but with
+    /// a `SystemDouble` target slot. The synthesis pipeline is identical
+    /// up to the final EXTERN, which writes into the Double slot via
+    /// `SystemBitConverter.__ToDouble__SystemByteArray_SystemInt32__SystemDouble`.
+    f64_const_inits: std.ArrayListUnmanaged(Const64Init) = .empty,
+
+    /// Shared init descriptor for both `SystemInt64` and `SystemDouble`
+    /// constants. The synthesis pipeline is shared across the two types;
+    /// only the terminal conversion EXTERN differs (see
+    /// `emitSynthesize64Bit`).
+    const Const64Init = struct {
+        /// Name of the target slot (`SystemInt64` or `SystemDouble`).
+        slot: []const u8,
+        /// Name of the `SystemInt32` slot holding the high 32 bits.
+        hi_slot: []const u8,
+        /// Name of the `SystemInt32` slot holding the low 32 bits.
+        lo_slot: []const u8,
+        /// Raw 64-bit pattern — kept for diagnostics / tests.
+        bits: u64,
+    };
 
     const EventBinding = struct {
         /// WASM export name (e.g. "on_update").
@@ -184,8 +255,16 @@ const Translator = struct {
         self.rac_sites.deinit(self.gpa);
         self.event_bindings.deinit(self.gpa);
         self.indirect_fns.deinit(self.gpa);
+        self.i64_consts.deinit(self.gpa);
+        self.i64_const_inits.deinit(self.gpa);
+        self.f64_consts.deinit(self.gpa);
+        self.f64_const_inits.deinit(self.gpa);
         if (self.is_recursive.len > 0) self.gpa.free(self.is_recursive);
         if (self.fn_max_stack_depth.len > 0) self.gpa.free(self.fn_max_stack_depth);
+        if (self.fn_slot_type_bits.len > 0) {
+            for (self.fn_slot_type_bits) |*bits| bits.deinit(self.gpa);
+            self.gpa.free(self.fn_slot_type_bits);
+        }
         self.asm_.deinit();
         self.arena.deinit();
     }
@@ -207,14 +286,23 @@ const Translator = struct {
         try self.analyzeRecursion();
         self.fn_max_stack_depth = try self.gpa.alloc(u32, self.mod.codes.len);
         @memset(self.fn_max_stack_depth, 0);
+        self.fn_slot_type_bits = try self.gpa.alloc(std.ArrayListUnmanaged(u8), self.mod.codes.len);
+        for (self.fn_slot_type_bits) |*bits| bits.* = .empty;
         try self.emitCommonData();
         try self.emitGlobalsData();
         try self.emitMemoryData();
         try self.emitFunctionData();
         try self.emitIndirectData();
-        try self.emitEventEntries();
+        // Functions must be lowered before `emitEventEntries` because
+        // lowering `.i64_const` populates `i64_const_inits` and the
+        // `_onEnable` event body synthesizes each registered slot at
+        // startup. Labels declared by functions are forward-referenced
+        // from events and resolved during the final layout pass, so the
+        // reverse order doesn't break call targeting.
         try self.emitDefinedFunctions();
+        try self.emitEventEntries();
         try self.emitIndirectTrampolines();
+        try self.emitMemOobTrap();
         try self.emitFunctionStackSlots();
         // Unsupported-opcode sink.
         try self.asm_.addData(.{
@@ -563,6 +651,23 @@ const Translator = struct {
         try self.asm_.addData(.{ .name = "_mg_new", .ty = tn.int32, .init = .{ .int32 = 0 } });
         try self.asm_.addData(.{ .name = "_mg_i", .ty = tn.int32, .init = .{ .int32 = 0 } });
         try self.asm_.addData(.{ .name = "_mg_cmp", .ty = tn.boolean, .init = .null_literal });
+        // Shared Boolean return slot for numeric comparison EXTERNs
+        // (`op_Equality`, `op_LessThan`, etc.). Udon strictly type-checks
+        // EXTERN argument slots against the signature, so a Boolean-returning
+        // op must be given a SystemBoolean destination heap variable. The
+        // Int32 stack slot cannot be reused; the result is converted back to
+        // Int32 (0/1) via SystemConvert immediately after the comparison so
+        // WASM-visible `i32.eq` etc. semantics are preserved.
+        try self.asm_.addData(.{ .name = "_cmp_bool", .ty = tn.boolean, .init = .null_literal });
+        // Int32 scratch for shift counts. WASM's `i64.shl`/`i64.shr_*` take
+        // an i64 shift count, but the corresponding Udon EXTERNs
+        // (`SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64`,
+        // `SystemUInt64.__op_RightShift__SystemUInt64_SystemInt32__SystemUInt64`,
+        // etc.) take Int32. The WASM stack slot holding the count gets its
+        // runtime type-tag bumped to Int64 the moment an i64 value is
+        // written into it, so we must narrow through SystemConvert before
+        // feeding it to the shift op.
+        try self.asm_.addData(.{ .name = "_shift_rhs_i32", .ty = tn.int32, .init = .{ .int32 = 0 } });
         try self.asm_.addData(.{ .name = "__c_i32_neg1", .ty = tn.int32, .init = .{ .int32 = -1 } });
         // Scratch + constants for generic (unaligned / page-straddle) word access.
         try self.asm_.addData(.{ .name = "__c_i32_16383", .ty = tn.int32, .init = .{ .int32 = 16383 } });
@@ -575,6 +680,78 @@ const Translator = struct {
         // dispatch to decide whether the high half spills to outer[page+1].
         try self.asm_.addData(.{ .name = "_mem_byte_in_page", .ty = tn.int32, .init = .{ .int32 = 0 } });
         try self.asm_.addData(.{ .name = "_mem_page_idx_hi", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        // BitConverter scratch for Int32 ↔ UInt32 bit-pattern conversion.
+        // Udon's heap is strongly typed — writing an Int32 stack slot to a
+        // UInt32 EXTERN argument (or vice versa) throws "Cannot retrieve
+        // heap variable of type 'Int32' as type 'UInt32'". `SystemConvert`
+        // overflows on negative values, so we route values through
+        // `SystemBitConverter.GetBytes` / `ToUInt32` (or `ToInt32`) to
+        // preserve the bit pattern for every i32/u32 value.
+        try self.asm_.addData(.{ .name = "_mem_bits_ba", .ty = tn.byte_array, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_mem_val_u32_buf", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mem_val_i32_buf", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        // Message logged when a memory access would OOB the outer
+        // SystemObjectArray. The trap block at `__mem_oob_trap__`
+        // (emitted at the tail of the code section) pushes this into
+        // Unity's log and halts the UdonBehaviour. Closest Udon analog
+        // to a WASM trap — see emitMemOobTrap.
+        //
+        // The trap message is assembled at runtime as
+        //   "<prefix>; page=<page_idx>; max=<max_pages>"
+        // so a future reader of the log can tell *which* page was bad
+        // and whether `__udon_meta` sized `max_pages` below the program's
+        // actual working set. The three string literals (`_mem_oob_msg`,
+        // `_mem_oob_page_label`, `_mem_oob_max_label`) live in .data,
+        // the per-trap concatenation output lands in `_mem_oob_msg_out`.
+        try self.asm_.addData(.{
+            .name = "_mem_oob_msg",
+            .ty = tn.string,
+            .init = .{ .string = "wasdon: WASM memory access out of bounds; halting UdonBehaviour" },
+        });
+        try self.asm_.addData(.{
+            .name = "_mem_oob_page_label",
+            .ty = tn.string,
+            .init = .{ .string = "; page=" },
+        });
+        try self.asm_.addData(.{
+            .name = "_mem_oob_max_label",
+            .ty = tn.string,
+            .init = .{ .string = "; max=" },
+        });
+        try self.asm_.addData(.{ .name = "_mem_oob_page_str", .ty = tn.string, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_mem_oob_max_str", .ty = tn.string, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_mem_oob_msg_out", .ty = tn.string, .init = .null_literal });
+        // Diagnostic-only scratch: populated by `recordMemOpSite` before
+        // every `emitOuterGetChecked` call and formatted into the trap
+        // message when `options.mem_oob_diagnostics` is on. Out of the
+        // default-emit path because the extra Concat args + per-op COPY
+        // preamble materially bloat the uasm.
+        if (self.options.mem_oob_diagnostics) {
+            try self.asm_.addData(.{ .name = "_mem_oob_addr", .ty = tn.int32, .init = .{ .int32 = 0 } });
+            try self.asm_.addData(.{ .name = "_mem_oob_site", .ty = tn.int32, .init = .{ .int32 = 0 } });
+            try self.asm_.addData(.{
+                .name = "_mem_oob_site_label",
+                .ty = tn.string,
+                .init = .{ .string = "; site=" },
+            });
+            try self.asm_.addData(.{
+                .name = "_mem_oob_addr_label",
+                .ty = tn.string,
+                .init = .{ .string = "; addr=" },
+            });
+            try self.asm_.addData(.{ .name = "_mem_oob_site_str", .ty = tn.string, .init = .null_literal });
+            try self.asm_.addData(.{ .name = "_mem_oob_addr_str", .ty = tn.string, .init = .null_literal });
+        }
+        // Scratch for numeric ops whose operand or result type is u32/u64
+        // but whose WASM stack slot is Int32/Int64. The same BitConverter
+        // pattern that memory ops use routes each operand through a UInt32/
+        // UInt64 scratch slot, and converts the result back on the way out.
+        try self.asm_.addData(.{ .name = "_num_lhs_u32", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_num_rhs_u32", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_num_res_u32", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_num_lhs_u64", .ty = tn.uint64, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_num_rhs_u64", .ty = tn.uint64, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_num_res_u64", .ty = tn.uint64, .init = .null_literal });
         try self.asm_.addData(.{ .name = "_mlw_lo", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
         try self.asm_.addData(.{ .name = "_mlw_hi", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
         try self.asm_.addData(.{ .name = "_mlw_shift", .ty = tn.int32, .init = .{ .int32 = 0 } });
@@ -624,20 +801,32 @@ const Translator = struct {
         }
     }
 
-    /// Emit `__fn_Sd__` data declarations for every defined function using the
-    /// exact peak abstract stack depth observed during codegen. Must be called
-    /// after `emitDefinedFunctions` so `fn_max_stack_depth` is populated. The
-    /// rendered data section stays inside `.data_start` regardless of
-    /// insertion order (see `udon/asm.zig` `render`).
+    /// Emit typed `__fn_Sd_{i32|i64|f32|f64}__` data declarations — one per
+    /// (function, depth, valtype) tuple observed during codegen. Each runtime
+    /// value therefore lives in a physical slot whose declared type matches
+    /// its WASM type, so Udon's heap type-tag (which `COPY` bumps to the
+    /// source type on every write) never drifts out from under a consumer
+    /// expecting a different type.
+    ///
+    /// Must be called after `emitDefinedFunctions` so `fn_slot_type_bits`
+    /// is populated. The rendered data section stays inside `.data_start`
+    /// regardless of insertion order (see `udon/asm.zig` `render`).
     fn emitFunctionStackSlots(self: *Translator) Error!void {
         for (0..self.mod.codes.len) |def_idx| {
             const fn_idx: u32 = self.num_imported_funcs + @as(u32, @intCast(def_idx));
             const fn_name = self.fn_names[fn_idx];
-            const max_depth = self.fn_max_stack_depth[def_idx];
-            var d: u32 = 0;
-            while (d < max_depth) : (d += 1) {
-                const n = try names.stackSlot(self.aa(), fn_name, d);
-                try self.asm_.addData(.{ .name = n, .ty = tn.int32, .init = .{ .int32 = 0 } });
+            const bits = self.fn_slot_type_bits[def_idx].items;
+            for (bits, 0..) |mask, depth_usz| {
+                const d: u32 = @intCast(depth_usz);
+                for (all_val_types) |vt| {
+                    if ((mask & slotTypeBit(vt)) == 0) continue;
+                    const n = try names.stackSlot(self.aa(), fn_name, d, vt);
+                    try self.asm_.addData(.{
+                        .name = n,
+                        .ty = udonTypeOf(vt),
+                        .init = zeroLit(vt),
+                    });
+                }
             }
         }
     }
@@ -709,6 +898,7 @@ const Translator = struct {
         if (!user_binds_on_enable) {
             try self.asm_.exportLabel("_onEnable");
             try self.asm_.label("_onEnable");
+            try self.emit64BitConstInits();
             try self.emitMemoryInit();
             try self.asm_.jumpAddr(0xFFFFFFFC);
         }
@@ -718,6 +908,7 @@ const Translator = struct {
             try self.asm_.exportLabel(ev.udon_label);
             try self.asm_.label(ev.udon_label);
             if (std.mem.eql(u8, ev.udon_label, "_onEnable")) {
+                try self.emit64BitConstInits();
                 try self.emitMemoryInit();
             }
             // Invoke the function: no arguments (all entry functions in bench
@@ -739,6 +930,160 @@ const Translator = struct {
         }
     }
 
+    /// Shared halt block reached by every memory-op bounds check. Every
+    /// outer-array GetValue goes through `emitOuterGetChecked`, whose
+    /// bounds check funnels into this label on failure. Builds a
+    /// diagnostic message of the form
+    ///   "wasdon: WASM memory access out of bounds; page=N; max=M"
+    /// so the Unity log reveals which page index tripped the trap and
+    /// the configured `max_pages`. Halts the UdonBehaviour by jumping
+    /// to `0xFFFFFFFC` — the closest thing Udon has to a WASM trap.
+    fn emitMemOobTrap(self: *Translator) Error!void {
+        if (self.mod.memories.len == 0) return;
+        try self.asm_.label("__mem_oob_trap__");
+        // page_str := _mem_page_idx.ToString()
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.push("_mem_oob_page_str");
+        try self.asm_.extern_("SystemInt32.__ToString__SystemString");
+        // max_str := memory_max_pages.ToString()
+        try self.asm_.push(self.memory_max_pages_name);
+        try self.asm_.push("_mem_oob_max_str");
+        try self.asm_.extern_("SystemInt32.__ToString__SystemString");
+
+        if (self.options.mem_oob_diagnostics) {
+            // site_str := _mem_oob_site.ToString()
+            try self.asm_.push("_mem_oob_site");
+            try self.asm_.push("_mem_oob_site_str");
+            try self.asm_.extern_("SystemInt32.__ToString__SystemString");
+            // addr_str := _mem_oob_addr.ToString()
+            try self.asm_.push("_mem_oob_addr");
+            try self.asm_.push("_mem_oob_addr_str");
+            try self.asm_.extern_("SystemInt32.__ToString__SystemString");
+            // out := Concat(prefix, "; site=", site_str, "; addr=")
+            try self.asm_.push("_mem_oob_msg");
+            try self.asm_.push("_mem_oob_site_label");
+            try self.asm_.push("_mem_oob_site_str");
+            try self.asm_.push("_mem_oob_addr_label");
+            try self.asm_.push("_mem_oob_msg_out");
+            try self.asm_.extern_("SystemString.__Concat__SystemString_SystemString_SystemString_SystemString__SystemString");
+            // out := Concat(out, addr_str, "; page=", page_str)
+            try self.asm_.push("_mem_oob_msg_out");
+            try self.asm_.push("_mem_oob_addr_str");
+            try self.asm_.push("_mem_oob_page_label");
+            try self.asm_.push("_mem_oob_page_str");
+            try self.asm_.push("_mem_oob_msg_out");
+            try self.asm_.extern_("SystemString.__Concat__SystemString_SystemString_SystemString_SystemString__SystemString");
+            // out := Concat(out, "; max=", max_str)
+            try self.asm_.push("_mem_oob_msg_out");
+            try self.asm_.push("_mem_oob_max_label");
+            try self.asm_.push("_mem_oob_max_str");
+            try self.asm_.push("_mem_oob_msg_out");
+            try self.asm_.extern_("SystemString.__Concat__SystemString_SystemString_SystemString__SystemString");
+        } else {
+            // out := Concat(prefix, "; page=", page_str, "; max=")
+            try self.asm_.push("_mem_oob_msg");
+            try self.asm_.push("_mem_oob_page_label");
+            try self.asm_.push("_mem_oob_page_str");
+            try self.asm_.push("_mem_oob_max_label");
+            try self.asm_.push("_mem_oob_msg_out");
+            try self.asm_.extern_("SystemString.__Concat__SystemString_SystemString_SystemString_SystemString__SystemString");
+            // out := Concat(out, max_str)
+            try self.asm_.push("_mem_oob_msg_out");
+            try self.asm_.push("_mem_oob_max_str");
+            try self.asm_.push("_mem_oob_msg_out");
+            try self.asm_.extern_("SystemString.__Concat__SystemString_SystemString__SystemString");
+        }
+
+        try self.asm_.push("_mem_oob_msg_out");
+        try self.asm_.extern_("UnityEngineDebug.__LogError__SystemObject__SystemVoid");
+        try self.asm_.jumpAddr(0xFFFFFFFC);
+    }
+
+    /// Diagnostic preamble: record the effective byte address and a
+    /// fresh site id into `_mem_oob_addr` / `_mem_oob_site`, and emit a
+    /// uasm comment mapping the site id back to the WASM source
+    /// location. No-op unless `options.mem_oob_diagnostics` is on — the
+    /// per-op preamble is too expensive to enable by default. Call this
+    /// immediately before `emitOuterGetChecked` so the recorded values
+    /// are accurate at the moment the bounds check fails.
+    ///
+    /// `kind_tag` distinguishes lo- vs. hi-page fetches in straddle
+    /// paths (pass `"primary"` for non-straddle). `op_tag` should name
+    /// the WASM instruction being lowered (e.g. `"i32.load"`,
+    /// `"i64.store"`) so the comment is greppable.
+    fn recordMemOpSite(
+        self: *Translator,
+        fn_name: []const u8,
+        addr_slot: []const u8,
+        op_tag: []const u8,
+        kind_tag: []const u8,
+    ) Error!void {
+        if (!self.options.mem_oob_diagnostics) return;
+        const site_id = self.mem_op_site_counter;
+        self.mem_op_site_counter += 1;
+        const site_name = try std.fmt.allocPrint(self.aa(), "__mem_site_{d}", .{site_id});
+        try self.asm_.addData(.{
+            .name = site_name,
+            .ty = tn.int32,
+            .init = .{ .int32 = @intCast(site_id) },
+        });
+        const comment = try std.fmt.allocPrint(
+            self.aa(),
+            "mem op site={d} fn={s} op={s} kind={s}",
+            .{ site_id, fn_name, op_tag, kind_tag },
+        );
+        try self.asm_.comment(comment);
+        // _mem_oob_addr := addr_slot
+        try self.asm_.push(addr_slot);
+        try self.asm_.push("_mem_oob_addr");
+        try self.asm_.copy();
+        // _mem_oob_site := __mem_site_<N>
+        try self.asm_.push(site_name);
+        try self.asm_.push("_mem_oob_site");
+        try self.asm_.copy();
+    }
+
+    /// Fetch `_mem_chunk := outer[page_idx_slot]` with a runtime bounds
+    /// check. Jumps to `__mem_oob_trap__` when `page_idx_slot < 0` or
+    /// `page_idx_slot >= memory_max_pages`. Does **not** mutate any
+    /// caller-visible state other than `_mem_chunk` and `_mg_cmp`, so a
+    /// straddle path that preserves the lo-page value in `_mem_page_idx`
+    /// across a hi-page fetch stays sound.
+    ///
+    /// Every WASM memory op must funnel its outer-array access through
+    /// this helper. The VM's raw `ArgumentOutOfRangeException` carries
+    /// no information about *which* page was bad — by the time a crash
+    /// report reaches the translator author the original computation is
+    /// lost. Running the access through this check gives us a Unity
+    /// log line that names the page index (see `__mem_oob_trap__`) and
+    /// the configured max.
+    ///
+    /// The trap label reads `_mem_page_idx` for the `page=` field. When
+    /// the failing access is a hi-page straddle fetch, the log line will
+    /// show the lo-page value, not the hi page that actually tripped
+    /// the check; callers can infer the hi page as `lo + 1`.
+    fn emitOuterGetChecked(self: *Translator, page_idx_slot: []const u8) Error!void {
+        // _mg_cmp := page_idx >= 0 (i.e. __c_i32_0 <= page_idx)
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push(page_idx_slot);
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.extern_("SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean");
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.jumpIfFalse("__mem_oob_trap__");
+        // _mg_cmp := page_idx < memory_max_pages
+        try self.asm_.push(page_idx_slot);
+        try self.asm_.push(self.memory_max_pages_name);
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.extern_("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
+        try self.asm_.push("_mg_cmp");
+        try self.asm_.jumpIfFalse("__mem_oob_trap__");
+        // _mem_chunk := outer[page_idx_slot]
+        try self.asm_.push(self.memory_udon_name);
+        try self.asm_.push(page_idx_slot);
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+    }
+
     fn emitMemoryInit(self: *Translator) Error!void {
         if (self.mod.memories.len == 0) return;
         try self.asm_.comment("memory init (allocate outer + initial chunks)");
@@ -746,15 +1091,17 @@ const Translator = struct {
         try self.asm_.push(self.memory_max_pages_name);
         try self.asm_.push(self.memory_udon_name);
         try self.asm_.extern_("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray");
-        // Loop would be ideal; for simplicity emit a straight-line allocation
-        // for every initial page. We don't know initial_pages at code-gen
-        // time as a literal Int constant, so fall back to a single-page
-        // allocation and rely on the runtime to lazily grow. A production
-        // translator would unroll up to initial_pages; bench uses 1 page so
-        // this is exact.
-        const initial: u32 = self.effectiveInitialPages();
+        // Materialize a chunk for every slot of the outer SystemObjectArray.
+        // Previously we only filled the first `initial_pages` slots, which
+        // left the rest null — any store that resolved to a page in
+        // [initial, max) would throw at the subsequent `__Set__` call on a
+        // null receiver. Allocating all max_pages chunks up front means
+        // `outer.GetValue(p)` never returns null for a valid page index,
+        // so every memory op can assume a non-null `_mem_chunk`. memory.grow
+        // still tracks `_memory_size_pages` for WASM-visible semantics.
+        const max_pages: u32 = self.effectiveMaxPages();
         var p: u32 = 0;
-        while (p < initial) : (p += 1) {
+        while (p < max_pages) : (p += 1) {
             const idx_name = try std.fmt.allocPrint(self.aa(), "__mem_init_idx_{d}", .{p});
             try self.asm_.addData(.{ .name = idx_name, .ty = tn.int32, .init = .{ .int32 = @intCast(p) } });
             try self.asm_.push("__c_i32_16384");
@@ -783,27 +1130,39 @@ const Translator = struct {
     }
 
     /// Declare the string-marshaling scratch slots unconditionally and
-    /// cache the UTF-8 encoding singleton. Host-import lowering re-declares
-    /// the same names via the idempotent `declareScratch` path, so this is
-    /// safe when `lower_import` also tries to declare them later.
+    /// cache the UTF-8 encoding singleton. `emitDefinedFunctions` now runs
+    /// before `emitEventEntries` (so the i64-const init list is fully
+    /// populated by the time `_onEnable` flushes it), which means
+    /// `lower_import` has already declared these scratch slots on demand by
+    /// the time we get here. Use `declareScratchIfAbsent` so duplicates
+    /// become no-ops instead of UAssembly "Data variable already exists"
+    /// assembler errors.
     fn emitMarshalScratchInit(self: *Translator) Error!void {
-        // Scratch decls — mirror lower_import.declareMarshalScratch so the
-        // encoding slot exists even when nothing uses strings (at the cost
-        // of one extra field slot + one EXTERN per translation unit).
-        try self.asm_.addData(.{ .name = lower_import.marshal_str_ptr_name, .ty = tn.int32, .init = .{ .int32 = 0 } });
-        try self.asm_.addData(.{ .name = lower_import.marshal_str_len_name, .ty = tn.int32, .init = .{ .int32 = 0 } });
-        try self.asm_.addData(.{ .name = lower_import.marshal_str_bytes_name, .ty = tn.byte_array, .init = .null_literal });
-        try self.asm_.addData(.{ .name = lower_import.marshal_str_tmp_name, .ty = tn.string, .init = .null_literal });
-        try self.asm_.addData(.{ .name = lower_import.marshal_str_i_name, .ty = tn.int32, .init = .{ .int32 = 0 } });
-        try self.asm_.addData(.{ .name = lower_import.marshal_str_addr_name, .ty = tn.int32, .init = .{ .int32 = 0 } });
-        try self.asm_.addData(.{ .name = lower_import.marshal_str_byte_name, .ty = tn.byte, .init = .null_literal });
-        try self.asm_.addData(.{ .name = lower_import.marshal_str_cond_name, .ty = tn.boolean, .init = .null_literal });
-        try self.asm_.addData(.{ .name = lower_import.marshal_encoding_name, .ty = tn.object, .init = .null_literal });
+        try self.declareScratchIfAbsent(lower_import.marshal_str_ptr_name, tn.int32, .{ .int32 = 0 });
+        try self.declareScratchIfAbsent(lower_import.marshal_str_len_name, tn.int32, .{ .int32 = 0 });
+        try self.declareScratchIfAbsent(lower_import.marshal_str_bytes_name, tn.byte_array, .null_literal);
+        try self.declareScratchIfAbsent(lower_import.marshal_str_tmp_name, tn.string, .null_literal);
+        try self.declareScratchIfAbsent(lower_import.marshal_str_i_name, tn.int32, .{ .int32 = 0 });
+        try self.declareScratchIfAbsent(lower_import.marshal_str_addr_name, tn.int32, .{ .int32 = 0 });
+        try self.declareScratchIfAbsent(lower_import.marshal_str_byte_name, tn.byte, .null_literal);
+        try self.declareScratchIfAbsent(lower_import.marshal_str_cond_name, tn.boolean, .null_literal);
+        try self.declareScratchIfAbsent(lower_import.marshal_encoding_name, tn.object, .null_literal);
 
         // encoding := Encoding.UTF8  (static property getter)
         try self.asm_.comment("cache UTF-8 encoding singleton");
         try self.asm_.push(lower_import.marshal_encoding_name);
         try self.asm_.extern_(lower_import.utf8_property_sig);
+    }
+
+    /// Idempotent counterpart to `asm_.addData`. Used from init paths
+    /// (memory setup, marshal scratch, i64 const materialization) whose
+    /// slots may already exist because `lower_import` declared them on
+    /// demand during earlier function lowering.
+    fn declareScratchIfAbsent(self: *Translator, name: []const u8, ty: tn.TypeName, lit: Literal) Error!void {
+        for (self.asm_.datas.items) |d| {
+            if (std.mem.eql(u8, d.name, name)) return;
+        }
+        try self.asm_.addData(.{ .name = name, .ty = ty, .init = lit });
     }
 
     /// Populate `__fn_table__` with the entry addresses of every indirect
@@ -884,6 +1243,11 @@ const Translator = struct {
                 ((byte_in_page + 4) <= 65536);
 
             // Fetch outer[page] → _mem_chunk whenever the page changes.
+            // No runtime bounds check: data segments are translator-time
+            // known, and `translate()` has already rejected the module if
+            // any segment extends past `max_pages` (outer array size).
+            // Routing this through `emitOuterGetChecked` would be dead
+            // code at runtime.
             if (last_page == null or last_page.? != page) {
                 const page_name = try std.fmt.allocPrint(self.aa(),
                     "__ds_page_{d}_{d}", .{ seg_id, page });
@@ -1019,8 +1383,10 @@ const Translator = struct {
             .depth = 0,
             .max_emitted_depth = 0,
             .blocks = .empty,
+            .stack_types = .empty,
         };
         defer ctx.blocks.deinit(self.gpa);
+        defer ctx.stack_types.deinit(self.gpa);
 
         if (self.shouldSpill(fn_idx)) {
             try self.emitPrologueSpill(&ctx, code);
@@ -1108,9 +1474,9 @@ const Translator = struct {
     }
 
     fn emitFunctionReturn(self: *Translator, ctx: *FuncCtx) Error!void {
-        for (ctx.results, 0..) |_, i| {
+        for (ctx.results, 0..) |vt, i| {
             const src_depth = ctx.depth - @as(u32, @intCast(ctx.results.len)) + @as(u32, @intCast(i));
-            const src = try names.stackSlot(self.aa(), ctx.fn_name, src_depth);
+            const src = try names.stackSlot(self.aa(), ctx.fn_name, src_depth, vt);
             const dst = try names.returnSlot(self.aa(), ctx.fn_name, @intCast(i));
             try self.asm_.push(src);
             try self.asm_.push(dst);
@@ -1144,21 +1510,57 @@ const Translator = struct {
         results: []const ValType,
         locals: []const wasm.module.LocalGroup,
         exit_label: []const u8,
-        /// Current abstract WASM value-stack depth.
+        /// Current abstract WASM value-stack depth. Invariant:
+        /// `depth == stack_types.items.len`.
         depth: u32,
         /// Maximum depth reached (for slot allocation check).
         max_emitted_depth: u32,
         /// Block label stack (innermost last).
         blocks: std.ArrayList(BlockCtx),
+        /// Type of the WASM value currently occupying each stack depth.
+        /// Pushed/popped in lockstep with `depth` so `typeAt(d)` returns
+        /// the exact WASM type at depth `d` — which determines which
+        /// `__{fn}_S{d}_{vt}__` physical slot holds the value.
+        stack_types: std.ArrayList(ValType),
 
-        fn push(self: *FuncCtx) void {
+        fn push(self: *FuncCtx, vt: ValType) Error!void {
+            try self.stack_types.append(self.t.gpa, vt);
             self.depth += 1;
             if (self.depth > self.max_emitted_depth) self.max_emitted_depth = self.depth;
+            try self.t.recordSlotType(self.fn_idx, self.depth - 1, vt);
         }
         fn pop(self: *FuncCtx) void {
-            if (self.depth > 0) self.depth -= 1;
+            if (self.depth > 0) {
+                _ = self.stack_types.pop();
+                self.depth -= 1;
+            }
+        }
+        fn typeAt(self: *const FuncCtx, d: u32) ValType {
+            return self.stack_types.items[d];
+        }
+        fn slotAt(self: *FuncCtx, alloc: std.mem.Allocator, d: u32) Error![]u8 {
+            return names.stackSlot(alloc, self.fn_name, d, self.typeAt(d));
+        }
+        /// Drop the top of the stack down to `new_depth`. Used at `if/else`
+        /// re-entry where the type stack must rewind to the block entry
+        /// state to start the alternative branch.
+        fn truncateStackTo(self: *FuncCtx, new_depth: u32) void {
+            while (self.stack_types.items.len > new_depth) _ = self.stack_types.pop();
+            self.depth = new_depth;
         }
     };
+
+    /// Record that `vt` occupied stack slot `depth` of the defined
+    /// function at `fn_idx`. Builds the per-function bitmask consulted
+    /// by `emitFunctionStackSlots` to declare exactly the typed slots
+    /// that the generated code reads/writes — no more, no less.
+    fn recordSlotType(self: *Translator, fn_idx: u32, depth: u32, vt: ValType) Error!void {
+        if (fn_idx < self.num_imported_funcs) return;
+        const def_idx = fn_idx - self.num_imported_funcs;
+        var bits = &self.fn_slot_type_bits[def_idx];
+        while (bits.items.len <= depth) try bits.append(self.gpa, 0);
+        bits.items[depth] |= slotTypeBit(vt);
+    }
 
     fn emitInstrs(self: *Translator, ctx: *FuncCtx, body: []const Instruction) Error!void {
         for (body) |ins| try self.emitOne(ctx, ins);
@@ -1169,6 +1571,19 @@ const Translator = struct {
         // a - (a/b)*b.
         if (ins == .i64_rem_u) {
             try self.emitI64RemU(ctx);
+            return;
+        }
+        if (ins == .i32_eqz) {
+            try self.emitI32Eqz(ctx);
+            return;
+        }
+        // `i32.wrap_i64` must use bit truncation, not SystemConvert.ToInt32
+        // (which is a checked conversion that throws for values outside
+        // Int32 range). Observed in the wild during an `i64.store` of an
+        // adjacent-field combined value where the high word had a set bit
+        // above Int32.MaxValue.
+        if (ins == .i32_wrap_i64) {
+            try self.emitI32WrapI64(ctx);
             return;
         }
         // Handle numeric ops uniformly via the table.
@@ -1183,21 +1598,15 @@ const Translator = struct {
                 try self.asm_.jumpAddr(0xFFFFFFFC);
             },
             .drop => ctx.pop(),
-            .select => {
-                // Take top = cond, then v2, then v1. Result = cond ? v1 : v2.
-                // Simplest: lower as an if-else over cond on the stack.
-                try self.asm_.comment("select (simplified: unconditional pass-through of v1)");
-                ctx.pop(); // cond
-                ctx.pop(); // v2 (keep v1 on top)
-            },
+            .select => try self.emitSelect(ctx),
             .return_ => {
                 try self.emitFunctionReturn(ctx);
                 try self.asm_.jump(ctx.exit_label);
             },
-            .i32_const => |v| try self.emitConst(ctx, .{ .int32 = v }, tn.int32),
-            .i64_const => try self.emitConst(ctx, Literal.null_literal, tn.int64),
-            .f32_const => |v| try self.emitConst(ctx, .{ .single = v }, tn.single),
-            .f64_const => try self.emitConst(ctx, Literal.null_literal, tn.double),
+            .i32_const => |v| try self.emitConst(ctx, .{ .int32 = v }, tn.int32, .i32),
+            .i64_const => |v| try self.emitI64Const(ctx, v),
+            .f32_const => |v| try self.emitConst(ctx, .{ .single = v }, tn.single, .f32),
+            .f64_const => |v| try self.emitF64Const(ctx, v),
 
             .local_get => |idx| try self.emitLocalGet(ctx, idx),
             .local_set => |idx| try self.emitLocalSet(ctx, idx),
@@ -1241,22 +1650,106 @@ const Translator = struct {
     fn emitNumericOp(self: *Translator, ctx: *FuncCtx, entry: numeric.Entry) Error!void {
         // Arrange `PUSH, lhs; PUSH, rhs; PUSH, dst; EXTERN, sig` for binary,
         // `PUSH, x; PUSH, dst; EXTERN, sig` for unary.
+        //
+        // Udon's heap typing rejects Int32/Int64 slots pushed into UInt32/
+        // UInt64 EXTERN arguments, so when `operand_ty` is unsigned we route
+        // each operand through a BitConverter-backed scratch of the matching
+        // type. The result lands in a matching-type scratch and is converted
+        // back to the Int32/Int64 stack slot that owns the output.
+        //
+        // Boolean-returning comparisons (`op_Equality`, `op_LessThan`, etc.)
+        // likewise cannot use an Int32 stack slot as the EXTERN destination:
+        // Udon rejects such a call with "Cannot retrieve heap variable of
+        // type 'Boolean' as type 'Int32'". The result must land in a
+        // SystemBoolean heap variable (`_cmp_bool`) and then be widened to
+        // Int32 (0 or 1) before it lives on the WASM-visible Int32 stack.
+        const is_u32 = std.meta.eql(entry.operand_ty, tn.uint32);
+        const is_u64 = std.meta.eql(entry.operand_ty, tn.uint64);
+        const is_bool_result = std.meta.eql(entry.result_ty, tn.boolean);
+        // Shift-style ops have `_SystemInt32__<ResultTy>` at the tail of the
+        // signature: the second operand is an Int32 count, not a UInt. Keep
+        // it untouched so the emitted code matches the EXTERN signature.
+        const shift_rhs_is_i32 = std.mem.indexOf(u8, entry.sig, "_SystemInt32__System") != null;
+
         switch (entry.arity) {
             .binary => {
                 const rhs_depth = ctx.depth - 1;
                 const lhs_depth = ctx.depth - 2;
-                const rhs = try names.stackSlot(self.aa(), ctx.fn_name, rhs_depth);
-                const lhs = try names.stackSlot(self.aa(), ctx.fn_name, lhs_depth);
-                // Result overwrites the lhs slot (matches spec_call_return §11.2 pattern).
-                try self.asm_.push(lhs);
-                try self.asm_.push(rhs);
-                try self.asm_.push(lhs);
-                try self.asm_.extern_(entry.sig);
+                const rhs = try ctx.slotAt(self.aa(), rhs_depth);
+                const lhs = try ctx.slotAt(self.aa(), lhs_depth);
+
+                if (is_u32) {
+                    try self.emitI32ToU32(lhs, "_num_lhs_u32");
+                    const rhs_slot = if (shift_rhs_is_i32) rhs else blk: {
+                        try self.emitI32ToU32(rhs, "_num_rhs_u32");
+                        break :blk "_num_rhs_u32";
+                    };
+                    try self.asm_.push("_num_lhs_u32");
+                    try self.asm_.push(rhs_slot);
+                    if (std.meta.eql(entry.result_ty, tn.uint32)) {
+                        try self.asm_.push("_num_res_u32");
+                        try self.asm_.extern_(entry.sig);
+                        try self.emitU32ToI32("_num_res_u32", lhs);
+                    } else if (is_bool_result) {
+                        try self.asm_.push("_cmp_bool");
+                        try self.asm_.extern_(entry.sig);
+                        try self.emitBoolToI32(lhs);
+                    } else {
+                        try self.asm_.push(lhs);
+                        try self.asm_.extern_(entry.sig);
+                    }
+                } else if (is_u64) {
+                    try self.emitI64ToU64(lhs, "_num_lhs_u64");
+                    const rhs_slot = if (shift_rhs_is_i32) blk: {
+                        // WASM i64.shr_u provides an i64 shift count, but the
+                        // Udon EXTERN's second operand is Int32. Narrow through
+                        // the shared scratch.
+                        try self.emitI64ToI32(rhs, "_shift_rhs_i32");
+                        break :blk "_shift_rhs_i32";
+                    } else blk: {
+                        try self.emitI64ToU64(rhs, "_num_rhs_u64");
+                        break :blk "_num_rhs_u64";
+                    };
+                    try self.asm_.push("_num_lhs_u64");
+                    try self.asm_.push(rhs_slot);
+                    if (std.meta.eql(entry.result_ty, tn.uint64)) {
+                        try self.asm_.push("_num_res_u64");
+                        try self.asm_.extern_(entry.sig);
+                        try self.emitU64ToI64("_num_res_u64", lhs);
+                    } else if (is_bool_result) {
+                        try self.asm_.push("_cmp_bool");
+                        try self.asm_.extern_(entry.sig);
+                        try self.emitBoolToI32(lhs);
+                    } else {
+                        try self.asm_.push(lhs);
+                        try self.asm_.extern_(entry.sig);
+                    }
+                } else if (is_bool_result) {
+                    // Signed-int / float comparison producing Boolean.
+                    try self.asm_.push(lhs);
+                    try self.asm_.push(rhs);
+                    try self.asm_.push("_cmp_bool");
+                    try self.asm_.extern_(entry.sig);
+                    try self.emitBoolToI32(lhs);
+                } else {
+                    // Signed / float arithmetic — operands already have the
+                    // right type on the Int32/Int64/Double stack slot, except
+                    // for i64 signed shifts whose EXTERN takes an Int32 count.
+                    const is_i64_operand = std.meta.eql(entry.operand_ty, tn.int64);
+                    const rhs_slot = if (shift_rhs_is_i32 and is_i64_operand) blk: {
+                        try self.emitI64ToI32(rhs, "_shift_rhs_i32");
+                        break :blk "_shift_rhs_i32";
+                    } else rhs;
+                    try self.asm_.push(lhs);
+                    try self.asm_.push(rhs_slot);
+                    try self.asm_.push(lhs);
+                    try self.asm_.extern_(entry.sig);
+                }
                 ctx.pop(); // rhs consumed, lhs slot becomes new top
             },
             .unary => {
                 const d = ctx.depth - 1;
-                const s = try names.stackSlot(self.aa(), ctx.fn_name, d);
+                const s = try ctx.slotAt(self.aa(), d);
                 try self.asm_.push(s);
                 try self.asm_.push(s);
                 try self.asm_.extern_(entry.sig);
@@ -1264,47 +1757,379 @@ const Translator = struct {
         }
     }
 
+    /// Expand `i32.eqz` as `x == 0` over the existing static binary EXTERN
+    /// `SystemInt32.__op_Equality__`. The naive lowering via instance-method
+    /// `Int32.Equals(Int32)` would require a 3-slot push convention that the
+    /// .unary emit path in `emitNumericOp` does not satisfy; that mismatch
+    /// was the cause of the PC 43048 `ArgumentOutOfRangeException` at Udon
+    /// runtime.
+    ///
+    /// The return slot must be `_cmp_bool` (SystemBoolean), not the Int32
+    /// stack slot — Udon type-checks EXTERN destination slots against the
+    /// signature and rejects an Int32 slot for a Boolean-returning op with
+    /// "Cannot retrieve heap variable of type 'Boolean' as type 'Int32'".
+    /// After the comparison we widen Boolean → Int32 back into the stack
+    /// slot so subsequent WASM code sees the expected i32 (0 or 1).
+    fn emitI32Eqz(self: *Translator, ctx: *FuncCtx) Error!void {
+        const s = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        try self.asm_.push(s);
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push("_cmp_bool");
+        try self.asm_.extern_("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean");
+        try self.emitBoolToI32(s);
+    }
+
+    /// WASM `i32.wrap_i64` — take the low 32 bits of an i64 value, no range
+    /// check. Must use BitConverter to preserve the bit pattern: naive
+    /// `SystemConvert.ToInt32(Int64)` is a *checked* conversion that throws
+    /// `OverflowException` whenever the i64 value is outside
+    /// `[Int32.MinValue, Int32.MaxValue]`, which breaks legitimate WASM code
+    /// that stores arbitrary i64 values (e.g. LLVM combining adjacent i32
+    /// fields into a single i64 store before wrapping back down).
+    fn emitI32WrapI64(self: *Translator, ctx: *FuncCtx) Error!void {
+        const src_i64 = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        ctx.pop();
+        try ctx.push(.i32);
+        const dst_i32 = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        try self.asm_.comment("i32.wrap_i64 (bit truncation via BitConverter)");
+        try self.emitI64TruncI32(src_i64, dst_i32);
+    }
+
+    /// WASM `select` (0x1B): pops `(v1, v2, cond)` where `cond` is the top
+    /// of stack (so the on-stack order, bottom→top, is `v1, v2, cond`) and
+    /// pushes `cond ? v1 : v2`. `v1` and `v2` must have the same WASM
+    /// value type (validator-enforced for the unannotated 1.0 form).
+    ///
+    /// Naive "pass-through of v1" lowering silently miscompiles every
+    /// runtime path that expected `v2` — observed in the wild as a
+    /// `page == max_pages` OOB trap inside Zig's compiler-synthesized
+    /// `memcpy` helper, because stdlib pointer-select patterns like
+    /// `dst = cond ? near_ptr : far_ptr` ended up always using `v1`.
+    ///
+    /// Strategy: leave `v1` in its slot when `cond != 0`, else COPY `v2`
+    /// into `v1`'s slot. Both `v1` and `v2` already live at typed stack
+    /// slots `__{fn}_S{depth-3}_{vt}__` / `__{fn}_S{depth-2}_{vt}__`; the
+    /// post-op result slot is the `v1` slot, so no new scratch is needed.
+    fn emitSelect(self: *Translator, ctx: *FuncCtx) Error!void {
+        // WASM validation guarantees v1_type == v2_type; assert on the
+        // cheap side to catch malformed modules early.
+        const v1_type = ctx.typeAt(ctx.depth - 3);
+        const cond_slot = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        const v2_slot = try ctx.slotAt(self.aa(), ctx.depth - 2);
+        const v1_slot = try ctx.slotAt(self.aa(), ctx.depth - 3);
+
+        const id = self.block_counter;
+        self.block_counter += 1;
+        const falsy_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_sel_falsy_{d}__", .{ ctx.fn_name, id });
+        const merge_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_sel_merge_{d}__", .{ ctx.fn_name, id });
+
+        try self.asm_.comment("select: result = cond ? v1 : v2");
+        // _cmp_bool := cond != 0. JUMP_IF_FALSE goes to the v2-copy path.
+        try self.emitI32ToBool(cond_slot);
+        try self.asm_.push("_cmp_bool");
+        try self.asm_.jumpIfFalse(falsy_lbl);
+        // Truthy: result = v1, already in v1_slot. Jump past the v2 copy.
+        try self.asm_.jump(merge_lbl);
+        try self.asm_.label(falsy_lbl);
+        // Falsy: COPY v2 over v1's slot so the post-op top-of-stack name
+        // (still the v1 slot) carries v2's value.
+        try self.asm_.push(v2_slot);
+        try self.asm_.push(v1_slot);
+        try self.asm_.copy();
+        try self.asm_.label(merge_lbl);
+
+        ctx.pop(); // cond
+        ctx.pop(); // v2
+        // v1 stays at `depth - 1` (now the top of stack) and already has
+        // the correct recorded type.
+        _ = v1_type;
+    }
+
+    /// Widen the Boolean currently in `_cmp_bool` to an Int32 (0 or 1) and
+    /// store it into `i32_slot`. Used after every Boolean-returning
+    /// comparison EXTERN so the WASM-visible stack slot carries an Int32
+    /// value, matching the `i32.eq`/`i32.lt`/etc. result type.
+    fn emitBoolToI32(self: *Translator, i32_slot: []const u8) Error!void {
+        try self.asm_.push("_cmp_bool");
+        try self.asm_.push(i32_slot);
+        try self.asm_.extern_("SystemConvert.__ToInt32__SystemBoolean__SystemInt32");
+    }
+
+    /// Narrow an Int32 stack slot (WASM-visible 0/1 or arbitrary non-zero)
+    /// to a SystemBoolean in `_cmp_bool`. Needed ahead of every JUMP_IF_FALSE
+    /// that pops a WASM condition: Udon's JUMP_IF_FALSE requires the
+    /// operand on the VM stack to be typed SystemBoolean, whereas the WASM
+    /// `if` / `br_if` condition is an i32.
+    fn emitI32ToBool(self: *Translator, i32_slot: []const u8) Error!void {
+        try self.asm_.push(i32_slot);
+        try self.asm_.push("_cmp_bool");
+        try self.asm_.extern_("SystemConvert.__ToBoolean__SystemInt32__SystemBoolean");
+    }
+
+    /// Narrow an Int64 stack slot to an Int32 via bit truncation. Used for
+    /// i64 shift counts — WASM's `i64.shl` / `i64.shr_*` push an i64 count,
+    /// but the Udon `__op_LeftShift` / `__op_RightShift` EXTERNs on
+    /// 64-bit types take Int32.
+    ///
+    /// Shift counts are semantically always in `[0, 63]` so `SystemConvert.
+    /// ToInt32(Int64)` *would* work, but using the checked conversion is a
+    /// foot-gun: any future caller passing an out-of-range value would hit
+    /// the same OverflowException that broke `i64.store` / `i32.wrap_i64`.
+    /// Use bit truncation (via `emitI64TruncI32`) for consistency and
+    /// defense-in-depth.
+    fn emitI64ToI32(self: *Translator, i64_slot: []const u8, out_i32_slot: []const u8) Error!void {
+        try self.emitI64TruncI32(i64_slot, out_i32_slot);
+    }
+
     /// Expand `i64.rem_u` as `a - (a / b) * b`. Udon's node list has no
     /// `SystemUInt64.__op_Modulus__` but provides Division/Multiplication/
     /// Subtraction in UInt64, so the 3-EXTERN sequence is the canonical form.
     fn emitI64RemU(self: *Translator, ctx: *FuncCtx) Error!void {
         try self.asm_.comment("i64.rem_u (synthesized: a - (a/b)*b)");
-        const rhs = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
-        const lhs = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 2);
+        const rhs = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        const lhs = try ctx.slotAt(self.aa(), ctx.depth - 2);
+        // Route the Int64 stack slots through BitConverter so the UInt64
+        // EXTERN arguments below receive correctly-typed heap variables.
+        try self.emitI64ToU64(lhs, "_num_lhs_u64");
+        try self.emitI64ToU64(rhs, "_num_rhs_u64");
         // _rem_q_u64 := a / b
-        try self.asm_.push(lhs);
-        try self.asm_.push(rhs);
+        try self.asm_.push("_num_lhs_u64");
+        try self.asm_.push("_num_rhs_u64");
         try self.asm_.push("_rem_q_u64");
         try self.asm_.extern_("SystemUInt64.__op_Division__SystemUInt64_SystemUInt64__SystemUInt64");
         // _rem_qb_u64 := _rem_q_u64 * b
         try self.asm_.push("_rem_q_u64");
-        try self.asm_.push(rhs);
+        try self.asm_.push("_num_rhs_u64");
         try self.asm_.push("_rem_qb_u64");
         try self.asm_.extern_("SystemUInt64.__op_Multiplication__SystemUInt64_SystemUInt64__SystemUInt64");
-        // lhs := a - _rem_qb_u64  (result lands in the lhs slot)
-        try self.asm_.push(lhs);
+        // _num_res_u64 := a - _rem_qb_u64
+        try self.asm_.push("_num_lhs_u64");
         try self.asm_.push("_rem_qb_u64");
-        try self.asm_.push(lhs);
+        try self.asm_.push("_num_res_u64");
         try self.asm_.extern_("SystemUInt64.__op_Subtraction__SystemUInt64_SystemUInt64__SystemUInt64");
+        // lhs (Int64 stack slot) := _num_res_u64
+        try self.emitU64ToI64("_num_res_u64", lhs);
         ctx.pop(); // rhs consumed
     }
 
-    fn emitConst(self: *Translator, ctx: *FuncCtx, lit: Literal, ty: tn.TypeName) Error!void {
+    fn emitConst(self: *Translator, ctx: *FuncCtx, lit: Literal, ty: tn.TypeName, vt: ValType) Error!void {
         const k = self.call_site_counter; // reuse counter for uniqueness
         self.call_site_counter += 1;
         const const_name = try std.fmt.allocPrint(self.aa(), "__K_{d}", .{k});
         try self.asm_.addData(.{ .name = const_name, .ty = ty, .init = lit });
-        ctx.push();
-        const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        try ctx.push(vt);
+        const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
         try self.asm_.push(const_name);
         try self.asm_.push(dst);
         try self.asm_.copy();
     }
 
+    /// WASM `i64.const V`. Udon spec §4.7 forbids non-null literal
+    /// initializers for `SystemInt64` heap variables, so we cannot just
+    /// stash `V` in a data entry the way `i32.const` does. Instead each
+    /// distinct `V` gets a `SystemInt64` target slot whose value is
+    /// synthesized once in `_onEnable` from two `SystemInt32` halves (both
+    /// accept arbitrary literals). Slots are deduplicated by value so
+    /// frequently-used constants (shift counts, error-union tags) pay the
+    /// startup synthesis cost only once, and each `i64.const` site becomes
+    /// a plain COPY from the shared slot to the current stack slot —
+    /// identical in hot-path cost to `i32.const`.
+    ///
+    /// Pre-fix, this path called `emitConst(ctx, null_literal, ...)` which
+    /// silently truncated every i64 constant to 0. The most visible victim
+    /// was `Writer.writeAll`: its slow-path return-value decode uses
+    /// `i64.const 32 i64.shr_u` + `i64.const 0xFFFFFFFF i32.wrap_i64` to
+    /// split an `Error!usize` packed return, so every non-zero error tag
+    /// was misread as a zero-byte successful write and the outer
+    /// `index < bytes.len` loop spun forever.
+    fn emitI64Const(self: *Translator, ctx: *FuncCtx, value: i64) Error!void {
+        try ctx.push(.i64);
+        const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
+
+        // `i64.const 0` is the happy case — `null` initializer already
+        // means `default(Int64) = 0L`, so a single shared slot works and
+        // needs no runtime synthesis.
+        if (value == 0) {
+            const zero_slot = "__K64_zero";
+            if (!self.i64_consts.contains(0)) {
+                try self.asm_.addData(.{ .name = zero_slot, .ty = tn.int64, .init = .null_literal });
+                try self.i64_consts.put(self.gpa, 0, zero_slot);
+            }
+            try self.asm_.push(zero_slot);
+            try self.asm_.push(dst);
+            try self.asm_.copy();
+            return;
+        }
+
+        const slot = if (self.i64_consts.get(value)) |existing| existing else blk: {
+            const k = self.call_site_counter;
+            self.call_site_counter += 1;
+            const name = try std.fmt.allocPrint(self.aa(), "__K64_{d}", .{k});
+            const hi_name = try std.fmt.allocPrint(self.aa(), "__K64_{d}_hi", .{k});
+            const lo_name = try std.fmt.allocPrint(self.aa(), "__K64_{d}_lo", .{k});
+            const bits: u64 = @bitCast(value);
+            const hi_bits: u32 = @truncate(bits >> 32);
+            const lo_bits: u32 = @truncate(bits);
+            try self.asm_.addData(.{ .name = name, .ty = tn.int64, .init = .null_literal });
+            try self.asm_.addData(.{ .name = hi_name, .ty = tn.int32, .init = .{ .int32 = @bitCast(hi_bits) } });
+            try self.asm_.addData(.{ .name = lo_name, .ty = tn.int32, .init = .{ .int32 = @bitCast(lo_bits) } });
+            try self.i64_consts.put(self.gpa, value, name);
+            try self.i64_const_inits.append(self.gpa, .{
+                .slot = name,
+                .hi_slot = hi_name,
+                .lo_slot = lo_name,
+                .bits = bits,
+            });
+            break :blk name;
+        };
+
+        try self.asm_.push(slot);
+        try self.asm_.push(dst);
+        try self.asm_.copy();
+    }
+
+    /// WASM `f64.const V`. Mirrors `emitI64Const` exactly — Udon spec §4.7
+    /// forbids non-null literals for `SystemDouble` for the same reason it
+    /// does for `SystemInt64`, so the synthesis pipeline is identical up
+    /// to the terminal conversion (`BitConverter.ToDouble` vs
+    /// `BitConverter.ToInt64`).
+    ///
+    /// Dedup key is the raw 64-bit pattern (`@as(u64, @bitCast(V))`) not
+    /// the float value: `NaN != NaN` would make an `AutoHashMap(f64, _)`
+    /// lose entries silently, and `+0.0` / `-0.0` compare equal but have
+    /// different bit patterns that WASM's `f64.const` must preserve.
+    fn emitF64Const(self: *Translator, ctx: *FuncCtx, value: f64) Error!void {
+        try ctx.push(.f64);
+        const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
+
+        const bits: u64 = @bitCast(value);
+
+        // `f64.const 0.0` (all bits zero) takes the shared-slot shortcut.
+        // `-0.0` has bit 63 set and falls through to the synthesis path.
+        if (bits == 0) {
+            const zero_slot = "__K64f_zero";
+            if (!self.f64_consts.contains(0)) {
+                try self.asm_.addData(.{ .name = zero_slot, .ty = tn.double, .init = .null_literal });
+                try self.f64_consts.put(self.gpa, 0, zero_slot);
+            }
+            try self.asm_.push(zero_slot);
+            try self.asm_.push(dst);
+            try self.asm_.copy();
+            return;
+        }
+
+        const slot = if (self.f64_consts.get(bits)) |existing| existing else blk: {
+            const k = self.call_site_counter;
+            self.call_site_counter += 1;
+            const name = try std.fmt.allocPrint(self.aa(), "__K64f_{d}", .{k});
+            const hi_name = try std.fmt.allocPrint(self.aa(), "__K64f_{d}_hi", .{k});
+            const lo_name = try std.fmt.allocPrint(self.aa(), "__K64f_{d}_lo", .{k});
+            const hi_bits: u32 = @truncate(bits >> 32);
+            const lo_bits: u32 = @truncate(bits);
+            try self.asm_.addData(.{ .name = name, .ty = tn.double, .init = .null_literal });
+            try self.asm_.addData(.{ .name = hi_name, .ty = tn.int32, .init = .{ .int32 = @bitCast(hi_bits) } });
+            try self.asm_.addData(.{ .name = lo_name, .ty = tn.int32, .init = .{ .int32 = @bitCast(lo_bits) } });
+            try self.f64_consts.put(self.gpa, bits, name);
+            try self.f64_const_inits.append(self.gpa, .{
+                .slot = name,
+                .hi_slot = hi_name,
+                .lo_slot = lo_name,
+                .bits = bits,
+            });
+            break :blk name;
+        };
+
+        try self.asm_.push(slot);
+        try self.asm_.push(dst);
+        try self.asm_.copy();
+    }
+
+    /// Emit startup synthesis for every i64 and f64 constant registered
+    /// during lowering. Called from `_onEnable` before any event body runs
+    /// so every `i64.const` / `f64.const` slot is fully initialized by the
+    /// time user code reads it.
+    ///
+    /// For each `(slot, hi_slot, lo_slot)` triple, compute the UInt64
+    /// bit pattern `(UInt64) hi_u32 << 32 | (UInt64) lo_u32` in
+    /// `_num_res_u64`, then run the type-specific terminal conversion.
+    /// The shared `_num_*` u32/u64 scratch slots are re-used for every
+    /// intermediate so we don't grow the data section with per-constant
+    /// temporaries.
+    fn emit64BitConstInits(self: *Translator) Error!void {
+        const i64_empty = self.i64_const_inits.items.len == 0;
+        const f64_empty = self.f64_const_inits.items.len == 0;
+        if (i64_empty and f64_empty) return;
+        try self.asm_.comment("64-bit constant slot init (Udon spec §4.7 forbids non-null Int64/Double literals)");
+        for (self.i64_const_inits.items) |entry| {
+            try self.emitSynthesize64BitBits(entry);
+            // slot := (Int64) _num_res_u64   (bit pattern via BitConverter)
+            try self.asm_.push("_num_res_u64");
+            try self.asm_.push("_mem_bits_ba");
+            try self.asm_.extern_("SystemBitConverter.__GetBytes__SystemUInt64__SystemByteArray");
+            try self.asm_.push("_mem_bits_ba");
+            try self.asm_.push("__c_i32_0");
+            try self.asm_.push(entry.slot);
+            try self.asm_.extern_("SystemBitConverter.__ToInt64__SystemByteArray_SystemInt32__SystemInt64");
+        }
+        for (self.f64_const_inits.items) |entry| {
+            try self.emitSynthesize64BitBits(entry);
+            // slot := (Double) _num_res_u64  (bit pattern via BitConverter)
+            try self.asm_.push("_num_res_u64");
+            try self.asm_.push("_mem_bits_ba");
+            try self.asm_.extern_("SystemBitConverter.__GetBytes__SystemUInt64__SystemByteArray");
+            try self.asm_.push("_mem_bits_ba");
+            try self.asm_.push("__c_i32_0");
+            try self.asm_.push(entry.slot);
+            try self.asm_.extern_("SystemBitConverter.__ToDouble__SystemByteArray_SystemInt32__SystemDouble");
+        }
+    }
+
+    /// Shared helper used by `emit64BitConstInits`: takes a `Const64Init`
+    /// and emits the ops that leave `(UInt64)(hi << 32) | (UInt64) lo` in
+    /// `_num_res_u64`. The caller converts from there into an Int64 or
+    /// Double slot via one more BitConverter EXTERN.
+    fn emitSynthesize64BitBits(self: *Translator, entry: Const64Init) Error!void {
+        // hi_u32 := (UInt32) hi_i32   (bit pattern via BitConverter)
+        try self.asm_.push(entry.hi_slot);
+        try self.asm_.push("_mem_bits_ba");
+        try self.asm_.extern_("SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray");
+        try self.asm_.push("_mem_bits_ba");
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push("_num_lhs_u32");
+        try self.asm_.extern_("SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32");
+        // hi_u64 := (UInt64) hi_u32   (zero-extend)
+        try self.asm_.push("_num_lhs_u32");
+        try self.asm_.push("_num_lhs_u64");
+        try self.asm_.extern_("SystemConvert.__ToUInt64__SystemUInt32__SystemUInt64");
+        // hi_u64_shifted := hi_u64 << 32   (into _num_res_u64)
+        try self.asm_.push("_num_lhs_u64");
+        try self.asm_.push("__c_i32_32");
+        try self.asm_.push("_num_res_u64");
+        try self.asm_.extern_("SystemUInt64.__op_LeftShift__SystemUInt64_SystemInt32__SystemUInt64");
+        // lo_u32 := (UInt32) lo_i32   (bit pattern via BitConverter)
+        try self.asm_.push(entry.lo_slot);
+        try self.asm_.push("_mem_bits_ba");
+        try self.asm_.extern_("SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray");
+        try self.asm_.push("_mem_bits_ba");
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push("_num_rhs_u32");
+        try self.asm_.extern_("SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32");
+        // lo_u64 := (UInt64) lo_u32
+        try self.asm_.push("_num_rhs_u32");
+        try self.asm_.push("_num_rhs_u64");
+        try self.asm_.extern_("SystemConvert.__ToUInt64__SystemUInt32__SystemUInt64");
+        // _num_res_u64 := hi_u64_shifted | lo_u64
+        try self.asm_.push("_num_res_u64");
+        try self.asm_.push("_num_rhs_u64");
+        try self.asm_.push("_num_res_u64");
+        try self.asm_.extern_("SystemUInt64.__op_LogicalOr__SystemUInt64_SystemUInt64__SystemUInt64");
+    }
+
     fn emitLocalGet(self: *Translator, ctx: *FuncCtx, idx: u32) Error!void {
         const src = try self.localOrParamName(ctx, idx);
-        ctx.push();
-        const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const vt = self.localOrParamType(ctx, idx);
+        try ctx.push(vt);
+        const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
         try self.asm_.push(src);
         try self.asm_.push(dst);
         try self.asm_.copy();
@@ -1312,7 +2137,7 @@ const Translator = struct {
 
     fn emitLocalSet(self: *Translator, ctx: *FuncCtx, idx: u32) Error!void {
         const dst = try self.localOrParamName(ctx, idx);
-        const src = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const src = try ctx.slotAt(self.aa(), ctx.depth - 1);
         try self.asm_.push(src);
         try self.asm_.push(dst);
         try self.asm_.copy();
@@ -1322,7 +2147,7 @@ const Translator = struct {
     fn emitLocalTee(self: *Translator, ctx: *FuncCtx, idx: u32) Error!void {
         // tee is set + leave value on stack — do the set but don't pop.
         const dst = try self.localOrParamName(ctx, idx);
-        const src = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const src = try ctx.slotAt(self.aa(), ctx.depth - 1);
         try self.asm_.push(src);
         try self.asm_.push(dst);
         try self.asm_.copy();
@@ -1330,8 +2155,9 @@ const Translator = struct {
 
     fn emitGlobalGet(self: *Translator, ctx: *FuncCtx, idx: u32) Error!void {
         const src = self.global_udon_names[idx];
-        ctx.push();
-        const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const vt = self.globalValType(idx);
+        try ctx.push(vt);
+        const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
         try self.asm_.push(src);
         try self.asm_.push(dst);
         try self.asm_.copy();
@@ -1339,7 +2165,7 @@ const Translator = struct {
 
     fn emitGlobalSet(self: *Translator, ctx: *FuncCtx, idx: u32) Error!void {
         const dst = self.global_udon_names[idx];
-        const src = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const src = try ctx.slotAt(self.aa(), ctx.depth - 1);
         try self.asm_.push(src);
         try self.asm_.push(dst);
         try self.asm_.copy();
@@ -1350,6 +2176,35 @@ const Translator = struct {
         const nparams: u32 = @intCast(ctx.params.len);
         if (idx < nparams) return try names.param(self.aa(), ctx.fn_name, idx);
         return try names.local(self.aa(), ctx.fn_name, idx - nparams);
+    }
+
+    fn localOrParamType(_: *Translator, ctx: *FuncCtx, idx: u32) ValType {
+        const nparams: u32 = @intCast(ctx.params.len);
+        if (idx < nparams) return ctx.params[idx];
+        var li: u32 = nparams;
+        for (ctx.locals) |lg| {
+            const end = li + lg.count;
+            if (idx < end) return lg.ty;
+            li = end;
+        }
+        unreachable;
+    }
+
+    fn globalValType(self: *Translator, idx: u32) ValType {
+        // Imported globals come first in the flat index space; their types
+        // are attached to the import descriptor.
+        if (idx < self.num_imported_globals) {
+            var seen: u32 = 0;
+            for (self.mod.imports) |imp| switch (imp.desc) {
+                .global => |gt| {
+                    if (seen == idx) return gt.valtype;
+                    seen += 1;
+                },
+                else => {},
+            };
+            unreachable;
+        }
+        return self.mod.globals[idx - self.num_imported_globals].ty.valtype;
     }
 
     // ---- control flow ----
@@ -1387,10 +2242,13 @@ const Translator = struct {
         const else_lbl = try names.ifElseLabel(self.aa(), ctx.fn_name, id);
         const end_lbl = try names.ifEndLabel(self.aa(), ctx.fn_name, id);
 
-        // Top of stack is the condition (i32 non-zero → true).
-        const cond = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        // Top of stack is the condition (i32 non-zero → true). Udon's
+        // JUMP_IF_FALSE strictly wants a SystemBoolean operand, so widen
+        // the Int32 stack slot via SystemConvert first.
+        const cond = try ctx.slotAt(self.aa(), ctx.depth - 1);
         ctx.pop();
-        try self.asm_.push(cond);
+        try self.emitI32ToBool(cond);
+        try self.asm_.push("_cmp_bool");
         try self.asm_.jumpIfFalse(else_lbl);
         // then
         const arity = blockResultArity(b.bt);
@@ -1407,7 +2265,7 @@ const Translator = struct {
         try self.asm_.jump(end_lbl);
         try self.asm_.label(else_lbl);
         if (b.else_body) |eb| {
-            ctx.depth = block_ctx.depth_at_entry; // reset for else branch
+            ctx.truncateStackTo(block_ctx.depth_at_entry); // reset for else branch
             const block_ctx_else: BlockCtx = .{
                 .kind = .if_else,
                 .br_label = end_lbl,
@@ -1437,11 +2295,12 @@ const Translator = struct {
         };
         // Pop cond; if true → jump to target. Udon only has JUMP_IF_FALSE,
         // so branch over a JUMP_IF_FALSE.
-        const cond = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const cond = try ctx.slotAt(self.aa(), ctx.depth - 1);
         ctx.pop();
         const skip_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_BIS{d}__", .{ ctx.fn_name, self.block_counter });
         self.block_counter += 1;
-        try self.asm_.push(cond);
+        try self.emitI32ToBool(cond);
+        try self.asm_.push("_cmp_bool");
         try self.asm_.jumpIfFalse(skip_lbl);
         try self.asm_.jump(target);
         try self.asm_.label(skip_lbl);
@@ -1450,7 +2309,7 @@ const Translator = struct {
     fn emitBrTable(self: *Translator, ctx: *FuncCtx, bt: wasm.instruction.BrTable) Error!void {
         // Pop the index. For each label in `labels`, emit a comparison
         // against its index; if equal, jump. Otherwise jump to `default`.
-        const idx = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const idx = try ctx.slotAt(self.aa(), ctx.depth - 1);
         ctx.pop();
         for (bt.labels, 0..) |lbl, i| {
             const target = self.resolveBrTarget(ctx, lbl) catch continue;
@@ -1497,7 +2356,7 @@ const Translator = struct {
         var i: u32 = 0;
         while (i < n_args) : (i += 1) {
             const src_depth = ctx.depth - n_args + i;
-            const src = try names.stackSlot(self.aa(), ctx.fn_name, src_depth);
+            const src = try ctx.slotAt(self.aa(), src_depth);
             const dst = try names.param(self.aa(), callee_name, i);
             try self.asm_.push(src);
             try self.asm_.push(dst);
@@ -1527,9 +2386,9 @@ const Translator = struct {
         const n_res: u32 = @intCast(callee_ty.results.len);
         var r: u32 = 0;
         while (r < n_res) : (r += 1) {
-            ctx.push();
+            try ctx.push(callee_ty.results[r]);
             const src = try names.returnSlot(self.aa(), callee_name, r);
-            const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+            const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
             try self.asm_.push(src);
             try self.asm_.push(dst);
             try self.asm_.copy();
@@ -1561,7 +2420,7 @@ const Translator = struct {
         try self.asm_.comment("call_indirect");
 
         // (a) Fetch table[idx] → __indirect_target__.
-        const idx_slot = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const idx_slot = try ctx.slotAt(self.aa(), ctx.depth - 1);
         ctx.pop();
         try self.asm_.push("__fn_table__");
         try self.asm_.push(idx_slot);
@@ -1572,7 +2431,7 @@ const Translator = struct {
         var i: u32 = 0;
         while (i < n_args) : (i += 1) {
             const src_depth = ctx.depth - n_args + i;
-            const src = try names.stackSlot(self.aa(), ctx.fn_name, src_depth);
+            const src = try ctx.slotAt(self.aa(), src_depth);
             const dst = try std.fmt.allocPrint(self.aa(), "__ind_P{d}__", .{i});
             try self.asm_.push(src);
             try self.asm_.push(dst);
@@ -1599,9 +2458,9 @@ const Translator = struct {
         // (e) Copy shared __ind_R* back into caller S slots.
         var r: u32 = 0;
         while (r < n_res) : (r += 1) {
-            ctx.push();
+            try ctx.push(ty.results[r]);
             const src = try std.fmt.allocPrint(self.aa(), "__ind_R{d}__", .{r});
-            const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+            const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
             try self.asm_.push(src);
             try self.asm_.push(dst);
             try self.asm_.copy();
@@ -1684,7 +2543,7 @@ const Translator = struct {
                             // Recover by consuming whatever the WASM type said.
                             var i: u32 = 0;
                             while (i < imp_ty.params.len) : (i += 1) ctx.pop();
-                            for (imp_ty.results) |_| ctx.push();
+                            for (imp_ty.results) |vt| try ctx.push(vt);
                         },
                         error.OutOfMemory => return error.OutOfMemory,
                     };
@@ -1699,8 +2558,8 @@ const Translator = struct {
     // ---- memory ----
 
     fn emitMemorySize(self: *Translator, ctx: *FuncCtx) Error!void {
-        ctx.push();
-        const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        try ctx.push(.i32);
+        const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
         try self.asm_.push(self.memory_size_pages_name);
         try self.asm_.push(dst);
         try self.asm_.copy();
@@ -1716,10 +2575,10 @@ const Translator = struct {
         const alloc_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mg_alloc_{d}__", .{ ctx.fn_name, id });
 
         // delta on top of stack
-        const delta = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const delta = try ctx.slotAt(self.aa(), ctx.depth - 1);
         ctx.pop();
-        ctx.push();
-        const result = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        try ctx.push(.i32);
+        const result = try ctx.slotAt(self.aa(), ctx.depth - 1);
 
         // _mg_old = __G__memory_size_pages
         try self.asm_.push(self.memory_size_pages_name);
@@ -1822,9 +2681,81 @@ const Translator = struct {
         return "_mem_eff_addr";
     }
 
+    /// Bit-pattern-preserving Int32 → UInt32: `out := BitConverter.ToUInt32(
+    /// BitConverter.GetBytes(val), 0)`. Safe for any i32 including
+    /// high-bit-set values that `SystemConvert.ToUInt32` would reject.
+    fn emitI32ToU32(self: *Translator, val: []const u8, out_u32: []const u8) Error!void {
+        try self.asm_.push(val);
+        try self.asm_.push("_mem_bits_ba");
+        try self.asm_.extern_("SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray");
+        try self.asm_.push("_mem_bits_ba");
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push(out_u32);
+        try self.asm_.extern_("SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32");
+    }
+
+    /// Inverse of `emitI32ToU32`: UInt32 → Int32 without overflow checks.
+    fn emitU32ToI32(self: *Translator, val: []const u8, out_i32: []const u8) Error!void {
+        try self.asm_.push(val);
+        try self.asm_.push("_mem_bits_ba");
+        try self.asm_.extern_("SystemBitConverter.__GetBytes__SystemUInt32__SystemByteArray");
+        try self.asm_.push("_mem_bits_ba");
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push(out_i32);
+        try self.asm_.extern_("SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32");
+    }
+
+    /// Int64 → UInt64 bit-pattern-preserving conversion.
+    fn emitI64ToU64(self: *Translator, val: []const u8, out_u64: []const u8) Error!void {
+        try self.asm_.push(val);
+        try self.asm_.push("_mem_bits_ba");
+        try self.asm_.extern_("SystemBitConverter.__GetBytes__SystemInt64__SystemByteArray");
+        try self.asm_.push("_mem_bits_ba");
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push(out_u64);
+        try self.asm_.extern_("SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64");
+    }
+
+    /// UInt64 → Int64 bit-pattern-preserving conversion.
+    fn emitU64ToI64(self: *Translator, val: []const u8, out_i64: []const u8) Error!void {
+        try self.asm_.push(val);
+        try self.asm_.push("_mem_bits_ba");
+        try self.asm_.extern_("SystemBitConverter.__GetBytes__SystemUInt64__SystemByteArray");
+        try self.asm_.push("_mem_bits_ba");
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push(out_i64);
+        try self.asm_.extern_("SystemBitConverter.__ToInt64__SystemByteArray_SystemInt32__SystemInt64");
+    }
+
+    /// Int64 → Int32 truncation matching WASM `i32.wrap_i64` semantics: take
+    /// the low 32 bits of the i64 value without any range check. `SystemConvert.
+    /// ToInt32(Int64)` is a *checked* conversion that throws OverflowException
+    /// for values outside [Int32.MinValue, Int32.MaxValue] — so using it for
+    /// `i32.wrap_i64` (or for splitting an i64 into hi/lo for i64.store) fails
+    /// at runtime whenever the stored value has any bit set above the sign bit
+    /// of Int32. This was observed in the wild during `i64.store` of a struct
+    /// with adjacent `buffer.len` (@8) + `end` (@12) fields, where LLVM
+    /// combined them into a single 8-byte store. The packed i64 value could be
+    /// e.g. `0x0000_0200_xxxx_xxxx` (buffer.len=512 in the high word, ptr in
+    /// low), which is > Int32.MaxValue and triggered the EXTERN exception.
+    ///
+    /// Use `BitConverter.GetBytes(i64)` (produces 8-byte little-endian array)
+    /// then `BitConverter.ToInt32(bytes, 0)` (reads bytes 0..3 as Int32) to
+    /// get the low 32 bits as a signed Int32 — this is pure bit truncation and
+    /// matches WASM semantics exactly.
+    fn emitI64TruncI32(self: *Translator, val: []const u8, out_i32: []const u8) Error!void {
+        try self.asm_.push(val);
+        try self.asm_.push("_mem_bits_ba");
+        try self.asm_.extern_("SystemBitConverter.__GetBytes__SystemInt64__SystemByteArray");
+        try self.asm_.push("_mem_bits_ba");
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push(out_i32);
+        try self.asm_.extern_("SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32");
+    }
+
     fn emitMemLoadWord(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
         const memarg = ins.i32_load;
-        const raw_addr = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const raw_addr = try ctx.slotAt(self.aa(), ctx.depth - 1);
         const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
         if (memarg.@"align" >= 2) {
             return self.emitMemLoadWordFast(ctx, addr_slot);
@@ -1849,18 +2780,17 @@ const Translator = struct {
         try self.asm_.push("__c_i32_2");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
-        // outer[page_idx] → _mem_chunk
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_page_idx");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
-        // chunk[word_in_page] → dst
-        ctx.push();
-        const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        // outer[page_idx] → _mem_chunk (bounds-checked)
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.load", "primary");
+        try self.emitOuterGetChecked("_mem_page_idx");
+        // chunk[word_in_page] → UInt32 scratch; then convert to Int32 dst.
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
-        try self.asm_.push(dst);
+        try self.asm_.push("_mem_val_u32_buf");
         try self.asm_.extern_("SystemUInt32Array.__Get__SystemInt32__SystemUInt32");
+        try ctx.push(.i32);
+        const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        try self.emitU32ToI32("_mem_val_u32_buf", dst);
     }
 
     /// Generic i32.load that handles unaligned access and page-straddle.
@@ -1877,8 +2807,8 @@ const Translator = struct {
         const end_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mlw_end_{d}__", .{ ctx.fn_name, id });
 
         ctx.pop();
-        ctx.push();
-        const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        try ctx.push(.i32);
+        const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
 
         // Decompose address.
         // sub := addr & 3
@@ -1930,11 +2860,9 @@ const Translator = struct {
 
         // Fall-through: unaligned within chunk.
         try self.asm_.label(slow_lbl);
-        // chunk := outer[page_idx]
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_page_idx");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // chunk := outer[page_idx] (bounds-checked)
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.load", "slow");
+        try self.emitOuterGetChecked("_mem_page_idx");
         // lo := chunk[word_in_page]
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
@@ -1954,11 +2882,9 @@ const Translator = struct {
 
         // Straddle branch.
         try self.asm_.label(straddle_lbl);
-        // lo_chunk := outer[page_idx]
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_page_idx");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // lo_chunk := outer[page_idx] (bounds-checked)
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.load", "straddle_lo");
+        try self.emitOuterGetChecked("_mem_page_idx");
         // lo := lo_chunk[16383]
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("__c_i32_16383");
@@ -1969,11 +2895,9 @@ const Translator = struct {
         try self.asm_.push("__c_i32_1");
         try self.asm_.push("_mem_word_in_page_hi");
         try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        // hi_chunk := outer[page_idx + 1]
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_word_in_page_hi");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // hi_chunk := outer[page_idx + 1] (bounds-checked inside helper)
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.load", "straddle_hi");
+        try self.emitOuterGetChecked("_mem_word_in_page_hi");
         // hi := hi_chunk[0]
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("__c_i32_0");
@@ -1983,14 +2907,13 @@ const Translator = struct {
 
         // Fast branch.
         try self.asm_.label(fast_lbl);
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_page_idx");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.load", "fast");
+        try self.emitOuterGetChecked("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
-        try self.asm_.push(dst);
+        try self.asm_.push("_mem_val_u32_buf");
         try self.asm_.extern_("SystemUInt32Array.__Get__SystemInt32__SystemUInt32");
+        try self.emitU32ToI32("_mem_val_u32_buf", dst);
 
         try self.asm_.label(end_lbl);
     }
@@ -2018,26 +2941,32 @@ const Translator = struct {
         try self.asm_.push("_mlw_rshift");
         try self.asm_.push("_mem_u32_shifted");
         try self.asm_.extern_("SystemUInt32.__op_LeftShift__SystemUInt32_SystemInt32__SystemUInt32");
-        // dst := tmp | hi_shifted
+        // tmp | hi_shifted goes into UInt32 scratch, then convert to Int32 dst.
         try self.asm_.push("_mlw_tmp");
         try self.asm_.push("_mem_u32_shifted");
-        try self.asm_.push(dst);
+        try self.asm_.push("_mem_val_u32_buf");
         try self.asm_.extern_("SystemUInt32.__op_LogicalOr__SystemUInt32_SystemUInt32__SystemUInt32");
+        try self.emitU32ToI32("_mem_val_u32_buf", dst);
         try self.asm_.jump(end_lbl);
     }
 
     fn emitMemStoreWord(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
         const memarg = ins.i32_store;
-        const val = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const val = try ctx.slotAt(self.aa(), ctx.depth - 1);
         ctx.pop();
-        const raw_addr = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const raw_addr = try ctx.slotAt(self.aa(), ctx.depth - 1);
         // Offset must be applied *before* we pop the address slot, since
         // the downstream fast/generic helpers pop it themselves.
         const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
+        // Convert the Int32 stack slot to the UInt32 bit pattern the inner
+        // SystemUInt32Array and all SystemUInt32 ops expect. Using
+        // `SystemBitConverter` (not `SystemConvert`) avoids OverflowException
+        // for high-bit-set values like 0xDEADBEEF.
+        try self.emitI32ToU32(val, "_mem_val_u32_buf");
         if (memarg.@"align" >= 2) {
-            return self.emitMemStoreWordFast(ctx, addr_slot, val);
+            return self.emitMemStoreWordFast(ctx, addr_slot, "_mem_val_u32_buf");
         }
-        return self.emitMemStoreWordGeneric(ctx, addr_slot, val);
+        return self.emitMemStoreWordGeneric(ctx, addr_slot, "_mem_val_u32_buf");
     }
 
     fn emitMemStoreWordFast(self: *Translator, ctx: *FuncCtx, addr_slot: []const u8, val: []const u8) Error!void {
@@ -2055,10 +2984,8 @@ const Translator = struct {
         try self.asm_.push("__c_i32_2");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_page_idx");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.store", "primary");
+        try self.emitOuterGetChecked("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.push(val);
@@ -2119,10 +3046,8 @@ const Translator = struct {
 
         // Unaligned within-chunk: read both words from same chunk.
         try self.asm_.label(slow_lbl);
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_page_idx");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.store", "slow");
+        try self.emitOuterGetChecked("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.push("_mlw_lo");
@@ -2151,11 +3076,9 @@ const Translator = struct {
 
         // Straddle: read lo from current chunk[16383], hi from next chunk[0].
         try self.asm_.label(straddle_lbl);
-        // lo_chunk := outer[page_idx]  (store in _mem_chunk temporarily, but we need both)
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_page_idx");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // lo_chunk := outer[page_idx] (bounds-checked)
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.store", "straddle_lo");
+        try self.emitOuterGetChecked("_mem_page_idx");
         // lo := lo_chunk[16383]
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("__c_i32_16383");
@@ -2168,12 +3091,11 @@ const Translator = struct {
         try self.asm_.push("__c_i32_1");
         try self.asm_.push("_mem_word_in_page_hi");
         try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        // Stash lo_chunk elsewhere: we have only one _mem_chunk slot; emit another fetch later.
-        // hi_chunk := outer[page_idx + 1]
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_word_in_page_hi");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // hi_chunk := outer[page_idx + 1] (bounds-checked inside helper —
+        // the page_idx_hi slot is mirrored into _mem_page_idx so the trap
+        // message reflects the high page that tripped the check)
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.store", "straddle_hi");
+        try self.emitOuterGetChecked("_mem_word_in_page_hi");
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("__c_i32_0");
         try self.asm_.push("_mlw_hi");
@@ -2185,11 +3107,11 @@ const Translator = struct {
         try self.asm_.push("__c_i32_0");
         try self.asm_.push("_msw_hi_out");
         try self.asm_.extern_("SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid");
-        // Re-fetch lo_chunk := outer[page_idx] and write lo_out[16383].
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_page_idx");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // Re-fetch lo_chunk := outer[page_idx] (page_idx is still valid,
+        // and emitOuterGetChecked re-verifies just in case) and write
+        // lo_out[16383].
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.store", "straddle_lo_writeback");
+        try self.emitOuterGetChecked("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("__c_i32_16383");
         try self.asm_.push("_msw_lo_out");
@@ -2198,10 +3120,8 @@ const Translator = struct {
 
         // Fast branch.
         try self.asm_.label(fast_lbl);
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_page_idx");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.store", "fast");
+        try self.emitOuterGetChecked("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.push(val);
@@ -2279,7 +3199,12 @@ const Translator = struct {
     /// Shared preamble for byte-level memory accesses: computes
     /// `_mem_page_idx`, `_mem_word_in_page`, `_mem_sub`, `_mem_shift` and
     /// populates `_mem_chunk` / `_mem_u32` from the given address slot.
-    fn emitByteAccessPreamble(self: *Translator, addr_slot: []const u8) Error!void {
+    fn emitByteAccessPreamble(
+        self: *Translator,
+        addr_slot: []const u8,
+        site_fn_name: []const u8,
+        site_op_tag: []const u8,
+    ) Error!void {
         // page_idx := addr >> 16
         try self.asm_.push(addr_slot);
         try self.asm_.push("__c_i32_16");
@@ -2304,11 +3229,10 @@ const Translator = struct {
         try self.asm_.push("__c_i32_3");
         try self.asm_.push("_mem_shift");
         try self.asm_.extern_("SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32");
-        // _mem_chunk := __G__memory[page_idx]
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_page_idx");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // _mem_chunk := __G__memory[page_idx] (bounds-checked — this is
+        // the crash site PC 221880 used to land in before the check)
+        try self.recordMemOpSite(site_fn_name, addr_slot, site_op_tag, "primary");
+        try self.emitOuterGetChecked("_mem_page_idx");
         // _mem_u32 := _mem_chunk[word_in_page]
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
@@ -2322,7 +3246,7 @@ const Translator = struct {
     /// `SystemConvert.__ToByte__SystemInt32__SystemByte`. Used by the
     /// host-import string marshaller.
     fn emitReadMemoryByte(self: *Translator, addr_slot: []const u8, out_slot: []const u8) Error!void {
-        try self.emitByteAccessPreamble(addr_slot);
+        try self.emitByteAccessPreamble(addr_slot, "__marshal__", "host_import.read_byte");
         // _mem_u32_shifted := _mem_u32 >> shift
         try self.asm_.push("_mem_u32");
         try self.asm_.push("_mem_shift");
@@ -2350,7 +3274,7 @@ const Translator = struct {
             else => false,
         };
         try self.asm_.comment(if (signed) "i32.load8_s" else "i32.load8_u");
-        const raw_addr = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const raw_addr = try ctx.slotAt(self.aa(), ctx.depth - 1);
         const memarg = switch (ins) {
             .i32_load8_u => |m| m,
             .i32_load8_s => |m| m,
@@ -2359,7 +3283,8 @@ const Translator = struct {
         const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
         ctx.pop();
 
-        try self.emitByteAccessPreamble(addr_slot);
+        const load_tag: []const u8 = if (signed) "i32.load8_s" else "i32.load8_u";
+        try self.emitByteAccessPreamble(addr_slot, ctx.fn_name, load_tag);
 
         // _mem_u32_shifted := _mem_u32 >> shift (unsigned)
         try self.asm_.push("_mem_u32");
@@ -2367,14 +3292,15 @@ const Translator = struct {
         try self.asm_.push("_mem_u32_shifted");
         try self.asm_.extern_("SystemUInt32.__op_RightShift__SystemUInt32_SystemInt32__SystemUInt32");
 
-        ctx.push();
-        const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        try ctx.push(.i32);
+        const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
 
-        // dst := _mem_u32_shifted & 0xFF
+        // masked := _mem_u32_shifted & 0xFF   (UInt32), then convert to Int32 dst.
         try self.asm_.push("_mem_u32_shifted");
         try self.asm_.push("__c_u32_0xFF");
-        try self.asm_.push(dst);
+        try self.asm_.push("_mem_val_u32_buf");
         try self.asm_.extern_("SystemUInt32.__op_LogicalAnd__SystemUInt32_SystemUInt32__SystemUInt32");
+        try self.emitU32ToI32("_mem_val_u32_buf", dst);
 
         if (signed) {
             // Sign-extend 8-bit → 32-bit: (dst << 24) >> 24 arithmetically.
@@ -2392,13 +3318,17 @@ const Translator = struct {
     fn emitMemStoreByte(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
         try self.asm_.comment("i32.store8");
         const memarg = ins.i32_store8;
-        const val = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const val_i32 = try ctx.slotAt(self.aa(), ctx.depth - 1);
         ctx.pop();
-        const raw_addr = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const raw_addr = try ctx.slotAt(self.aa(), ctx.depth - 1);
         const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
         ctx.pop();
 
-        try self.emitByteAccessPreamble(addr_slot);
+        // UInt32 bit-pattern of val for the RMW.
+        try self.emitI32ToU32(val_i32, "_mem_val_u32_buf");
+        const val = "_mem_val_u32_buf";
+
+        try self.emitByteAccessPreamble(addr_slot, ctx.fn_name, "i32.store8");
 
         // _mem_mask_lo := 0xFF << shift (unsigned)
         try self.asm_.push("__c_u32_0xFF");
@@ -2447,13 +3377,16 @@ const Translator = struct {
     fn emitMemStore16(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
         try self.asm_.comment("i32.store16");
         const memarg = ins.i32_store16;
-        const val = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const val_i32 = try ctx.slotAt(self.aa(), ctx.depth - 1);
         ctx.pop();
-        const raw_addr = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const raw_addr = try ctx.slotAt(self.aa(), ctx.depth - 1);
         const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
         ctx.pop();
 
-        try self.emitByteAccessPreamble(addr_slot);
+        try self.emitI32ToU32(val_i32, "_mem_val_u32_buf");
+        const val = "_mem_val_u32_buf";
+
+        try self.emitByteAccessPreamble(addr_slot, ctx.fn_name, "i32.store16");
 
         // _mem_mask_lo := 0xFFFF << shift
         try self.asm_.push("__c_u32_0xFFFF_32");
@@ -2502,7 +3435,7 @@ const Translator = struct {
     fn emitMemLoadI64(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
         try self.asm_.comment("i64.load (with runtime page-straddle dispatch)");
         const memarg = ins.i64_load;
-        const raw_addr = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const raw_addr = try ctx.slotAt(self.aa(), ctx.depth - 1);
         const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
         ctx.pop();
 
@@ -2527,11 +3460,9 @@ const Translator = struct {
         try self.asm_.push("__c_i32_2");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
-        // _mem_chunk := outer[page_idx]
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_page_idx");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // _mem_chunk := outer[page_idx] (bounds-checked)
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i64.load", "primary");
+        try self.emitOuterGetChecked("_mem_page_idx");
         // _mem_u32 := _mem_chunk[word_in_page]   (lo word — always in page)
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
@@ -2562,10 +3493,10 @@ const Translator = struct {
         try self.asm_.push("__c_i32_1");
         try self.asm_.push("_mem_page_idx_hi");
         try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_page_idx_hi");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // hi chunk fetch: helper bounds-checks page+1 against max_pages
+        // and routes to __mem_oob_trap__ on overflow.
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i64.load", "straddle_hi");
+        try self.emitOuterGetChecked("_mem_page_idx_hi");
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("__c_i32_0");
         try self.asm_.push("_mem_u32_hi");
@@ -2585,8 +3516,8 @@ const Translator = struct {
         try self.asm_.push("_mem_i64_hi_shifted");
         try self.asm_.extern_("SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64");
         // dst := _mem_i64_hi_shifted | _mem_i64_lo
-        ctx.push();
-        const dst = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        try ctx.push(.i64);
+        const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
         try self.asm_.push("_mem_i64_hi_shifted");
         try self.asm_.push("_mem_i64_lo");
         try self.asm_.push(dst);
@@ -2596,9 +3527,9 @@ const Translator = struct {
     fn emitMemStoreI64(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
         try self.asm_.comment("i64.store (aligned, within-chunk fast path)");
         const memarg = ins.i64_store;
-        const val = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const val = try ctx.slotAt(self.aa(), ctx.depth - 1);
         ctx.pop();
-        const raw_addr = try names.stackSlot(self.aa(), ctx.fn_name, ctx.depth - 1);
+        const raw_addr = try ctx.slotAt(self.aa(), ctx.depth - 1);
         const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
         ctx.pop();
 
@@ -2607,21 +3538,19 @@ const Translator = struct {
         try self.asm_.push("__c_i32_32");
         try self.asm_.push("_mem_hi_i64");
         try self.asm_.extern_("SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64");
-        // _mem_st_lo_i32 := (i32)val   (truncates low 32 bits)
-        try self.asm_.push(val);
-        try self.asm_.push("_mem_st_lo_i32");
-        try self.asm_.extern_("SystemConvert.__ToInt32__SystemInt64__SystemInt32");
-        // _mem_st_hi_i32 := (i32)_mem_hi_i64
-        try self.asm_.push("_mem_hi_i64");
-        try self.asm_.push("_mem_st_hi_i32");
-        try self.asm_.extern_("SystemConvert.__ToInt32__SystemInt64__SystemInt32");
-        // bit-copy int32 → uint32 (same 32-bit bit pattern in the slot)
-        try self.asm_.push("_mem_st_lo_i32");
-        try self.asm_.push("_mem_st_lo_u32");
-        try self.asm_.copy();
-        try self.asm_.push("_mem_st_hi_i32");
-        try self.asm_.push("_mem_st_hi_u32");
-        try self.asm_.copy();
+        // _mem_st_lo_i32 := low 32 bits of val (wrap, no overflow check). Must
+        // use BitConverter — `SystemConvert.ToInt32(Int64)` is a *checked*
+        // conversion that throws when val is outside Int32 range. WASM's
+        // `i32.wrap_i64` is pure bit truncation.
+        try self.emitI64TruncI32(val, "_mem_st_lo_i32");
+        // _mem_st_hi_i32 := low 32 bits of (val >> 32) = original high 32 bits
+        try self.emitI64TruncI32("_mem_hi_i64", "_mem_st_hi_i32");
+        // Bit-pattern copy Int32 → UInt32 via BitConverter. Udon's COPY
+        // only works between same-typed slots, so the previous heterogeneous
+        // COPY threw "Cannot retrieve heap variable of type 'Int32' as type
+        // 'UInt32'" at runtime.
+        try self.emitI32ToU32("_mem_st_lo_i32", "_mem_st_lo_u32");
+        try self.emitI32ToU32("_mem_st_hi_i32", "_mem_st_hi_u32");
 
         const id = self.block_counter;
         self.block_counter += 1;
@@ -2642,11 +3571,9 @@ const Translator = struct {
         try self.asm_.push("__c_i32_2");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
-        // outer[page_idx] → _mem_chunk
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_page_idx");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        // outer[page_idx] → _mem_chunk (bounds-checked)
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i64.store", "primary");
+        try self.emitOuterGetChecked("_mem_page_idx");
         // Lo word goes to the current chunk unconditionally.
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
@@ -2672,15 +3599,17 @@ const Translator = struct {
         try self.asm_.extern_("SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid");
         try self.asm_.jump(hi_done_lbl);
         try self.asm_.label(straddle_lbl);
-        // Straddle: hi word is outer[page_idx + 1][0].
+        // Straddle: hi word is outer[page_idx + 1][0]. The bounds check
+        // lives inside emitOuterGetChecked; a failing page+1 lands in
+        // __mem_oob_trap__ (LogError + halt). The PC-42856 crash this
+        // guards against was the same class as the PC 221880 byte-store
+        // crash on the lo-page path — both now share one checked helper.
         try self.asm_.push("_mem_page_idx");
         try self.asm_.push("__c_i32_1");
         try self.asm_.push("_mem_page_idx_hi");
         try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
-        try self.asm_.push(self.memory_udon_name);
-        try self.asm_.push("_mem_page_idx_hi");
-        try self.asm_.push("_mem_chunk");
-        try self.asm_.extern_("SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i64.store", "straddle_hi");
+        try self.emitOuterGetChecked("_mem_page_idx_hi");
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("__c_i32_0");
         try self.asm_.push("_mem_st_hi_u32");
@@ -2786,8 +3715,11 @@ const HostBridge = struct {
     fn consumeOne(ctx: *anyopaque) void {
         self_(ctx).ctx.pop();
     }
-    fn produceOne(ctx: *anyopaque) void {
-        self_(ctx).ctx.push();
+    fn produceOne(ctx: *anyopaque, vt: ValType) lower_import.Error!void {
+        // `FuncCtx.push` only actually fails on allocator errors (appending
+        // to `stack_types` / `fn_slot_type_bits`); narrow the translator
+        // error set here so the lower_import interface stays compact.
+        self_(ctx).ctx.push(vt) catch return error.OutOfMemory;
     }
     fn push(ctx: *anyopaque, sym: []const u8) lower_import.Error!void {
         try self_(ctx).t.asm_.push(sym);
@@ -2840,6 +3772,17 @@ fn udonTypeOf(vt: ValType) tn.TypeName {
         .f64 => tn.double,
     };
 }
+
+fn slotTypeBit(vt: ValType) u8 {
+    return switch (vt) {
+        .i32 => 1,
+        .i64 => 2,
+        .f32 => 4,
+        .f64 => 8,
+    };
+}
+
+const all_val_types = [_]ValType{ .i32, .i64, .f32, .f64 };
 
 fn zeroLit(vt: ValType) Literal {
     return switch (vt) {
@@ -2997,6 +3940,30 @@ test "translate bench.wasm end-to-end (structural)" {
     // by test_arithmetic but its presence is reassuring.
     try std.testing.expect(std.mem.indexOf(u8, out,
         "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32") != null);
+
+    // ---- PC-42856 regression guard ----
+    // After Cycle 3, _onEnable must pre-materialize *every* page up to
+    // max_pages — so a memory op against any valid page never sees a
+    // null chunk. bench declares initial=17, max=17 via the data
+    // segment floor, so at least 17 SystemUInt32Array.__ctor__ calls
+    // must appear in _onEnable.
+    const oeb = onEnableBody(out);
+    const chunk_ctor = "SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array";
+    var chunk_count: usize = 0;
+    var from: usize = 0;
+    while (std.mem.indexOfPos(u8, oeb, from, chunk_ctor)) |ix| {
+        chunk_count += 1;
+        from = ix + chunk_ctor.len;
+    }
+    try std.testing.expect(chunk_count >= 17);
+    // After Cycle 4, every `_mem_page_idx_hi` + 1 straddle path must
+    // guard against OOB on the outer array via a LessThan against
+    // `_memory_max_pages`. The alternate name (without `__G__`) is
+    // selected here because bench's __udon_meta overrides the udon
+    // name via `options.memory.udonName`.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "PUSH, _memory_max_pages") != null);
 }
 
 // ----------------------------------------------------------------
@@ -3157,17 +4124,24 @@ test "bench: i32.load8_u expands to shift + mask 0xFF" {
 test "bench: i64 conversions dispatch via SystemConvert" {
     // README unimplemented item: "Some conversion opcodes".
     // bench の test_64bit_and_float / test_globals で:
-    //   - @intCast(i32, r >> 32) / r & 0xFFFFFFFF → i32.wrap_i64
+    //   - @intCast(i32, r >> 32) / r & 0xFFFFFFFF → i32.wrap_i64 (BitConverter 経由に変更)
     //   - @as(i64, 0x1_0000_0000) + 5             → i64.extend_i32_u
     //
     // (f64 側の @intFromFloat(@floor(...)) は Zig のコンパイル時最適化で
     //  bench.wasm に残らないため、ここでは unary 形の SystemConvert が
     //  出ていることだけ検証する。)
+    //
+    // 注: `i32.wrap_i64` は `SystemConvert.ToInt32(Int64)` を使わない
+    // (checked conversion なので Int32 範囲外で throw する)。BitConverter
+    // 経由の bit truncation に書き換えた。
     const out = try translateBench(std.testing.allocator);
     defer std.testing.allocator.free(out);
 
+    // i32.wrap_i64 は BitConverter 経由で emit される
     try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemConvert.__ToInt32__SystemInt64__SystemInt32") != null);
+        "SystemBitConverter.__GetBytes__SystemInt64__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
     try std.testing.expect(std.mem.indexOf(u8, out,
         "SystemConvert.__ToInt64__SystemUInt32__SystemInt64") != null);
 }
@@ -3430,6 +4404,454 @@ test "translate simple add module" {
     try std.testing.expect(std.mem.indexOf(u8, out,
         "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "JUMP_INDIRECT, __add_RA__") != null);
+}
+
+// Runtime regression: WASM `select` (0x1B) must actually look at `cond`.
+// The prior lowering treated `select` as "unconditional pass-through of
+// v1", silently miscompiling every runtime path that depended on `v2`.
+// In the bench this surfaced as a `page == max_pages` OOB trap inside
+// Zig's compiler-synthesized `memcpy` helper, because stdlib
+// pointer-select patterns (`dst = cond ? near_ptr : far_ptr`) always
+// took `v1` regardless of the runtime condition — and when `v1` happened
+// to be an end-of-memory sentinel (e.g. `memory_size * 65536`), the
+// following store trapped with exactly `page = max`.
+test "select: emits a conditional branch that picks between v1 and v2" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // fn(v1: i32, v2: i32, cond: i32) -> i32
+    //   local.get 0  ; v1
+    //   local.get 1  ; v2
+    //   local.get 2  ; cond
+    //   select
+    const params = try a.alloc(ValType, 3);
+    params[0] = .i32;
+    params[1] = .i32;
+    params[2] = .i32;
+    const results = try a.alloc(ValType, 1);
+    results[0] = .i32;
+    const types_ = try a.alloc(wasm.types.FuncType, 1);
+    types_[0] = .{ .params = params, .results = results };
+
+    const funcs = try a.alloc(u32, 1);
+    funcs[0] = 0;
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .{ .local_get = 2 };
+    body[3] = .select;
+    const codes = try a.alloc(wasm.module.Code, 1);
+    codes[0] = .{ .locals = &.{}, .body = body };
+
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "pick", .desc = .{ .func = 0 } };
+
+    const mod: wasm.Module = .{
+        .types_ = types_,
+        .funcs = funcs,
+        .codes = codes,
+        .exports = exports,
+    };
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // The old "simplified pass-through of v1" placeholder must be gone.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "simplified: unconditional pass-through of v1") == null);
+
+    // A conditional branch must be emitted — no branch means we're not
+    // actually looking at `cond`.
+    try std.testing.expect(std.mem.indexOf(u8, out, "JUMP_IF_FALSE") != null);
+
+    // The `cond != 0` → bool conversion must appear. The helper goes
+    // through SystemConvert.ToBoolean, mirroring br_if / if.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemConvert.__ToBoolean__SystemInt32__SystemBoolean") != null);
+
+    // The falsy path must COPY v2 over v1's slot. Locate the `select:`
+    // comment and assert v2's slot (`S1_i32`) and v1's slot (`S0_i32`)
+    // both appear after it (in that order as source then destination).
+    const sel = std.mem.indexOf(u8, out, "select: result = cond ? v1 : v2").?;
+    const tail = out[sel..];
+    const push_v2 = std.mem.indexOf(u8, tail, "PUSH, __pick_S1_i32__").?;
+    const push_v1 = std.mem.indexOf(u8, tail, "PUSH, __pick_S0_i32__").?;
+    try std.testing.expect(push_v2 < push_v1);
+    try std.testing.expect(std.mem.indexOf(u8, tail[push_v1..], "COPY") != null);
+}
+
+// Follow-up regression guarding against the specific bench.uasm symptom:
+// the sequence `# select (simplified: unconditional pass-through of v1)`
+// must never appear in bench output again.
+test "bench: select is not lowered as unconditional pass-through" {
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "unconditional pass-through of v1") == null);
+    // But bench does use `select` somewhere (the Zig stdlib pointer
+    // select helpers), so the new lowering should produce select comments
+    // and at least one JUMP_IF_FALSE that targets a `__*_sel_falsy_*`
+    // label (the falsy-path branch emitted by `emitSelect`).
+    try std.testing.expect(std.mem.indexOf(u8, out, "_sel_falsy_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_sel_merge_") != null);
+}
+
+// Runtime regression: `i32.wrap_i64` must NOT route through
+// `SystemConvert.__ToInt32__SystemInt64__SystemInt32`, which is a checked
+// conversion that throws for values outside the Int32 range. Observed in
+// the wild during `i64.store` of a struct with adjacent 32-bit fields that
+// LLVM combined into a single 8-byte store, producing a packed i64 value
+// whose high word had a bit set above Int32.MaxValue.
+test "i32.wrap_i64 uses BitConverter-based truncation, not SystemConvert.ToInt32" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // fn(v: i64) -> i32 : local.get 0; i32.wrap_i64
+    const params = try a.alloc(ValType, 1);
+    params[0] = .i64;
+    const results = try a.alloc(ValType, 1);
+    results[0] = .i32;
+    const types_ = try a.alloc(wasm.types.FuncType, 1);
+    types_[0] = .{ .params = params, .results = results };
+
+    const funcs = try a.alloc(u32, 1);
+    funcs[0] = 0;
+
+    const body = try a.alloc(Instruction, 2);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .i32_wrap_i64;
+    const codes = try a.alloc(wasm.module.Code, 1);
+    codes[0] = .{ .locals = &.{}, .body = body };
+
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "wrap", .desc = .{ .func = 0 } };
+
+    const mod: wasm.Module = .{
+        .types_ = types_,
+        .funcs = funcs,
+        .codes = codes,
+        .exports = exports,
+    };
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // The checked conversion must be gone from the wrap emission.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemConvert.__ToInt32__SystemInt64__SystemInt32") == null);
+    // A BitConverter GetBytes(Int64) followed by ToInt32(byte[], 0) must appear.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemBitConverter.__GetBytes__SystemInt64__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
+    // Sanity: our dedicated comment is emitted so the intent is clear in uasm.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "i32.wrap_i64 (bit truncation via BitConverter)") != null);
+}
+
+// Bench-level guard: after this fix, bench.uasm must not emit
+// `SystemConvert.__ToInt32__SystemInt64__SystemInt32` anywhere. Any new
+// use would re-introduce the checked conversion that throws on legitimate
+// values (the Phase B.2 `test_wl_slice_write` exception).
+test "bench: no SystemConvert.ToInt32 from Int64 (checked conversion)" {
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemConvert.__ToInt32__SystemInt64__SystemInt32") == null);
+}
+
+// An `i64.const V` with V != 0 must not silently truncate to 0. Pre-fix,
+// the emit path called `emitConst(ctx, null_literal, int64, ...)` — every
+// non-zero i64 constant ended up as a SystemInt64 slot initialized to
+// `null` (= 0L) because Udon spec §4.7 forbids Int64 literals in the data
+// section. That broke `Writer.writeAll`'s slow-path `Error!usize` decode
+// at `i64.const 32 i64.shr_u` + `i64.const 0x200000000 local.set`, which
+// caused a 10-second VM timeout in Udon whenever `bufPrint` took the
+// fixed-writer slow path.
+//
+// Post-fix: each distinct non-zero V is backed by a shared Int64 slot
+// whose value is synthesized at `_onEnable` from two Int32 halves.
+test "i64.const non-zero is synthesized at _onEnable from two Int32 halves" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // fn() -> i64 : i64.const 0x200000000 ; end
+    const params = try a.alloc(ValType, 0);
+    const results = try a.alloc(ValType, 1);
+    results[0] = .i64;
+    const types_ = try a.alloc(wasm.types.FuncType, 1);
+    types_[0] = .{ .params = params, .results = results };
+
+    const funcs = try a.alloc(u32, 1);
+    funcs[0] = 0;
+
+    const body = try a.alloc(Instruction, 1);
+    body[0] = .{ .i64_const = 0x200000000 };
+    const codes = try a.alloc(wasm.module.Code, 1);
+    codes[0] = .{ .locals = &.{}, .body = body };
+
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "big_const", .desc = .{ .func = 0 } };
+
+    const mod: wasm.Module = .{
+        .types_ = types_,
+        .funcs = funcs,
+        .codes = codes,
+        .exports = exports,
+    };
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // The pre-fix output would create a `__K_N: %SystemInt64, null` and
+    // COPY from it. Post-fix the constant must be in a `__K64_N` slot,
+    // paired with Int32 hi/lo halves carrying the actual bit pattern.
+    // 0x200000000 has hi=2, lo=0.
+    try std.testing.expect(std.mem.indexOf(u8, out, "__K64_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, ": %SystemInt32, 2") != null);
+    // The synthesis sequence must appear in _onEnable (the intro comment
+    // is the canonical marker). This also guards against regressions that
+    // leave `i64_const_inits` populated but never flush it.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "64-bit constant slot init") != null);
+    // Spot-check that the key EXTERN in the synthesis is present.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt64.__op_LeftShift__SystemUInt64_SystemInt32__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt64.__op_LogicalOr__SystemUInt64_SystemUInt64__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemConvert.__ToUInt64__SystemUInt32__SystemUInt64") != null);
+}
+
+// `i64.const 0` is a happy case because Udon's `null` literal means
+// `default(Int64) = 0L`. A single shared slot (`__K64_zero`) is enough
+// and no runtime synthesis is required. This test asserts we don't
+// regress into emitting a per-constant init for every zero.
+test "i64.const 0 uses shared __K64_zero slot with no runtime synthesis" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const params = try a.alloc(ValType, 0);
+    const results = try a.alloc(ValType, 1);
+    results[0] = .i64;
+    const types_ = try a.alloc(wasm.types.FuncType, 1);
+    types_[0] = .{ .params = params, .results = results };
+
+    const funcs = try a.alloc(u32, 1);
+    funcs[0] = 0;
+
+    // Two i64.const 0; drop; then an i64.const 0 for the return.
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .i64_const = 0 };
+    body[1] = .drop;
+    body[2] = .{ .i64_const = 0 };
+    body[3] = .{ .i64_const = 0 };
+    // Use the last as the return value; drop the second.
+    // Actually simpler: one i64.const 0 return.
+    const simple_body = try a.alloc(Instruction, 1);
+    simple_body[0] = .{ .i64_const = 0 };
+    const codes = try a.alloc(wasm.module.Code, 1);
+    codes[0] = .{ .locals = &.{}, .body = simple_body };
+
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "zero", .desc = .{ .func = 0 } };
+
+    const mod: wasm.Module = .{
+        .types_ = types_,
+        .funcs = funcs,
+        .codes = codes,
+        .exports = exports,
+    };
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "__K64_zero") != null);
+    // No synthesis sequence should be emitted for this test case (the
+    // comment is only present when `i64_const_inits` is non-empty).
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "64-bit constant slot init") == null);
+}
+
+// f64.const has the same null-literal constraint as i64.const: Udon spec
+// §4.7 forbids non-null `SystemDouble` initializers. The translator
+// materializes each non-0.0 constant at `_onEnable` via the same hi/lo
+// Int32 synthesis pipeline, terminating with `BitConverter.ToDouble`
+// instead of `BitConverter.ToInt64`.
+test "f64.const non-zero is synthesized at _onEnable as SystemDouble" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // fn() -> f64 : f64.const 3.14 ; end
+    const params = try a.alloc(ValType, 0);
+    const results = try a.alloc(ValType, 1);
+    results[0] = .f64;
+    const types_ = try a.alloc(wasm.types.FuncType, 1);
+    types_[0] = .{ .params = params, .results = results };
+
+    const funcs = try a.alloc(u32, 1);
+    funcs[0] = 0;
+
+    const body = try a.alloc(Instruction, 1);
+    body[0] = .{ .f64_const = 3.14 };
+    const codes = try a.alloc(wasm.module.Code, 1);
+    codes[0] = .{ .locals = &.{}, .body = body };
+
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "pi", .desc = .{ .func = 0 } };
+
+    const mod: wasm.Module = .{
+        .types_ = types_,
+        .funcs = funcs,
+        .codes = codes,
+        .exports = exports,
+    };
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // The slot name must use the `__K64f_` prefix so it doesn't collide
+    // with Int64 constants in the dedup map, and the declared type must
+    // be SystemDouble (not SystemInt64).
+    try std.testing.expect(std.mem.indexOf(u8, out, "__K64f_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        ": %SystemDouble, null") != null);
+    // Terminal conversion must be ToDouble, not ToInt64.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemBitConverter.__ToDouble__SystemByteArray_SystemInt32__SystemDouble") != null);
+    // Synthesis shares infrastructure with i64 — the setup comment is
+    // still present because the list is non-empty.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "64-bit constant slot init") != null);
+
+    // Verify the hi/lo halves match the bit pattern of 3.14.
+    // @bitCast(3.14: f64) == 0x40091EB851EB851F,
+    // hi = 0x40091EB8 = 1074339512, lo = 0x51EB851F = 1374389535.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "_hi: %SystemInt32, 1074339512") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "_lo: %SystemInt32, 1374389535") != null);
+}
+
+// `f64.const 0.0` (positive zero, all bits zero) takes the shared-slot
+// path just like `i64.const 0`. `-0.0` has bit 63 set and must fall
+// through to the synthesis path — this asserts that property so a
+// careless optimization doesn't collapse the two zeros.
+test "f64.const +0.0 uses __K64f_zero; -0.0 goes through synthesis" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const params = try a.alloc(ValType, 0);
+    const results = try a.alloc(ValType, 1);
+    results[0] = .f64;
+    const types_ = try a.alloc(wasm.types.FuncType, 1);
+    types_[0] = .{ .params = params, .results = results };
+
+    const funcs = try a.alloc(u32, 1);
+    funcs[0] = 0;
+
+    // fn() -> f64: f64.const -0.0 ; end
+    const body = try a.alloc(Instruction, 1);
+    body[0] = .{ .f64_const = -0.0 };
+    const codes = try a.alloc(wasm.module.Code, 1);
+    codes[0] = .{ .locals = &.{}, .body = body };
+
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "negzero", .desc = .{ .func = 0 } };
+
+    const mod: wasm.Module = .{
+        .types_ = types_,
+        .funcs = funcs,
+        .codes = codes,
+        .exports = exports,
+    };
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // -0.0 bit pattern is 0x8000000000000000 → hi = Int32.MinValue,
+    // lo = 0. The synthesis must fire (non-zero bit pattern).
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "64-bit constant slot init") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "_hi: %SystemInt32, -2147483648") != null);
+    // And it must NOT just reuse the zero slot.
+    try std.testing.expect(std.mem.indexOf(u8, out, "__K64f_zero") == null);
+}
+
+// Bench-level guard: the worked example that triggered the original
+// hang now exercises two specific i64 constants — `32` (shift count)
+// and `0x200000000` (`Error!WriteFailed` tag packed into the high 32
+// bits of an `Error!usize`). Both must appear as initialized
+// `__K64_*_hi` / `__K64_*_lo` Int32 pairs in bench.uasm, and the
+// synthesis bootstrap in `_onEnable` must materialize them before any
+// event body runs.
+test "bench: Writer.writeAll-critical i64 constants are fully synthesized" {
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    // i64.const 32 — shift count used by `i64.shr_u` on the packed
+    // Error!usize return. hi=0, lo=32.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "_lo: %SystemInt32, 32") != null);
+    // i64.const 0x200000000 = 8589934592 — `error.WriteFailed` tag in
+    // the high 32 bits. hi=2, lo=0.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "_hi: %SystemInt32, 2") != null);
+    // The init comment must be present exactly once at `_onEnable`.
+    const marker = "# 64-bit constant slot init";
+    const first = std.mem.indexOf(u8, out, marker) orelse unreachable;
+    try std.testing.expect(std.mem.indexOf(u8, out[first + marker.len ..], marker) == null);
+}
+
+// Negative guard: after fix, no `__K_N: %SystemInt64, null` COPY should
+// originate from an `i64.const` emit site — that pattern is the pre-fix
+// signature of the bug. All `i64.const` sites must route through
+// `__K64_*` slots (shared or zero). Data-section Int64 slots for *stack
+// temporaries* (`__fnN_SK_i64__`), *memory scratch* (`_mem_i64_*`), etc.
+// are unrelated and still allowed — this test only forbids
+// `__K_<digits>: %SystemInt64, null` which is how the old `emitConst`
+// path spelled a broken i64 constant.
+test "bench: no i64.const emits a stale __K_N Int64 null slot" {
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    var it = std.mem.splitScalar(u8, out, '\n');
+    while (it.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        // Match `__K_<digit>+: %SystemInt64, null`.
+        const marker = "__K_";
+        if (!std.mem.startsWith(u8, trimmed, marker)) continue;
+        const rest = trimmed[marker.len..];
+        var i: usize = 0;
+        while (i < rest.len and std.ascii.isDigit(rest[i])) : (i += 1) {}
+        if (i == 0) continue; // not a numeric __K_ entry
+        if (i == rest.len or rest[i] != ':') continue;
+        // It's an `__K_<n>:` declaration. Forbid SystemInt64 here.
+        if (std.mem.indexOf(u8, rest[i..], "%SystemInt64") != null) {
+            std.debug.print("unexpected stale Int64 const slot: {s}\n", .{trimmed});
+            try std.testing.expect(false);
+        }
+    }
 }
 
 // Runtime regression: a module whose only event binding is `_update` (no
@@ -4160,6 +5582,627 @@ test "bench: on_interact body applies memarg.offset before memory ops" {
     try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_eff_addr") != null);
 }
 
+// ----------------------------------------------------------------
+// Int32 ↔ UInt32 bit-pattern conversion — TDD for the PC 46852 crash.
+//
+// Follow-up to the offset fix: now that the program reaches further into
+// bench, it halts on `SystemUInt32Array.__Set__` with
+//   Cannot retrieve heap variable of type 'Int32' as type 'UInt32'.
+// Linear-memory chunks are `SystemUInt32Array`, but WASM stack slots are
+// declared `%SystemInt32`. Pushing an Int32 slot as the UInt32 `value`
+// argument (or the mirror case — writing a UInt32 EXTERN result into an
+// Int32 slot) violates Udon's strict heap typing.
+//
+// `SystemConvert.__ToUInt32__SystemInt32` throws OverflowException on
+// negative values (0xDEADBEEF, any high-bit-set u32 constant that WASM
+// treats as a valid i32), so the translator uses `SystemBitConverter` to
+// preserve the bit pattern: `GetBytes(int) → ToUInt32(bytes, 0)` for
+// store, and the mirror `GetBytes(uint) → ToInt32(bytes, 0)` for load.
+// ----------------------------------------------------------------
+
+test "i32.store converts Int32 value to UInt32 before SystemUInt32Array.__Set__" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .{ .i32_store = .{ .@"align" = 2, .offset = 0 } };
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    // BitConverter-based conversion must appear in the store sequence.
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
+    // A UInt32 scratch buffer must be the value passed to __Set__.
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_val_u32_buf") != null);
+    // Declarations must exist in the data section.
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mem_val_u32_buf:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mem_bits_ba:") != null);
+}
+
+test "i32.store8 converts Int32 value before UInt32 mask" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .{ .i32_store8 = .{ .@"align" = 0, .offset = 0 } };
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_val_u32_buf") != null);
+}
+
+test "i32.store16 converts Int32 value before UInt32 mask" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .{ .i32_store16 = .{ .@"align" = 1, .offset = 0 } };
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_val_u32_buf") != null);
+}
+
+test "i64.store routes lo/hi via BitConverter instead of heterogeneous COPY" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .{ .i64_store = .{ .@"align" = 3, .offset = 0 } };
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i64 };
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    // Two __GetBytes__SystemInt32__ calls (one per 32-bit half) must appear.
+    const get_bytes = countOccurrences(body_out,
+        "SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray");
+    try std.testing.expect(get_bytes >= 2);
+    // The two UInt32 result slots must still be written via BitConverter's
+    // ToUInt32, not via `COPY, _mem_st_lo_i32, _mem_st_lo_u32`.
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
+    // A heterogeneous COPY from *_i32 → *_u32 must not survive.
+    // (COPY appears as two PUSHes followed by the `COPY` op; we spot-check
+    // the lo pair which used to be the culprit.)
+    const bad_copy_pattern = "PUSH, _mem_st_lo_i32\n        PUSH, _mem_st_lo_u32\n        COPY";
+    try std.testing.expect(std.mem.indexOf(u8, body_out, bad_copy_pattern) == null);
+}
+
+test "i32.load converts loaded UInt32 to Int32 before storing in Int32 stack slot" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .i32_load = .{ .@"align" = 2, .offset = 0 } };
+    body[2] = .drop;
+    body[3] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    // Load path must route UInt32 → Int32 via BitConverter.
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__GetBytes__SystemUInt32__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
+}
+
+test "i32.load8_u converts UInt32 mask result to Int32 before dst" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .i32_load8_u = .{ .@"align" = 0, .offset = 0 } };
+    body[2] = .drop;
+    body[3] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
+}
+
+test "i32.load8_s still sign-extends after UInt32→Int32 conversion" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .i32_load8_s = .{ .@"align" = 0, .offset = 0 } };
+    body[2] = .drop;
+    body[3] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
+    // Sign-extend must remain: `<< 24` then `>> 24` with SystemInt32 ops.
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "__c_i32_24") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32") != null);
+}
+
+test "bench: no heterogeneous COPY from *_i32 to *_u32 remains" {
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    // The specific pattern from the old emitMemStoreI64 that broke on
+    // Udon's strict heap typing. Must not appear in the regenerated output.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "PUSH, _mem_st_lo_i32\n        PUSH, _mem_st_lo_u32\n        COPY") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "PUSH, _mem_st_hi_i32\n        PUSH, _mem_st_hi_u32\n        COPY") == null);
+}
+
+test "bench: every SystemUInt32Array.__Set__ value arg is a UInt32 slot" {
+    // Walk every `EXTERN, "SystemUInt32Array.__Set__..."` and verify the
+    // value (3rd PUSH above the EXTERN) names a slot that is typed UInt32
+    // in the data section — not a raw `__<fn>_S<n>__` Int32 stack slot.
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    // Collect UInt32-typed names from the data section. A decl line looks
+    // like `    <name>: %SystemUInt32, 0` (possibly with trailing value).
+    var uint32_names = std.StringHashMap(void).init(std.testing.allocator);
+    defer uint32_names.deinit();
+    var data_it = std.mem.splitScalar(u8, out, '\n');
+    while (data_it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (std.mem.indexOf(u8, line, ": %SystemUInt32,") == null and
+            std.mem.indexOf(u8, line, ": %SystemUInt32Array,") == null) continue;
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        const name = line[0..colon];
+        try uint32_names.put(name, {});
+    }
+
+    // Now scan for the Set pattern. Each occurrence: 3 PUSHes then EXTERN.
+    var lines_list: std.ArrayList([]const u8) = .empty;
+    defer lines_list.deinit(std.testing.allocator);
+    var it = std.mem.splitScalar(u8, out, '\n');
+    while (it.next()) |l| try lines_list.append(std.testing.allocator, l);
+
+    var i: usize = 3;
+    while (i < lines_list.items.len) : (i += 1) {
+        const ln = std.mem.trim(u8, lines_list.items[i], " \t\r");
+        if (std.mem.indexOf(u8, ln,
+            "EXTERN, \"SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid\"") == null)
+            continue;
+        const val_line = std.mem.trim(u8, lines_list.items[i - 1], " \t\r");
+        const prefix = "PUSH, ";
+        if (!std.mem.startsWith(u8, val_line, prefix)) continue;
+        const name = val_line[prefix.len..];
+        if (uint32_names.contains(name)) continue;
+        std.debug.print(
+            "SystemUInt32Array.__Set__ called with non-UInt32 value `{s}` (line {d})\n",
+            .{ name, i + 1 },
+        );
+        return error.TestExpectedEqual;
+    }
+}
+
+// ----------------------------------------------------------------
+// Numeric-op Int32↔UInt32 / Int64↔UInt64 type conversion — TDD for the
+// PC 20396 crash. `emitNumericOp` previously pushed raw Int32/Int64
+// stack slots into `SystemUInt32.__op_*` / `SystemUInt64.__op_*` EXTERN
+// calls, which Udon rejects with "Cannot retrieve heap variable of type
+// 'Int32' as type 'UInt32'". Every u32/u64 op must now route operands
+// through BitConverter and convert any u32/u64 result back to the Int32/
+// Int64 stack slot it lands in.
+// ----------------------------------------------------------------
+
+test "i32.gt_u converts Int32 operands to UInt32 via BitConverter" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .i32_gt_u;
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    // Both operands must be converted Int32 → UInt32 via BitConverter.
+    const get_bytes = countOccurrences(body_out,
+        "SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray");
+    try std.testing.expect(get_bytes >= 2);
+    const to_uint32 = countOccurrences(body_out,
+        "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32");
+    try std.testing.expect(to_uint32 >= 2);
+    // The comparison's lhs/rhs push targets must be UInt32 scratch.
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_num_lhs_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_num_rhs_u32") != null);
+}
+
+test "i32.div_u routes operands and result through BitConverter" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .i32_div_u;
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    // Operand conversion (Int32 → UInt32).
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
+    // Result conversion (UInt32 → Int32).
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__GetBytes__SystemUInt32__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_num_res_u32") != null);
+}
+
+test "i32.shr_u converts only the UInt32 value operand, shift operand stays Int32" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .i32_shr_u;
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    // Exactly one Int32→UInt32 GetBytes (for the value, not the shift).
+    const get_bytes_i32 = countOccurrences(body_out,
+        "SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray");
+    try std.testing.expectEqual(@as(usize, 1), get_bytes_i32);
+    // No `_num_rhs_u32` — shift operand remains Int32.
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_num_rhs_u32") == null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_num_lhs_u32") != null);
+}
+
+test "i64.gt_u converts Int64 operands to UInt64 via BitConverter" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .i64_gt_u;
+    body[3] = .return_;
+    const params = [_]ValType{ .i64, .i64 };
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    const get_bytes = countOccurrences(body_out,
+        "SystemBitConverter.__GetBytes__SystemInt64__SystemByteArray");
+    try std.testing.expect(get_bytes >= 2);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_num_lhs_u64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_num_rhs_u64") != null);
+}
+
+test "i64.div_u routes both operands and result through Int64/UInt64 BitConverter" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .i64_div_u;
+    body[3] = .return_;
+    const params = [_]ValType{ .i64, .i64 };
+    const results = [_]ValType{.i64};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__GetBytes__SystemUInt64__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__ToInt64__SystemByteArray_SystemInt32__SystemInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "_num_res_u64") != null);
+}
+
+test "i64.shr_u converts only the UInt64 value; shift operand stays Int32" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .i64_shr_u;
+    body[3] = .return_;
+    const params = [_]ValType{ .i64, .i32 };
+    const results = [_]ValType{.i64};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    // LHS must be converted Int64→UInt64 exactly once via BitConverter.
+    const to_u64 = countOccurrences(body_out,
+        "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64");
+    try std.testing.expectEqual(@as(usize, 1), to_u64);
+    // The shift operand must stay in an Int32 slot — i.e. the narrowing path
+    // is taken (ToInt32 via BitConverter) rather than UInt64 conversion.
+    const to_i32 = countOccurrences(body_out,
+        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32");
+    try std.testing.expectEqual(@as(usize, 1), to_i32);
+    // No additional UInt64 conversion for the shift count.
+    const to_u64_total = countOccurrences(body_out,
+        "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64");
+    try std.testing.expectEqual(@as(usize, 1), to_u64_total);
+}
+
+test "i64.rem_u expansion routes operands and result through BitConverter" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .i64_rem_u;
+    body[3] = .return_;
+    const params = [_]ValType{ .i64, .i64 };
+    const results = [_]ValType{.i64};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    // Both operands converted to UInt64, final result converted back to Int64.
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter.__ToInt64__SystemByteArray_SystemInt32__SystemInt64") != null);
+    // All three UInt64 ops (Division, Multiplication, Subtraction) still emitted.
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemUInt64.__op_Division__SystemUInt64_SystemUInt64__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemUInt64.__op_Multiplication__SystemUInt64_SystemUInt64__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemUInt64.__op_Subtraction__SystemUInt64_SystemUInt64__SystemUInt64") != null);
+}
+
+test "signed numeric ops do not emit BitConverter conversion" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // i32.add + i64.mul — both signed, must keep the fast SystemInt{32,64}
+    // path with no BitConverter overhead.
+    const body = try a.alloc(Instruction, 5);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 0 };
+    body[2] = .i32_add;
+    body[3] = .drop;
+    body[4] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    // No BitConverter within this body — signed ops use SystemInt32 directly.
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemBitConverter") == null);
+    // The Int32 Addition EXTERN must be present.
+    try std.testing.expect(std.mem.indexOf(u8, body_out,
+        "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
+}
+
+test "bench: SystemUInt32/UInt64 op args never point to a raw Int32 stack slot" {
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    // Collect every Udon name whose declared type is SystemUInt32 / SystemUInt64
+    // (plus the known Int32 constants that are fine to push to `_SystemInt32__`
+    // shift operands).
+    var uint_names = std.StringHashMap(void).init(std.testing.allocator);
+    defer uint_names.deinit();
+    var data_it = std.mem.splitScalar(u8, out, '\n');
+    while (data_it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        const markers = [_][]const u8{
+            ": %SystemUInt32,",
+            ": %SystemUInt64,",
+            ": %SystemUInt32Array,",
+            ": %SystemUInt64Array,",
+        };
+        var hit = false;
+        for (markers) |m| {
+            if (std.mem.indexOf(u8, line, m) != null) {
+                hit = true;
+                break;
+            }
+        }
+        if (!hit) continue;
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        try uint_names.put(line[0..colon], {});
+    }
+
+    var lines_list: std.ArrayList([]const u8) = .empty;
+    defer lines_list.deinit(std.testing.allocator);
+    var it = std.mem.splitScalar(u8, out, '\n');
+    while (it.next()) |l| try lines_list.append(std.testing.allocator, l);
+
+    // Ops whose argument list starts with SystemUInt32 / SystemUInt64 — the
+    // first parameter is the one most frequently violated in practice. We
+    // inspect 2 PUSHes before the EXTERN (2nd arg of binary, 1st arg of
+    // binary, or receiver), and flag any that names an Int32 stack slot.
+    var i: usize = 3;
+    while (i < lines_list.items.len) : (i += 1) {
+        const ln = std.mem.trim(u8, lines_list.items[i], " \t\r");
+        const is_u32_op = std.mem.startsWith(u8, ln,
+            "EXTERN, \"SystemUInt32.__op_") and
+            std.mem.indexOf(u8, ln, "SystemUInt32_SystemUInt32") != null;
+        const is_u64_op = std.mem.startsWith(u8, ln,
+            "EXTERN, \"SystemUInt64.__op_") and
+            std.mem.indexOf(u8, ln, "SystemUInt64_SystemUInt64") != null;
+        if (!is_u32_op and !is_u64_op) continue;
+
+        // Look back for the two operand PUSHes (skip the result PUSH just above).
+        const prefix = "PUSH, ";
+        const operand_lines = [_][]const u8{
+            std.mem.trim(u8, lines_list.items[i - 3], " \t\r"),
+            std.mem.trim(u8, lines_list.items[i - 2], " \t\r"),
+        };
+        const labels = [_][]const u8{ "lhs", "rhs" };
+        for (operand_lines, labels) |pl, lbl| {
+            if (!std.mem.startsWith(u8, pl, prefix)) continue;
+            const name = pl[prefix.len..];
+            if (uint_names.contains(name)) continue;
+            if (std.mem.startsWith(u8, name, "__c_u32_") or
+                std.mem.startsWith(u8, name, "__c_u64_")) continue;
+            std.debug.print(
+                "u32/u64 op at line {d} has {s} `{s}` (not a UInt scratch)\n",
+                .{ i + 1, lbl, name },
+            );
+            return error.TestExpectedEqual;
+        }
+    }
+}
+
 test "meta initialPages/maxPages clamped up by data segment requirement" {
     // Per docs/spec_udonmeta_conversion.md the meta can customize memory
     // sizing, but it must never shrink below what the WASM module's own
@@ -4185,4 +6228,725 @@ test "meta initialPages/maxPages clamped up by data segment requirement" {
     const max_p = try findDataDeclInt(out, "__G__memory_max_pages");
     try std.testing.expect(initial >= 17);
     try std.testing.expect(max_p >= 17);
+}
+
+// ----------------------------------------------------------------
+// PC → line mapping (TDD tooling for runtime crashes).
+//
+// Udon VM's `UdonVMException` reports a Program Counter which is a
+// *bytecode* offset from the start of the code section, not an assembly
+// line number. Per docs/udon_specs.md §6.1 each emitted instruction has
+// a fixed byte size:
+//   NOP / POP / ANNOTATION / COPY            = 4 bytes
+//   PUSH / JUMP / JUMP_IF_FALSE / EXTERN /
+//     JUMP_INDIRECT                          = 8 bytes
+// Labels, blank lines, comments contribute 0 bytes. `pcToLine` walks the
+// code section once to locate the 1-based line number of the instruction
+// that contains `pc`.
+// ----------------------------------------------------------------
+
+fn pcToLine(uasm: []const u8, pc: u32) ?usize {
+    var it = std.mem.splitScalar(u8, uasm, '\n');
+    var in_code: bool = false;
+    var line_no: usize = 0;
+    var cursor: u32 = 0;
+    while (it.next()) |raw_line| {
+        line_no += 1;
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (!in_code) {
+            if (std.mem.eql(u8, line, ".code_start")) in_code = true;
+            continue;
+        }
+        if (std.mem.eql(u8, line, ".code_end")) return null;
+        if (line.len == 0) continue;
+        if (line[0] == '#') continue;
+        if (std.mem.endsWith(u8, line, ":")) continue; // label-only line
+        var end: usize = 0;
+        while (end < line.len and line[end] != ',' and line[end] != ' ' and line[end] != '\t') : (end += 1) {}
+        const op = line[0..end];
+        const size: u32 = if (std.mem.eql(u8, op, "PUSH") or
+            std.mem.eql(u8, op, "JUMP") or
+            std.mem.eql(u8, op, "JUMP_IF_FALSE") or
+            std.mem.eql(u8, op, "EXTERN") or
+            std.mem.eql(u8, op, "JUMP_INDIRECT"))
+            8
+        else
+            4;
+        if (pc < cursor + size) return line_no;
+        cursor += size;
+    }
+    return null;
+}
+
+test "pcToLine: 4/8-byte instruction sizes match Udon VM bytecode layout" {
+    const sample =
+        "some header\n" ++
+        ".data_start\n" ++
+        "foo: %SystemInt32, 0\n" ++
+        ".data_end\n" ++
+        ".code_start\n" ++
+        "    # comment line\n" ++
+        "    PUSH, _a\n" ++ // PC 0..7   (line 7)
+        "some_label:\n" ++
+        "    PUSH, _b\n" ++ // PC 8..15  (line 9)
+        "    EXTERN, \"Foo.__bar__\"\n" ++ // PC 16..23 (line 10)
+        "    NOP\n" ++ // PC 24..27 (line 11)
+        "    POP\n" ++ // PC 28..31 (line 12)
+        "    COPY\n" ++ // PC 32..35 (line 13)
+        "    JUMP_INDIRECT, _rac\n" ++ // PC 36..43 (line 14)
+        ".code_end\n";
+    try std.testing.expectEqual(@as(?usize, 7), pcToLine(sample, 0));
+    try std.testing.expectEqual(@as(?usize, 7), pcToLine(sample, 7));
+    try std.testing.expectEqual(@as(?usize, 9), pcToLine(sample, 8));
+    try std.testing.expectEqual(@as(?usize, 10), pcToLine(sample, 16));
+    try std.testing.expectEqual(@as(?usize, 11), pcToLine(sample, 24));
+    try std.testing.expectEqual(@as(?usize, 12), pcToLine(sample, 28));
+    try std.testing.expectEqual(@as(?usize, 13), pcToLine(sample, 32));
+    try std.testing.expectEqual(@as(?usize, 14), pcToLine(sample, 36));
+    try std.testing.expectEqual(@as(?usize, 14), pcToLine(sample, 43));
+    try std.testing.expectEqual(@as(?usize, null), pcToLine(sample, 44));
+}
+
+test "pcToLine: bench.wasm puts __Set__ and the 65528 straddle probe near each other" {
+    // Anchor for the PC-42856 crash: the i64.store within-chunk fast path
+    // emits `SystemUInt32Array.__Set__` and, shortly after, pushes
+    // `__c_i32_65528` to probe whether the high half straddles the next
+    // page. A regression that reorders or loses those instructions would
+    // move the crash elsewhere — this test pins the adjacency so any
+    // such change is caught.
+    const bench = @embedFile("testdata/bench.wasm");
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    const mod = try wasm.parseModule(aa, bench);
+    const meta = try wasm.parseUdonMetaFromModule(aa, mod);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, meta, &buf.writer, .{});
+    const out = buf.written();
+
+    const set_needle = "EXTERN, \"SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid\"";
+    const thr_needle = "PUSH, __c_i32_65528";
+    const set_idx = std.mem.indexOf(u8, out, set_needle) orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.indexOf(u8, out[set_idx..], thr_needle) != null);
+    // pcToLine must be strictly monotonic in pc: a well-formed mapping
+    // over a real module should never regress as pc increases.
+    var prev: usize = 0;
+    var pc: u32 = 0;
+    while (pc < 256) : (pc += 8) {
+        const line = pcToLine(out, pc) orelse break;
+        try std.testing.expect(line >= prev);
+        prev = line;
+    }
+}
+
+// ----------------------------------------------------------------
+// Cycle 2 — outer array must be sized by max_pages, not initial_pages.
+//
+// Root cause pattern of the PC-42856 crash family: if the outer
+// SystemObjectArray is allocated with `initial_pages` slots and any
+// runtime access resolves a `_mem_page_idx >= initial_pages`, the VM
+// throws ArgumentOutOfRangeException on the GetValue/SetValue call.
+// The translator already uses `memory_max_pages_name` for the ctor
+// (translate.zig emitMemoryInit), but this regression guard makes the
+// contract testable so nobody silently reverts it.
+// ----------------------------------------------------------------
+
+test "emitMemoryInit: outer SystemObjectArray ctor is sized by max_pages, not initial_pages" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 1);
+    body[0] = .return_;
+    const params = [_]ValType{};
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const ctor = "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray";
+    const ctor_idx = std.mem.indexOf(u8, out, ctor) orelse return error.TestExpectedEqual;
+    // The two PUSHes immediately before the ctor are: length slot,
+    // then result slot. Scan backwards to find them.
+    const window_start = if (ctor_idx > 512) ctor_idx - 512 else 0;
+    const window = out[window_start..ctor_idx];
+    // Must PUSH `__G__memory_max_pages` (the length operand) — not
+    // `__G__memory_initial_pages`.
+    try std.testing.expect(std.mem.indexOf(u8, window, "PUSH, __G__memory_max_pages") != null);
+    try std.testing.expect(std.mem.indexOf(u8, window, "PUSH, __G__memory_initial_pages") == null);
+}
+
+// ----------------------------------------------------------------
+// Cycle 4 — straddle paths must guard `outer.GetValue(page_idx + 1)`.
+//
+// Root cause of PC-42856: the i64.store within-chunk fast path
+// unconditionally writes the lo word, then decides whether to take the
+// straddle branch. In the straddle branch it computes
+// `_mem_page_idx_hi = _mem_page_idx + 1` and calls
+// `SystemObjectArray.__GetValue__` on the outer array at that index.
+// When `_mem_page_idx` is the last valid page, `_mem_page_idx_hi`
+// equals `_memory.Length` — `outer.GetValue(Length)` throws
+// `ArgumentOutOfRangeException`.
+//
+// Fix: emit a runtime bounds check
+//   `_mem_page_idx_hi < _memory_max_pages` before the OOB GetValue,
+// and skip the hi write on failure. Dropping the hi word matches the
+// current behavior at a runtime trap (WASM semantics), but does so
+// without crashing the UdonBehaviour.
+// ----------------------------------------------------------------
+
+test "emitMemOobTrap: shared halt block logs via LogError and halts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 1);
+    body[0] = .return_;
+    const params = [_]ValType{};
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // The trap block must be present, push the message string, call
+    // LogError, and halt with `JUMP, 0xFFFFFFFC`. Without all three,
+    // bounds-check jumps would land on either nothing (label missing)
+    // or continue executing (halt missing).
+    try std.testing.expect(std.mem.indexOf(u8, out, "__mem_oob_trap__:") != null);
+    const trap_idx = std.mem.indexOf(u8, out, "__mem_oob_trap__:") orelse return error.TestExpectedEqual;
+    const trap_tail = out[trap_idx..];
+    try std.testing.expect(std.mem.indexOf(u8, trap_tail, "PUSH, _mem_oob_msg") != null);
+    try std.testing.expect(std.mem.indexOf(u8, trap_tail, "UnityEngineDebug.__LogError__SystemObject__SystemVoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, trap_tail, "JUMP, 0xFFFFFFFC") != null);
+    // The message data decl is a SystemString literal.
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mem_oob_msg:") != null);
+}
+
+test "emitMemStoreI64: straddle branch guards page_idx+1 against max_pages" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // fn(addr: i32, val: i64) void { local.get 0; local.get 1; i64.store; }
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .{ .i64_store = .{ .@"align" = 3, .offset = 0 } };
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i64 };
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    const straddle_idx = std.mem.indexOf(u8, body_out, "msi_straddle_") orelse return error.TestExpectedEqual;
+    // Past the straddle label, find the outer-array GetValue call — the
+    // instruction that crashes without a bounds check.
+    const after = body_out[straddle_idx..];
+    const gv = "SystemObjectArray.__GetValue__SystemInt32__SystemObject";
+    const gv_rel = std.mem.indexOf(u8, after, gv) orelse return error.TestExpectedEqual;
+    // Between the straddle label and that GetValue there must be a
+    // LessThan against `__G__memory_max_pages`, followed by a
+    // JUMP_IF_FALSE that skips the hi write.
+    const pre = after[0..gv_rel];
+    try std.testing.expect(std.mem.indexOf(u8, pre, "PUSH, __G__memory_max_pages") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pre, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pre, "JUMP_IF_FALSE") != null);
+    // The trap target address resolves to `__mem_oob_trap__` after
+    // layout. We can't match the concrete hex here, but cross-reference
+    // against the trap label: if the JUMP_IF_FALSE address equals the
+    // address appearing on the `__mem_oob_trap__:` line, the guard is
+    // correctly wired. The dedicated "emitMemOobTrap" test pins the
+    // trap block itself; here we only check that a JUMP_IF_FALSE is
+    // present in the straddle guard preamble.
+    try std.testing.expect(std.mem.indexOf(u8, out, "__mem_oob_trap__:") != null);
+}
+
+// ----------------------------------------------------------------
+// Cycle 3 — every page in `[0, max_pages)` must have a materialized
+// `SystemUInt32Array` chunk at `_onEnable` time.
+//
+// If `initial_pages < max_pages`, the previous translator left chunks
+// [initial, max) null. A WASM program that writes to such a page
+// without first calling `memory.grow` would see `outer.GetValue(p)`
+// return null, and the subsequent `__Set__` throw on a null receiver.
+// Per docs/spec_linear_memory.md the outer array is sized to max_pages
+// for exactly this reason; the fix is to fill every slot with a real
+// chunk up front. memory.grow still keeps `_memory_size_pages` accurate
+// for any code that inspects WASM-visible size.
+// ----------------------------------------------------------------
+
+// ----------------------------------------------------------------
+// i32.eqz regression — PC 43048 crash on bench.uasm.
+//
+// 旧実装では lower_numeric.zig が i32.eqz を `.unary` + インスタンスメソッド
+// `SystemInt32.__Equals__SystemInt32__SystemBoolean` で扱っていたため、
+// emitNumericOp の `.unary` 分岐が `push s; push s; extern` を emit していた。
+// これは静的 2-引数 EXTERN 用の形式で、インスタンスメソッドが要求する
+// 3 push (`this` + 引数 + 戻り値) に足りず、Udon VM が内部引数配列の
+// 3 番目を取り出す段階で ArgumentOutOfRangeException を投げていた。
+//
+// 本テストは i32.eqz が静的 EXTERN `op_Equality` に対し
+// `[stack_slot, __c_i32_0, stack_slot]` の 3 push で展開され、
+// かつ旧 `__Equals__` シグネチャが出力に残らないことを保証する。
+// ----------------------------------------------------------------
+
+test "i32.eqz lowers as op_Equality with Boolean scratch and ToInt32 writeback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // fn probe(x: i32) -> i32 { local.get 0; i32.eqz; end }
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .i32_eqz;
+    body[2] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // Regression guard: the old instance-method signature must be gone.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemInt32.__Equals__SystemInt32__SystemBoolean") == null);
+
+    // A dedicated Boolean scratch must be declared, since `op_Equality`
+    // returns Boolean and Udon rejects writing a Boolean into an
+    // Int32-typed heap slot ("Cannot retrieve heap variable of type
+    // 'Boolean' as type 'Int32'").
+    try std.testing.expect(std.mem.indexOf(u8, out, "_cmp_bool: %SystemBoolean, null") != null);
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    const eq_sig = "EXTERN, \"SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean\"";
+    const eq_at = std.mem.indexOf(u8, body_out, eq_sig) orelse {
+        std.debug.print("op_Equality extern not found in probe body:\n{s}\n", .{body_out});
+        return error.TestExpectedEqual;
+    };
+
+    // Walk backwards from the EXTERN, collecting the 3 preceding PUSH operands.
+    const prefix = body_out[0..eq_at];
+    var it = std.mem.splitBackwardsScalar(u8, prefix, '\n');
+    var pushes: [3][]const u8 = undefined;
+    var filled: usize = 0;
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0) continue;
+        if (std.mem.startsWith(u8, line, "PUSH,")) {
+            const arg = std.mem.trim(u8, line["PUSH,".len..], " \t");
+            pushes[2 - filled] = arg;
+            filled += 1;
+            if (filled == 3) break;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), filled);
+
+    // LHS = current stack slot (Int32), RHS = __c_i32_0 (Int32), return slot
+    // = _cmp_bool (Boolean). The first and third must differ since the
+    // return slot is now a Boolean scratch, not the Int32 stack slot.
+    try std.testing.expectEqualStrings("__c_i32_0", pushes[1]);
+    try std.testing.expectEqualStrings("_cmp_bool", pushes[2]);
+    try std.testing.expect(!std.mem.eql(u8, pushes[0], pushes[2]));
+
+    // Immediately after the EXTERN, the Boolean result is converted back to
+    // Int32 (0/1) and stored into the LHS stack slot so WASM-visible
+    // semantics (`i32.eqz`'s result is i32) are preserved.
+    const tail = body_out[eq_at + eq_sig.len ..];
+    const conv_sig = "EXTERN, \"SystemConvert.__ToInt32__SystemBoolean__SystemInt32\"";
+    const conv_at = std.mem.indexOf(u8, tail, conv_sig) orelse {
+        std.debug.print("ToInt32(Boolean) writeback not emitted after op_Equality:\n{s}\n", .{tail});
+        return error.TestExpectedEqual;
+    };
+    const between = tail[0..conv_at];
+    try std.testing.expect(std.mem.indexOf(u8, between, "PUSH, _cmp_bool") != null);
+    try std.testing.expect(std.mem.indexOf(u8, between, pushes[0]) != null);
+}
+
+test "i64.shr_u converts the Int64 shift count to Int32 before the EXTERN" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // fn probe(x: i64, n: i64) -> i64 { local.get 0; local.get 1; i64.shr_u; end }
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .i64_shr_u;
+    body[3] = .return_;
+    const params = [_]ValType{ .i64, .i64 };
+    const results = [_]ValType{.i64};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+
+    // A dedicated Int32 scratch for the shift count must be declared.
+    try std.testing.expect(std.mem.indexOf(u8, out, "_shift_rhs_i32: %SystemInt32") != null);
+
+    // Before the UInt64 RightShift EXTERN, the Int64 stack slot must be
+    // routed through SystemConvert.ToInt32 — Udon's shift EXTERNs take
+    // Int32 for the shift count, and the WASM stack slot holding the
+    // count has its runtime type-tag bumped to Int64 the moment an i64
+    // value is written into it.
+    const ext = "EXTERN, \"SystemUInt64.__op_RightShift__SystemUInt64_SystemInt32__SystemUInt64\"";
+    const ext_at = std.mem.indexOf(u8, body_out, ext) orelse return error.TestExpectedEqual;
+    const prefix = body_out[0..ext_at];
+
+    // The push right before the EXTERN destination (`_num_res_u64`) must be
+    // `_shift_rhs_i32`, not a raw `__probe_S*__` slot.
+    var it = std.mem.splitBackwardsScalar(u8, prefix, '\n');
+    var pushes: [3][]const u8 = undefined;
+    var filled: usize = 0;
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0) continue;
+        if (std.mem.startsWith(u8, line, "PUSH,")) {
+            const arg = std.mem.trim(u8, line["PUSH,".len..], " \t");
+            pushes[2 - filled] = arg;
+            filled += 1;
+            if (filled == 3) break;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), filled);
+    try std.testing.expectEqualStrings("_num_lhs_u64", pushes[0]);
+    try std.testing.expectEqualStrings("_shift_rhs_i32", pushes[1]);
+    try std.testing.expectEqualStrings("_num_res_u64", pushes[2]);
+
+    // The narrowing EXTERN must appear somewhere before the shift.
+    // Note: `emitI64ToI32` was switched from the checked `SystemConvert.ToInt32`
+    // to bit truncation via `emitI64TruncI32` (BitConverter-based) to avoid
+    // the OverflowException on out-of-range i64 values. Shift counts happen to
+    // always fit in Int32 so either path would work runtime-wise, but the
+    // BitConverter path is now consistent with `i32.wrap_i64`.
+    try std.testing.expect(std.mem.indexOf(u8, prefix,
+        "SystemBitConverter.__GetBytes__SystemInt64__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefix,
+        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
+}
+
+test "i32.lt_s routes its Boolean result through _cmp_bool" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // fn probe(a: i32, b: i32) -> i32 { local.get 0; local.get 1; i32.lt_s; end }
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .i32_lt_s;
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    const lt_sig = "EXTERN, \"SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean\"";
+    const lt_at = std.mem.indexOf(u8, body_out, lt_sig) orelse return error.TestExpectedEqual;
+
+    // The push immediately before the EXTERN must name the Boolean scratch,
+    // not an Int32 stack slot. Udon rejects an Int32 slot as the return
+    // destination of a Boolean-producing op.
+    const prefix = body_out[0..lt_at];
+    var it = std.mem.splitBackwardsScalar(u8, prefix, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0) continue;
+        if (std.mem.startsWith(u8, line, "PUSH,")) {
+            const arg = std.mem.trim(u8, line["PUSH,".len..], " \t");
+            try std.testing.expectEqualStrings("_cmp_bool", arg);
+            break;
+        }
+    }
+
+    // A ToInt32(Boolean) writeback must follow, so the stack slot holds 0/1.
+    const tail = body_out[lt_at + lt_sig.len ..];
+    try std.testing.expect(std.mem.indexOf(u8, tail,
+        "EXTERN, \"SystemConvert.__ToInt32__SystemBoolean__SystemInt32\"") != null);
+}
+
+test "if: Int32 cond is narrowed to Boolean before JUMP_IF_FALSE" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // fn probe(x: i32) -> i32 {
+    //   local.get 0;
+    //   if (i32) { i32.const 1 } else { i32.const 2 };
+    //   return;
+    // }
+    const then_body = try a.alloc(Instruction, 1);
+    then_body[0] = .{ .i32_const = 1 };
+    const else_body = try a.alloc(Instruction, 1);
+    else_body[0] = .{ .i32_const = 2 };
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .if_ = .{ .bt = .{ .value = .i32 }, .then_body = then_body, .else_body = else_body } };
+    body[2] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+
+    // The JUMP_IF_FALSE emitted for the `if` must be fed by `_cmp_bool`,
+    // not by the raw Int32 stack slot. An Int32→Boolean narrowing via
+    // `SystemConvert.__ToBoolean__SystemInt32__SystemBoolean` must appear
+    // between the stack-slot push and the JUMP_IF_FALSE.
+    const jif = "JUMP_IF_FALSE,";
+    const jif_at = std.mem.indexOf(u8, body_out, jif) orelse return error.TestExpectedEqual;
+    const prefix = body_out[0..jif_at];
+
+    var it = std.mem.splitBackwardsScalar(u8, prefix, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0) continue;
+        if (std.mem.startsWith(u8, line, "PUSH,")) {
+            const arg = std.mem.trim(u8, line["PUSH,".len..], " \t");
+            try std.testing.expectEqualStrings("_cmp_bool", arg);
+            break;
+        }
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, prefix,
+        "SystemConvert.__ToBoolean__SystemInt32__SystemBoolean") != null);
+}
+
+test "bench: i32.eqz no longer emits the buggy instance-method Equals signature" {
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    // Regression guard for the PC 43048 crash. The bench's test_recursion
+    // path contains `if (n == 0)` which lowers through i32.eqz, so the
+    // old bug-signature would appear at least once if the fix regresses.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemInt32.__Equals__SystemInt32__SystemBoolean") == null);
+}
+
+test "emitMemoryInit: all max_pages chunks are materialized at _onEnable" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 1);
+    body[0] = .return_;
+    const params = [_]ValType{};
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+    // buildOneFuncMemModule uses .{ .min = 1, .max = null } — combined
+    // with the translator's `default_max_pages = 16`, effective max
+    // ends up at 16 while initial stays at 1. That's exactly the
+    // initial<max shape we need to exercise.
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // The onEnable body is where memory init lives.
+    const body_out = onEnableBody(out);
+    // Count how many chunk ctors land in onEnable, which equals the
+    // number of pages pre-materialized before any user event runs.
+    const needle = "SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array";
+    var count: usize = 0;
+    var search_from: usize = 0;
+    while (std.mem.indexOfPos(u8, body_out, search_from, needle)) |idx| {
+        count += 1;
+        search_from = idx + needle.len;
+    }
+    // Exactly max_pages chunks — one per slot of the outer array.
+    try std.testing.expectEqual(@as(usize, 16), count);
+}
+
+// ----------------------------------------------------------------
+// emitOuterGetChecked: every runtime `outer[page_idx]` must be guarded
+// against page_idx being negative or >= memory_max_pages. The PC 221880
+// crash was an `i32.store8` whose dst page landed past the outer
+// SystemObjectArray's upper bound; the VM threw
+// "Index has to be between upper and lower bound of the array" with no
+// diagnostic.
+// ----------------------------------------------------------------
+
+test "i32.store8 byte-access preamble runs through the bounds-checked helper" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .{ .i32_store8 = .{ .@"align" = 0, .offset = 0 } };
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+
+    // Locate the byte-access preamble's GetValue on the outer array.
+    // Immediately preceding it must be the two bounds checks emitted by
+    // emitOuterGetChecked: LessThanOrEqual(0, page_idx) then
+    // LessThan(page_idx, __G__memory_max_pages). Both followed by
+    // JUMP_IF_FALSE to __mem_oob_trap__.
+    const gv = "SystemObjectArray.__GetValue__SystemInt32__SystemObject";
+    const gv_rel = std.mem.indexOf(u8, body_out, gv) orelse return error.TestExpectedEqual;
+    const pre = body_out[0..gv_rel];
+    try std.testing.expect(std.mem.indexOf(u8, pre,
+        "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pre, "PUSH, __G__memory_max_pages") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pre,
+        "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pre, "JUMP_IF_FALSE") != null);
+
+    // The trap block must exist so the JUMP_IF_FALSE has somewhere to
+    // land.
+    try std.testing.expect(std.mem.indexOf(u8, out, "__mem_oob_trap__:") != null);
+}
+
+test "aligned i32.load emits bounds-checked outer-array fetch" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // align=2 routes to emitMemLoadWordFast — before the fix this
+    // emitted a raw GetValue with no guard.
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .i32_load = .{ .@"align" = 2, .offset = 0 } };
+    body[2] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+
+    const gv = "SystemObjectArray.__GetValue__SystemInt32__SystemObject";
+    const gv_rel = std.mem.indexOf(u8, body_out, gv) orelse return error.TestExpectedEqual;
+    const pre = body_out[0..gv_rel];
+    try std.testing.expect(std.mem.indexOf(u8, pre,
+        "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pre, "PUSH, __G__memory_max_pages") != null);
+}
+
+test "data segment init stays bounds-check-free (translator-time verified)" {
+    // Data segment pages are known statically; `translate()` already
+    // rejects modules whose segments extend past max_pages. Routing
+    // those through the runtime check would be dead code. This guards
+    // that we haven't accidentally added a runtime check there.
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+
+    // Grab the onEnable body (which contains data segment init) and
+    // check that no bounds-check pattern appears around the per-segment
+    // page fetches. The pattern we added (_LessThanOrEqual on page_idx
+    // vs __c_i32_0) is the distinctive marker — data segment fetches
+    // push an immediate `__ds_page_<seg>_<page>` constant and go
+    // straight into GetValue.
+    const on_enable = onEnableBody(out);
+    // Each segment emits `__ds_page_<seg>_<page>` constants — look for
+    // at least one to confirm we're reading the right slice.
+    try std.testing.expect(std.mem.indexOf(u8, on_enable, "__ds_page_0_16") != null);
+
+    // Scan the onEnable body for every GetValue call, and assert that
+    // the one preceded by `PUSH, __ds_page_0_16` is immediately after
+    // a simple `PUSH, __G__memory / PUSH, __ds_page_... / PUSH, _mem_chunk`
+    // triple (no LessThanOrEqual test in the 6 lines before it).
+    const marker = "PUSH, __ds_page_0_16";
+    const mkr_idx = std.mem.indexOf(u8, on_enable, marker) orelse return error.TestExpectedEqual;
+    // Take a small window around the marker — 10 lines forward is
+    // plenty for the push/push/push/extern GetValue that follows.
+    const win_end = @min(on_enable.len, mkr_idx + 400);
+    const win = on_enable[mkr_idx..win_end];
+    try std.testing.expect(std.mem.indexOf(u8, win,
+        "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
+    // Crucially: no LessThanOrEqual check right before the GetValue,
+    // meaning the data segment path bypasses the runtime bounds check.
+    // Look ~50 chars before the GetValue inside this window.
+    const gv_in_win = std.mem.indexOf(u8, win,
+        "SystemObjectArray.__GetValue__SystemInt32__SystemObject") orelse return error.TestExpectedEqual;
+    const lead_start = if (gv_in_win > 200) gv_in_win - 200 else 0;
+    const lead = win[lead_start..gv_in_win];
+    try std.testing.expect(std.mem.indexOf(u8, lead,
+        "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean") == null);
+}
+
+test "__mem_oob_trap__ builds a diagnostic message with page= and max=" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 1);
+    body[0] = .return_;
+    const params = [_]ValType{};
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // Label literals must appear in .data for the runtime Concat to
+    // have valid operands.
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mem_oob_page_label:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mem_oob_max_label:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"; page=\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"; max=\"") != null);
+
+    // Trap body must call Int32.ToString twice (for page and max) and
+    // concat them together before the LogError.
+    const trap_idx = std.mem.indexOf(u8, out, "__mem_oob_trap__:") orelse return error.TestExpectedEqual;
+    const trap_tail = out[trap_idx..];
+    const ts_first = std.mem.indexOf(u8, trap_tail, "SystemInt32.__ToString__SystemString") orelse return error.TestExpectedEqual;
+    const ts_second = std.mem.indexOfPos(u8, trap_tail, ts_first + 1, "SystemInt32.__ToString__SystemString") orelse return error.TestExpectedEqual;
+    _ = ts_second;
+    try std.testing.expect(std.mem.indexOf(u8, trap_tail,
+        "SystemString.__Concat__SystemString_SystemString_SystemString_SystemString__SystemString") != null);
+    try std.testing.expect(std.mem.indexOf(u8, trap_tail,
+        "UnityEngineDebug.__LogError__SystemObject__SystemVoid") != null);
 }

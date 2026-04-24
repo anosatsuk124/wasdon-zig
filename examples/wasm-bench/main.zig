@@ -1,18 +1,6 @@
 //! WASM テストベンチ。
 const std = @import("std");
 
-// Import 名そのものを Udon extern シグネチャとして記述し、翻訳器側で
-// ハードコードなしに EXTERN 命令を生成させる (docs/spec_host_import_conversion.md)。
-// Zig の raw-identifier 記法 `@"..."` で `.` や `_` を含む自由な名前が書ける。
-// `extern "c"` は libc 依存を要求してしまうため freestanding では使えない。
-extern "env" fn @"SystemConsole.__WriteLine__SystemString__SystemVoid"(
-    ptr: [*]const u8,
-    len: usize,
-) void;
-
-// もう 1 種類: `UnityEngine.Debug.Log(object)` への別ルート。
-// 同じ generic pass-through を経由し、翻訳器を改変せずに 2 番目の extern を
-// 利用できることを示す (docs/spec_host_import_conversion.md §"Worked Example" 末尾)。
 extern "env" fn @"UnityEngineDebug.__Log__SystemString__SystemVoid"(
     ptr: [*]const u8,
     len: usize,
@@ -31,8 +19,6 @@ fn logf(comptime format: []const u8, args: anytype) void {
 
 // グローバル (翻訳器の __G__ 命名規則テスト用)。
 // `export` を付けて WASM global として明示的にエクスポートする。
-// これがないと Zig はデータセクションに置いてしまい、__udon_meta の
-// `"source": {"kind":"global","name":"counter"}` が解決できない。
 export var counter: i32 = 0;
 export var accum: i64 = 0;
 export var update_tick: i32 = 0;
@@ -57,7 +43,7 @@ const udon_meta_json =
     \\  },
     \\  "options": {
     \\    "strict": false,
-    \\    "memory": { "initialPages": 1, "maxPages": 16, "udonName": "_memory" }
+    \\    "memory": { "initialPages": 1, "maxPages": 24, "udonName": "_memory" }
     \\  }
     \\}
 ;
@@ -275,9 +261,31 @@ fn test_64bit_and_float() void {
     logf("floor(m * 100) = {d}", .{@as(i32, @intFromFloat(@floor(m * 100.0)))}); // 628
 }
 
-// ==== exports: Udon イベントにマップされる ====
 export fn on_start() void {
-    log("=== on_start ===");
+    log("=== on_start begin ===");
+
+    // プリミティブ経路 (std.fmt を通らないもの) から順に。
+    test_nofmt_simple();
+    test_fmt_int_hand();
+
+    // 手書き fast-path と @memcpy 経路。
+    test_manual_fastpath();
+    test_memcpy_direct();
+
+    // Writer レイアウトを模した struct / vtable / slice-field 経路。
+    test_writer_like_struct();
+    test_vtable_indirect();
+    test_wl_slice_write();
+    test_wl_slice_memcpy();
+    test_wl_slice_err();
+
+    // std.Io.Writer 実体 + std.fmt.bufPrint の段階的確認。
+    // i64.const 修正 (Udon spec §4.7 を踏まえた _onEnable 合成) 後は
+    // stage2..4 も完走するはず。
+    test_real_logf();
+
+    // std.fmt.bufPrint を踏む logf を使うブロック。
+    test_fmt_single();
     test_arithmetic();
     test_control_flow();
     test_globals();
@@ -286,19 +294,318 @@ export fn on_start() void {
     test_indirect_call();
     test_struct();
     test_64bit_and_float();
-    log("=== on_start done ===");
+
+    log("=== on_start end ===");
 }
 
 export fn on_update() void {
     update_tick += 1;
-    logf("updated! counter = {d}", .{counter});
+    // logf は含めない。on_update は毎フレームなので、意図せず重くなる
+    // 経路を避ける。必要なら後で有効化。
+    _ = counter;
+}
+
+// on_interact を押すたびに診断 phase を進める。
+//   step 0 : test_nofmt_simple  — bufPrint を通らない log だけの確認
+//   step 1 : test_fmt_single    — logf を 1 回だけ。bufPrint 通る
+//   step 2 : test_fmt_int_hand  — 自作 int→ASCII 経由の log。std.fmt 不使用
+//   step 3 : 元の test_arithmetic を 1 回
+//   step 4 : 元の test_control_flow を 1 回
+//   ...
+// 押した回数で何段階まで通ったか分かる。
+var interact_step: i32 = 0;
+
+fn test_nofmt_simple() void {
+    log("-- nofmt_simple --");
+    log("literal one");
+    log("literal two");
+    log("literal three");
+    log("nofmt_simple done");
+}
+
+// bufPrint を 1 回だけ通す最小ケース。formatInt も通らず、literal のみ。
+fn test_fmt_single() void {
+    log("-- fmt_single --");
+    logf("plain: {s}", .{"hi"});
+    log("fmt_single done");
+}
+
+// 自作の int→ASCII。std.fmt を通らないが、linear memory への store8 と
+// u32/i32 の割り算・剰余を踏むので translator の numeric 経路を試せる。
+var int_log_buf: [16]u8 = undefined;
+
+fn int_to_ascii(value: i32) []const u8 {
+    var v: u32 = if (value < 0) @intCast(-@as(i64, value)) else @intCast(value);
+    var i: usize = int_log_buf.len;
+    if (v == 0) {
+        i -= 1;
+        int_log_buf[i] = '0';
+    }
+    while (v != 0) {
+        i -= 1;
+        int_log_buf[i] = '0' + @as(u8, @intCast(v % 10));
+        v /= 10;
+    }
+    if (value < 0) {
+        i -= 1;
+        int_log_buf[i] = '-';
+    }
+    return int_log_buf[i..];
+}
+
+fn test_fmt_int_hand() void {
+    log("-- fmt_int_hand --");
+    log(int_to_ascii(42));
+    log(int_to_ascii(-7));
+    log(int_to_ascii(0));
+    log("fmt_int_hand done");
+}
+
+var fast_buf: [512]u8 = undefined;
+var fast_end: u32 = 0;
+
+fn write_fast(bytes: []const u8) void {
+    // Writer.write の fast path 条件と同型
+    if (fast_end + bytes.len <= fast_buf.len) {
+        // @memcpy 相当の inline byte copy
+        var i: u32 = 0;
+        const n: u32 = @intCast(bytes.len);
+        while (i < n) : (i += 1) {
+            fast_buf[fast_end + i] = bytes[i];
+        }
+        fast_end += n;
+        return;
+    }
+    log("FAST PATH FAILED");
+}
+
+fn test_manual_fastpath() void {
+    log("-- manual fastpath --");
+    fast_end = 0;
+    write_fast("plain: ");
+    write_fast("hi");
+    log(fast_buf[0..fast_end]);
+    log("manual fastpath done");
+}
+
+// @memcpy を直接呼ぶバージョン。translator の memcpy helper (fn23) 経路を試す。
+fn test_memcpy_direct() void {
+    log("-- memcpy direct --");
+    const src = "abcdefg";
+    @memcpy(fast_buf[0..src.len], src);
+    log(fast_buf[0..src.len]);
+    log("memcpy direct done");
+}
+
+// ==== Writer-like struct テスト ====
+// Zig stdlib の `std.Io.Writer` 構造体と**完全に同一のメモリレイアウト**を
+// 持つ自作 struct を使い、ポインタ経由で fast path 相当のコードを実行する。
+//
+// Writer のレイアウト:
+//   vtable: *const VTable  @0  (4 bytes)
+//   buffer: []u8           @4..11 (ptr @4, len @8)
+//   end: usize             @12 (4 bytes)
+//
+// Phase B.2 で manual fastpath (グローバル変数) は完走した。
+// もしこの struct 越し fast path もハングすれば → struct ポインタの field
+// load が translator で誤動作している決定的証拠。
+// 完走すれば → 問題は Zig stdlib Writer 固有 (vtable dispatch or LLVM が
+// 別の形で emit している)。
+const WriterLike = struct {
+    vtable: u32, // unused, layout dummy @0
+    buf_ptr: u32, // unused, layout dummy @4
+    buf_len: u32, // @8 — like w.buffer.len
+    end: u32, // @12 — like w.end
+};
+
+fn wl_write(w: *WriterLike, bytes: []const u8) void {
+    if (w.end + bytes.len <= w.buf_len) {
+        var i: u32 = 0;
+        const n: u32 = @intCast(bytes.len);
+        while (i < n) : (i += 1) {
+            fast_buf[w.end + i] = bytes[i];
+        }
+        w.end += n;
+        return;
+    }
+    log("WL FAST PATH FAILED");
+}
+
+fn test_writer_like_struct() void {
+    log("-- writer-like struct --");
+    var w = WriterLike{ .vtable = 0, .buf_ptr = 0, .buf_len = 512, .end = 0 };
+    wl_write(&w, "plain: ");
+    wl_write(&w, "hi");
+    log(fast_buf[0..w.end]);
+    log("writer-like done");
+}
+
+// ==== vtable dispatch テスト ====
+// static vtable を経由した関数呼び出しが Udon で動くかを確認する。
+// Zig stdlib の `w.vtable.drain(...)` パターンを最小形で再現。
+const WlVTable = struct {
+    trivial: *const fn (*WriterLike) u32,
+};
+
+fn wl_trivial_impl(w: *WriterLike) u32 {
+    return w.buf_len;
+}
+
+const wl_vtable_impl = WlVTable{ .trivial = wl_trivial_impl };
+
+fn test_vtable_indirect() void {
+    log("-- vtable indirect --");
+    var w = WriterLike{ .vtable = 0, .buf_ptr = 0, .buf_len = 321, .end = 0 };
+    const result = wl_vtable_impl.trivial(&w);
+    log(int_to_ascii(@intCast(result))); // 321 出てほしい
+    log("vtable indirect done");
+}
+
+// ==== Zig Writer により近い: slice field を struct に埋め込む ====
+// 本物の `std.Io.Writer` は `buffer: []u8` というスライスフィールドを持つ。
+// 自作 WriterLike は buf_ptr/buf_len を分解して持っていたが、実際の Writer に
+// 合わせて slice field に変更して再現を試みる。
+const WlWithSlice = struct {
+    vtable: u32, // @0
+    buffer: []u8, // @4 (ptr), @8 (len) — slice field
+    end: u32, // @12
+};
+
+// Writer.write の fast path を slice-field 経由 + inline byte copy で再現
+fn wl_slice_write(w: *WlWithSlice, bytes: []const u8) void {
+    if (w.end + bytes.len <= w.buffer.len) {
+        var i: u32 = 0;
+        const n: u32 = @intCast(bytes.len);
+        while (i < n) : (i += 1) {
+            w.buffer[w.end + i] = bytes[i];
+        }
+        w.end += n;
+        return;
+    }
+    log("WLS FAST PATH FAILED");
+}
+
+fn test_wl_slice_write() void {
+    log("-- wl slice write --");
+    var w = WlWithSlice{ .vtable = 0, .buffer = &fast_buf, .end = 0 };
+    wl_slice_write(&w, "plain: ");
+    wl_slice_write(&w, "hi");
+    log(w.buffer[0..w.end]);
+    log("wl slice write done");
+}
+
+// Writer.write の fast path を @memcpy 二段スライスで再現
+// `@memcpy(w.buffer[w.end..][0..bytes.len], bytes)` は Zig 本体の emit と同一
+fn wl_slice_memcpy(w: *WlWithSlice, bytes: []const u8) void {
+    if (w.end + bytes.len <= w.buffer.len) {
+        @memcpy(w.buffer[w.end..][0..bytes.len], bytes);
+        w.end += @intCast(bytes.len);
+        return;
+    }
+    log("WLSM FAST PATH FAILED");
+}
+
+fn test_wl_slice_memcpy() void {
+    log("-- wl slice memcpy --");
+    var w = WlWithSlice{ .vtable = 0, .buffer = &fast_buf, .end = 0 };
+    wl_slice_memcpy(&w, "plain: ");
+    wl_slice_memcpy(&w, "hi");
+    log(w.buffer[0..w.end]);
+    log("wl slice memcpy done");
+}
+
+// Error!usize 戻り値付きバージョン。Writer.write の signature と完全に一致
+// (void → usize の違いだけ。error union + try/catch も試す)。
+fn wl_slice_err(w: *WlWithSlice, bytes: []const u8) error{Failed}!u32 {
+    if (w.end + bytes.len <= w.buffer.len) {
+        @memcpy(w.buffer[w.end..][0..bytes.len], bytes);
+        w.end += @intCast(bytes.len);
+        return @intCast(bytes.len);
+    }
+    return error.Failed;
+}
+
+fn test_wl_slice_err() void {
+    log("-- wl slice err --");
+    var w = WlWithSlice{ .vtable = 0, .buffer = &fast_buf, .end = 0 };
+    _ = wl_slice_err(&w, "plain: ") catch {
+        log("caught err on plain:");
+        return;
+    };
+    _ = wl_slice_err(&w, "hi") catch {
+        log("caught err on hi");
+        return;
+    };
+    log(w.buffer[0..w.end]);
+    log("wl slice err done");
+}
+
+fn test_real_logf_stage1_writer_init() void {
+    log("-- stage1: Writer.fixed init only --");
+    var buf: [32]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    _ = &w;
+    log("stage1 done");
+}
+
+fn test_real_logf_stage2_bufprint_literal() void {
+    log("-- stage2: bufPrint with literal only --");
+    var buf: [32]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "abc", .{}) catch {
+        log("stage2 bufPrint returned error");
+        return;
+    };
+    log(s);
+    log("stage2 done");
+}
+
+fn test_real_logf_stage3_bufprint_s() void {
+    log("-- stage3: bufPrint with {s} --");
+    var buf: [32]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "x={s}", .{"y"}) catch {
+        log("stage3 bufPrint returned error");
+        return;
+    };
+    log(s);
+    log("stage3 done");
+}
+
+fn test_real_logf_stage4_bufprint_d() void {
+    log("-- stage4: bufPrint with {d} --");
+    var buf: [32]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "n={d}", .{@as(i32, 42)}) catch {
+        log("stage4 bufPrint returned error");
+        return;
+    };
+    log(s);
+    log("stage4 done");
+}
+
+fn test_real_logf() void {
+    log("-- real logf (staged) --");
+    test_real_logf_stage1_writer_init();
+    test_real_logf_stage2_bufprint_literal();
+    test_real_logf_stage3_bufprint_s();
+    test_real_logf_stage4_bufprint_d();
+    log("real logf all stages done");
 }
 
 export fn on_interact() void {
-    counter += 1;
-    logf("interact! counter = {d}", .{counter});
-    // Generic pass-through 経由の 2 個目の extern を呼び出して、翻訳器が
-    // 同じルートで異なるシグネチャを扱えることを確認する。
-    const msg = "interact!";
-    @"UnityEngineDebug.__Log__SystemString__SystemVoid"(msg.ptr, msg.len);
+    const step = interact_step;
+    interact_step +%= 1;
+    switch (step) {
+        0 => test_nofmt_simple(),
+        1 => test_fmt_single(),
+        2 => test_fmt_int_hand(),
+        3 => test_arithmetic(),
+        4 => test_control_flow(),
+        5 => test_globals(),
+        6 => test_recursion(),
+        7 => test_memory(),
+        8 => test_indirect_call(),
+        9 => test_struct(),
+        10 => test_64bit_and_float(),
+        else => log("(no more steps)"),
+    }
+    counter +%= 1;
 }

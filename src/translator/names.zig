@@ -9,6 +9,8 @@
 //! names must survive for the entire translation pass.
 
 const std = @import("std");
+const wasm = @import("wasm");
+const ValType = wasm.types.ValType;
 
 pub fn global(alloc: std.mem.Allocator, wasm_name: []const u8) ![]u8 {
     return std.fmt.allocPrint(alloc, "__G__{s}", .{sanitize(wasm_name)});
@@ -22,8 +24,8 @@ pub fn local(alloc: std.mem.Allocator, fn_name: []const u8, i: u32) ![]u8 {
     return std.fmt.allocPrint(alloc, "__{s}_L{d}__", .{ sanitize(fn_name), i });
 }
 
-pub fn stackSlot(alloc: std.mem.Allocator, fn_name: []const u8, depth: u32) ![]u8 {
-    return std.fmt.allocPrint(alloc, "__{s}_S{d}__", .{ sanitize(fn_name), depth });
+pub fn stackSlot(alloc: std.mem.Allocator, fn_name: []const u8, depth: u32, vt: ValType) ![]u8 {
+    return std.fmt.allocPrint(alloc, "__{s}_S{d}_{s}__", .{ sanitize(fn_name), depth, @tagName(vt) });
 }
 
 pub fn returnSlot(alloc: std.mem.Allocator, fn_name: []const u8, i: u32) ![]u8 {
@@ -92,9 +94,17 @@ test "global name uses __G__ prefix" {
 }
 
 test "stack slot format" {
-    const s = try stackSlot(std.testing.allocator, "foo", 3);
-    defer std.testing.allocator.free(s);
-    try std.testing.expectEqualStrings("__foo_S3__", s);
+    const s32 = try stackSlot(std.testing.allocator, "foo", 3, .i32);
+    defer std.testing.allocator.free(s32);
+    try std.testing.expectEqualStrings("__foo_S3_i32__", s32);
+
+    const s64 = try stackSlot(std.testing.allocator, "foo", 3, .i64);
+    defer std.testing.allocator.free(s64);
+    try std.testing.expectEqualStrings("__foo_S3_i64__", s64);
+
+    const sf32 = try stackSlot(std.testing.allocator, "foo", 3, .f32);
+    defer std.testing.allocator.free(sf32);
+    try std.testing.expectEqualStrings("__foo_S3_f32__", sf32);
 }
 
 test "entry/exit labels" {

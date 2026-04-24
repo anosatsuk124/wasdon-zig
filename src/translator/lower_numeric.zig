@@ -34,7 +34,9 @@ pub const Entry = struct {
 pub fn lookup(inst: wasm.Instruction) ?Entry {
     return switch (inst) {
         // ---- i32 unary ----
-        .i32_eqz => .{ .arity = .unary, .operand_ty = tn.int32, .result_ty = tn.boolean, .sig = "SystemInt32.__Equals__SystemInt32__SystemBoolean" },
+        // NOTE: i32.eqz はインスタンスメソッド `Int32.Equals(Int32)` への素直な
+        // .unary マッピングだと Udon の 3-push 規約に 1 足りずクラッシュするため、
+        // この表からは除外し translate.zig の emitOne 側で i32.eq 相当に展開する。
         // ---- i32 binary (arithmetic / bitwise / shift) ----
         .i32_add => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32" },
         .i32_sub => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32" },
@@ -99,7 +101,11 @@ pub fn lookup(inst: wasm.Instruction) ?Entry {
         .f64_floor => .{ .arity = .unary, .operand_ty = tn.double, .result_ty = tn.double, .sig = "SystemMath.__Floor__SystemDouble__SystemDouble" },
 
         // ---- Conversions (SystemConvert) ----
-        .i32_wrap_i64 => .{ .arity = .unary, .operand_ty = tn.int64, .result_ty = tn.int32, .sig = "SystemConvert.__ToInt32__SystemInt64__SystemInt32" },
+        // NOTE: `i32.wrap_i64` is NOT in this table — `SystemConvert.ToInt32(Int64)`
+        // is a *checked* conversion that throws for values outside Int32 range,
+        // whereas WASM `i32.wrap_i64` is pure bit truncation. `emitOne` handles
+        // it specially via `emitI32WrapI64` which goes through BitConverter
+        // (bit-pattern preserving).
         .i64_extend_i32_s => .{ .arity = .unary, .operand_ty = tn.int32, .result_ty = tn.int64, .sig = "SystemConvert.__ToInt64__SystemInt32__SystemInt64" },
         .i64_extend_i32_u => .{ .arity = .unary, .operand_ty = tn.uint32, .result_ty = tn.int64, .sig = "SystemConvert.__ToInt64__SystemUInt32__SystemInt64" },
         .i32_trunc_f32_s => .{ .arity = .unary, .operand_ty = tn.single, .result_ty = tn.int32, .sig = "SystemConvert.__ToInt32__SystemSingle__SystemInt32" },
@@ -143,6 +149,22 @@ test "i32.eq produces SystemBoolean result" {
     try std.testing.expect(e.result_ty.eql(tn.boolean));
 }
 
+// i32.eqz は「ゼロとの等価判定」を意味する WASM 命令。Udon に 1:1 対応する
+// 静的 EXTERN が存在しないため、このテーブルからは意図的に除外する。
+// 代わりに translate.zig の emitOne がインライン展開し、i32.eq と同じ
+// `SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean` に
+// `__c_i32_0` を RHS として合流させる。
+//
+// かつて本テーブルには
+//   .i32_eqz => .{ ..., .sig = "SystemInt32.__Equals__SystemInt32__SystemBoolean" }
+// というエントリが置かれていたが、これはインスタンスメソッド
+// `Int32.Equals(Int32)` に対する .unary emit (`push s; push s; extern`) を
+// 誘発し、Udon VM が 3 つ目の引数スロットを内部配列から取り出す段階で
+// ArgumentOutOfRangeException を投げた (bench.uasm 実行時 PC 43048 crash)。
+test "i32.eqz is not dispatched via the numeric table" {
+    try std.testing.expect(lookup(.i32_eqz) == null);
+}
+
 test "non-numeric instructions return null" {
     try std.testing.expect(lookup(.{ .local_get = 0 }) == null);
     try std.testing.expect(lookup(.{ .i32_const = 42 }) == null);
@@ -155,15 +177,14 @@ test "non-numeric instructions return null" {
 // を要求する。README の未実装項目 "Some conversion opcodes" を満たすため、
 // 下記 22 個の変換 opcode が lookup で EXTERN 署名を返すこと。
 
-test "i32.wrap_i64 lowers via SystemConvert" {
-    const e = lookup(.i32_wrap_i64) orelse return error.TestExpectedEqual;
-    try std.testing.expectEqual(Arity.unary, e.arity);
-    try std.testing.expect(e.operand_ty.eql(tn.int64));
-    try std.testing.expect(e.result_ty.eql(tn.int32));
-    try std.testing.expectEqualStrings(
-        "SystemConvert.__ToInt32__SystemInt64__SystemInt32",
-        e.sig,
-    );
+test "i32.wrap_i64 is not in the numeric table (handled via BitConverter truncation)" {
+    // `SystemConvert.ToInt32(Int64)` is a *checked* conversion that throws
+    // for values outside [Int32.MinValue, Int32.MaxValue]. WASM `i32.wrap_i64`
+    // is pure bit truncation. The Translator handles `.i32_wrap_i64` via a
+    // dedicated `emitI32WrapI64` routine that routes through BitConverter.
+    // This lookup should therefore return null so the generic sig path cannot
+    // re-introduce the checked conversion.
+    try std.testing.expect(lookup(.i32_wrap_i64) == null);
 }
 
 test "i64.extend_i32_s / _u lower via SystemConvert" {

@@ -59,8 +59,11 @@ pub const Host = struct {
         /// Decrement caller's stack depth by one (consume).
         consumeOne: *const fn (ctx: *anyopaque) void,
 
-        /// Increment caller's stack depth by one (produce result).
-        produceOne: *const fn (ctx: *anyopaque) void,
+        /// Increment caller's stack depth by one (produce result) with the
+        /// WASM value type that now occupies the new top-of-stack slot.
+        /// The implementation uses this to name the typed physical slot
+        /// (`__{fn}_S{d}_{vt}__`) and to drive typed-slot declarations.
+        produceOne: *const fn (ctx: *anyopaque, vt: ValType) Error!void,
 
         /// Emit a PUSH, SYMBOL instruction.
         push: *const fn (ctx: *anyopaque, sym: []const u8) Error!void,
@@ -114,8 +117,8 @@ pub const Host = struct {
     pub fn consumeOne(self: Host) void {
         return self.vtable.consumeOne(self.ctx);
     }
-    pub fn produceOne(self: Host) void {
-        return self.vtable.produceOne(self.ctx);
+    pub fn produceOne(self: Host, vt: ValType) Error!void {
+        return self.vtable.produceOne(self.ctx, vt);
     }
     pub fn push(self: Host, sym: []const u8) Error!void {
         return self.vtable.push(self.ctx, sym);
@@ -242,16 +245,19 @@ fn emitGenericExtern(
         switch (arg.kind) {
             .direct => {
                 const slot_depth = base_depth + wasm_cursor;
-                const slot_name = try names.stackSlot(alloc, host.callerFnName(), slot_depth);
+                const vt = imp_ty.params[wasm_cursor];
+                const slot_name = try names.stackSlot(alloc, host.callerFnName(), slot_depth, vt);
                 try pushed_args.append(alloc, slot_name);
                 wasm_cursor += 1;
             },
             .marshal_string => {
                 // (ptr, len) → SystemString in _marshal_str_tmp.
+                // Both slots are i32 by WASM convention — an i32 byte
+                // pointer and an i32 length.
                 const ptr_depth = base_depth + wasm_cursor;
                 const len_depth = base_depth + wasm_cursor + 1;
-                const ptr_name = try names.stackSlot(alloc, host.callerFnName(), ptr_depth);
-                const len_name = try names.stackSlot(alloc, host.callerFnName(), len_depth);
+                const ptr_name = try names.stackSlot(alloc, host.callerFnName(), ptr_depth, .i32);
+                const len_name = try names.stackSlot(alloc, host.callerFnName(), len_depth, .i32);
                 try emitStringMarshal(host, ptr_name, len_name);
                 try pushed_args.append(alloc, marshal_str_tmp_name);
                 wasm_cursor += 2;
@@ -284,9 +290,11 @@ fn emitGenericExtern(
     var i: u32 = 0;
     while (i < n_wasm_params) : (i += 1) host.consumeOne();
     if (result_scratch) |rs| {
-        host.produceOne();
+        // `imp_ty.results.len <= 1` for Core 1 WASM, enforced earlier.
+        const result_vt = imp_ty.results[0];
+        try host.produceOne(result_vt);
         const dst_depth = host.callerDepth() - 1;
-        const dst_name = try names.stackSlot(alloc, host.callerFnName(), dst_depth);
+        const dst_name = try names.stackSlot(alloc, host.callerFnName(), dst_depth, result_vt);
         try host.push(rs);
         try host.push(dst_name);
         try host.copy();
@@ -550,7 +558,8 @@ const MockHost = struct {
     fn vt_consume(ctx: *anyopaque) void {
         self_(ctx).depth -= 1;
     }
-    fn vt_produce(ctx: *anyopaque) void {
+    fn vt_produce(ctx: *anyopaque, vt: ValType) Error!void {
+        _ = vt;
         self_(ctx).depth += 1;
     }
     fn vt_push(ctx: *anyopaque, sym: []const u8) Error!void {
@@ -631,9 +640,10 @@ test "generic extern: (int, int) -> int pass-through" {
     try emit(mh.host(), imp, ft);
 
     const out = mh.buf.items;
-    // Must contain a PUSH of both argument slots and the EXTERN with raw sig.
-    try expect(std.mem.indexOf(u8, out, "PUSH __caller_S0__") != null);
-    try expect(std.mem.indexOf(u8, out, "PUSH __caller_S1__") != null);
+    // Must contain a PUSH of both argument slots (typed i32) and the
+    // EXTERN with raw sig.
+    try expect(std.mem.indexOf(u8, out, "PUSH __caller_S0_i32__") != null);
+    try expect(std.mem.indexOf(u8, out, "PUSH __caller_S1_i32__") != null);
     try expect(std.mem.indexOf(u8, out,
         "EXTERN SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
     // Stack net: consume 2, produce 1.
