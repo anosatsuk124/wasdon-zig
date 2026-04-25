@@ -7,3 +7,6 @@ zig-out/
 src/wasm/testdata/
 src/translator/testdata/
 
+# Rust build outputs (produced by `cargo build` for the examples/*-rs crates)
+target/
+

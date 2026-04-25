@@ -81,6 +81,8 @@ export fn on_start() void {
 
 The translator parses the import name against the Udon extern signature grammar (`docs/udon_specs.md` §7) and dispatches it generically, so adding new externs never requires touching the translator. `SystemString` arguments are automatically UTF-8 decoded from the `(ptr, len)` pair.
 
+For an end-to-end walkthrough — toolchain pinning (Zig + Rust `wasm32v1-none`), Cargo workspace layout, host-import declarations, mutable-state limitations, `__udon_meta` discovery rules, recursion opt-in, and the build → translate pipeline — see [`docs/producer_guide.md`](docs/producer_guide.md). Working examples live under `examples/` (Zig: `wasm-bench`, `udon-orbit`; Rust: `wasm-bench-rs`, `udon-orbit-rs`).
+
 Udon-side field names, events, sync modes, and memory sizing are configured via a `__udon_meta` JSON blob embedded in the module (see `docs/spec_udonmeta_conversion.md`):
 
 ```zig
@@ -113,7 +115,8 @@ docs/                       # Specs — the source of truth for translation stra
 ├─ spec_linear_memory.md           # Linear memory → two-level chunked array
 ├─ spec_call_return_conversion.md  # Synthesising call/return from RAC + JUMP_INDIRECT
 ├─ spec_udonmeta_conversion.md     # __udon_meta JSON schema and resolution rules
-└─ spec_host_import_conversion.md  # Generic host-import dispatch via signature grammar
+├─ spec_host_import_conversion.md  # Generic host-import dispatch via signature grammar
+└─ producer_guide.md               # Producer-side guide: writing WASM that the translator accepts (Zig, Rust on wasm32v1-none, raw WAT)
 
 src/
 ├─ wasm/                   # WASM Core 1 / MVP binary parser (translator-agnostic)
@@ -127,7 +130,11 @@ src/
 ├─ root.zig                # Library surface
 └─ main.zig                # CLI
 
-examples/wasm-bench/       # Test fixture (freestanding Zig → MVP WASM)
+examples/                   # Producer-side fixtures (also serve as worked examples for docs/producer_guide.md)
+├─ wasm-bench/             # Zig → MVP WASM bench fixture
+├─ wasm-bench-rs/          # Rust port of wasm-bench (wasm32v1-none, no_std)
+├─ udon-orbit/             # Zig VRChat orbit-and-clone showcase
+└─ udon-orbit-rs/          # Rust port of udon-orbit
 ```
 
 ## Testing

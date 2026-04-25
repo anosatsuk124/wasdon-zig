@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "examples/udon-orbit-rs",
+    "examples/wasm-bench-rs",
+]
+
+[workspace.package]
+edition = "2021"
+publish = false
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
