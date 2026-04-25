@@ -32,6 +32,9 @@ pub const Literal = union(enum) {
     single: f32,
     string: []const u8,
     null_literal,
+    /// The bare token `this`. Legal only for `GameObject`, `Transform`, or
+    /// UdonBehaviour/Object-typed slots (`docs/udon_specs.md` §4.6).
+    this_ref,
 
     pub fn write(self: Literal, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
@@ -50,7 +53,25 @@ pub const Literal = union(enum) {
                 try writer.writeAll("\"");
             },
             .null_literal => try writer.writeAll("null"),
+            .this_ref => try writer.writeAll("this"),
         }
+    }
+
+    /// Canonical zero/initial Literal for a `Prim`. Returns a typed zero for
+    /// the three primitives whose Udon type accepts non-null numeric
+    /// literals (Int32/UInt32/Single per `docs/udon_specs.md` §4.7); every
+    /// other primitive — including reference types like GameObject /
+    /// Transform / UdonBehaviour — defaults to `null_literal`. Adding a new
+    /// reference-typed `Prim` variant therefore needs no change to this
+    /// function: the `else` branch absorbs it. If a future `Prim` accepts
+    /// a typed literal, add a new arm above the `else` for it.
+    pub fn zeroFor(prim: type_name.Prim) Literal {
+        return switch (prim) {
+            .int32 => .{ .int32 = 0 },
+            .uint32 => .{ .uint32 = 0 },
+            .single => .{ .single = 0.0 },
+            else => .null_literal,
+        };
     }
 };
 

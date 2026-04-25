@@ -232,6 +232,26 @@ pub fn build(b: *std.Build) void {
     wasm_step.dependOn(&wasm_install.step);
     wasm_step.dependOn(&copy_bench.step);
 
+    // === udon-orbit example ===
+    // A VRChat-flavored sample: orbit the attached GameObject and clone it on
+    // interact. Demonstrates the signature-passthrough import scheme for Udon
+    // externs (docs/spec_host_import_conversion.md).
+    const wasm_orbit_exe = b.addExecutable(.{
+        .name = "udon-orbit",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/udon-orbit/main.zig"),
+            .target = wasm_target,
+            .optimize = .ReleaseSmall,
+        }),
+    });
+    wasm_orbit_exe.entry = .disabled;
+    wasm_orbit_exe.rdynamic = true;
+    const wasm_orbit_install = b.addInstallArtifact(wasm_orbit_exe, .{
+        .dest_dir = .{ .override = .{ .custom = "wasm" } },
+    });
+    const wasm_orbit_step = b.step("udon-orbit-example", "Build the udon-orbit showcase WASM");
+    wasm_orbit_step.dependOn(&wasm_orbit_install.step);
+
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
     // The Zig build system is entirely implemented in userland, which means

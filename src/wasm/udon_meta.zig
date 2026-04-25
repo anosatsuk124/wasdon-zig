@@ -19,8 +19,24 @@ pub const SyncMode = enum { none, manual, continuous };
 pub const FieldSyncMode = enum { none, linear, smooth };
 /// `export` is a Zig keyword so the enum field is escaped; `stringToEnum`
 /// matches on the unescaped name "export".
-pub const SourceKind = enum { global, symbol, name, @"export" };
-pub const FieldType = enum { bool_, int, uint, float, string, object };
+pub const SourceKind = enum { global, symbol, name, @"export", import };
+/// Types a `__udon_meta.fields[*].type` JSON value may declare.
+///
+/// `gameobject`, `transform`, and `udon_behaviour` are the three reference
+/// types the Udon runtime accepts as `this`-init targets — see
+/// `src/udon/type_name.zig` for the runtime constraint that motivates each
+/// variant. Use them when the field needs to be initialised to `this`.
+pub const FieldType = enum {
+    bool_,
+    int,
+    uint,
+    float,
+    string,
+    object,
+    gameobject,
+    transform,
+    udon_behaviour,
+};
 pub const EventKind = enum { Start, Update, Interact, custom };
 pub const UnknownPolicy = enum { ignore, warn, error_ };
 pub const RecursionMode = enum { disabled, stack };
@@ -28,6 +44,11 @@ pub const RecursionMode = enum { disabled, stack };
 pub const Source = struct {
     kind: SourceKind,
     name: ?[]const u8 = null,
+    /// WASM import module name. Only meaningful when `kind == .import`;
+    /// the matcher uses the `(module, name)` pair to bind a meta field
+    /// to a `(import "<module>" "<name>" (global …))` declaration in
+    /// the WASM binary.
+    module: ?[]const u8 = null,
 };
 
 pub const FieldSync = struct {
@@ -135,6 +156,10 @@ fn parseFieldType(s: []const u8) errors.ParseError!FieldType {
     if (std.mem.eql(u8, s, "float")) return .float;
     if (std.mem.eql(u8, s, "string")) return .string;
     if (std.mem.eql(u8, s, "object")) return .object;
+    if (std.mem.eql(u8, s, "gameobject")) return .gameobject;
+    if (std.mem.eql(u8, s, "transform")) return .transform;
+    if (std.mem.eql(u8, s, "udonBehaviour")) return .udon_behaviour;
+    if (std.mem.eql(u8, s, "udon_behaviour")) return .udon_behaviour;
     return error.InvalidFieldType;
 }
 
@@ -157,6 +182,7 @@ fn parseSource(obj: std.json.ObjectMap) errors.ParseError!Source {
     const kind = try enumFromStringOrError(SourceKind, kind_s, error.InvalidSourceKind);
     var src: Source = .{ .kind = kind };
     if (obj.get("name")) |nv| src.name = try getStringFromValue(nv);
+    if (obj.get("module")) |mv| src.module = try getStringFromValue(mv);
     return src;
 }
 

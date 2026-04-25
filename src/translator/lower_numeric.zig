@@ -93,6 +93,12 @@ pub fn lookup(inst: wasm.Instruction) ?Entry {
         .i64_gt_u => .{ .arity = .binary, .operand_ty = tn.uint64, .result_ty = tn.boolean, .sig = "SystemUInt64.__op_GreaterThan__SystemUInt64_SystemUInt64__SystemBoolean" },
         .i64_ge_u => .{ .arity = .binary, .operand_ty = tn.uint64, .result_ty = tn.boolean, .sig = "SystemUInt64.__op_GreaterThanOrEqual__SystemUInt64_SystemUInt64__SystemBoolean" },
 
+        // ---- f32 binary ----
+        .f32_add => .{ .arity = .binary, .operand_ty = tn.single, .result_ty = tn.single, .sig = "SystemSingle.__op_Addition__SystemSingle_SystemSingle__SystemSingle" },
+        .f32_sub => .{ .arity = .binary, .operand_ty = tn.single, .result_ty = tn.single, .sig = "SystemSingle.__op_Subtraction__SystemSingle_SystemSingle__SystemSingle" },
+        .f32_mul => .{ .arity = .binary, .operand_ty = tn.single, .result_ty = tn.single, .sig = "SystemSingle.__op_Multiplication__SystemSingle_SystemSingle__SystemSingle" },
+        .f32_div => .{ .arity = .binary, .operand_ty = tn.single, .result_ty = tn.single, .sig = "SystemSingle.__op_Division__SystemSingle_SystemSingle__SystemSingle" },
+
         // ---- f64 binary ----
         .f64_add => .{ .arity = .binary, .operand_ty = tn.double, .result_ty = tn.double, .sig = "SystemDouble.__op_Addition__SystemDouble_SystemDouble__SystemDouble" },
         .f64_sub => .{ .arity = .binary, .operand_ty = tn.double, .result_ty = tn.double, .sig = "SystemDouble.__op_Subtraction__SystemDouble_SystemDouble__SystemDouble" },

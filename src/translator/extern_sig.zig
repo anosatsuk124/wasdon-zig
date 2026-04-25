@@ -69,20 +69,30 @@ pub fn parse(allocator: std.mem.Allocator, name: []const u8) std.mem.Allocator.E
 
     const after_method = rest[method_end + 2 ..];
 
-    // after_method = args "__" return. The args segment ends at the last
-    // `__` because method was already consumed; the remainder after the
-    // final `__` is the return type.
-    const last_dunder = findLastDoubleUnderscore(after_method) orelse return null;
-    const args_str = after_method[0..last_dunder];
-    const result_str = after_method[last_dunder + 2 ..];
-    if (result_str.len == 0) return null;
-    if (!isValidUdonTypeStart(result_str)) return null;
-    if (args_str.len == 0) return null;
-
-    // Parse args. `SystemVoid` as the entire list means nullary.
+    // after_method is either:
+    //   (a) args "__" return   — regular form with explicit arg list
+    //   (b) return             — bare property-getter/setter form (nullary)
+    //
+    // Udon's node listing (`docs/udon_nodes.txt`) emits (b) for property
+    // accessors — e.g. `UnityEngineTime.__get_deltaTime__SystemSingle` has
+    // no middle arg-list section. Accept both; (b) is detected by the
+    // absence of a further `__` inside `after_method`.
     var args: []ArgSpec = &.{};
-    if (!std.mem.eql(u8, args_str, "SystemVoid")) {
-        args = try parseArgs(allocator, args_str);
+    var result_str: []const u8 = undefined;
+    if (findLastDoubleUnderscore(after_method)) |last_dunder| {
+        const args_str = after_method[0..last_dunder];
+        result_str = after_method[last_dunder + 2 ..];
+        if (result_str.len == 0) return null;
+        if (!isValidUdonTypeStart(result_str)) return null;
+        if (args_str.len == 0) return null;
+        if (!std.mem.eql(u8, args_str, "SystemVoid")) {
+            args = try parseArgs(allocator, args_str);
+        }
+    } else {
+        // Bare getter/setter form: entire remainder is the return type.
+        result_str = after_method;
+        if (result_str.len == 0) return null;
+        if (!isValidUdonTypeStart(result_str)) return null;
     }
 
     return Signature{
@@ -220,6 +230,29 @@ test "parse nullary arg list via SystemVoid" {
     try expectEqualStrings("get_Now", s.method);
     try std.testing.expectEqual(@as(usize, 0), s.args.len);
     try expectEqualStrings("SystemDateTime", s.result);
+}
+
+test "parse bare property-getter form (no arg-list section)" {
+    // Udon lists property accessors without an arg-list section.
+    const opt = try parseAlloc("UnityEngineTime.__get_deltaTime__SystemSingle");
+    try expect(opt != null);
+    const s = opt.?;
+    defer freeSig(s);
+    try expectEqualStrings("UnityEngineTime", s.udon_type);
+    try expectEqualStrings("get_deltaTime", s.method);
+    try std.testing.expectEqual(@as(usize, 0), s.args.len);
+    try expectEqualStrings("SystemSingle", s.result);
+}
+
+test "parse bare instance-getter form (no arg-list section)" {
+    const opt = try parseAlloc("UnityEngineTransform.__get_position__UnityEngineVector3");
+    try expect(opt != null);
+    const s = opt.?;
+    defer freeSig(s);
+    try expectEqualStrings("UnityEngineTransform", s.udon_type);
+    try expectEqualStrings("get_position", s.method);
+    try std.testing.expectEqual(@as(usize, 0), s.args.len);
+    try expectEqualStrings("UnityEngineVector3", s.result);
 }
 
 test "parse Ref suffix strips and sets is_ref" {

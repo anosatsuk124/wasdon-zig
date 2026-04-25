@@ -210,8 +210,16 @@ fn emitGenericExtern(
 
     // Validate that the WASM parameter sequence matches the Udon argument
     // list under the type-mapping rules.
+    //
+    // Udon instance methods do not carry `this` in their signature's arg
+    // list (docs/udon_specs.md §7.3) — the caller is required to PUSH the
+    // receiver first. WASM producers supply `this` as an explicit leading
+    // i32 arg, so we accept WASM arity == signature arity + 1 and treat the
+    // leading WASM arg as `this`. Exact-match static methods still work
+    // unchanged.
     const wasm_param_count_expected = expectedWasmParamCount(sig.args);
-    if (wasm_param_count_expected != imp_ty.params.len) {
+    const has_this: bool = imp_ty.params.len == wasm_param_count_expected + 1;
+    if (wasm_param_count_expected != imp_ty.params.len and !has_this) {
         try host.comment(try std.fmt.allocPrint(
             alloc,
             "signature {s} expects {d} WASM params, import has {d}",
@@ -241,6 +249,14 @@ fn emitGenericExtern(
     defer pushed_args.deinit(alloc);
 
     var wasm_cursor: u32 = 0;
+    if (has_this) {
+        // Leading WASM arg is the implicit `this` receiver. It consumes one
+        // WASM slot and is PUSHed first, ahead of the signature's arg list.
+        const this_vt = imp_ty.params[0];
+        const this_slot = try names.stackSlot(alloc, host.callerFnName(), base_depth, this_vt);
+        try pushed_args.append(alloc, this_slot);
+        wasm_cursor = 1;
+    }
     for (sig.args) |arg| {
         switch (arg.kind) {
             .direct => {
@@ -439,18 +455,14 @@ fn udonTypeFor(name: []const u8) TypeName {
 
 fn zeroLiteralFor(ty: TypeName) udon.asm_.Literal {
     if (ty.is_array) return .null_literal;
-    return switch (ty.prim) {
-        .int32 => .{ .int32 = 0 },
-        .uint32 => .{ .uint32 = 0 },
-        .single => .{ .single = 0.0 },
-        // SystemByte / SystemInt64 / SystemUInt64 / SystemBoolean: the
-        // UAssembly assembler rejects any non-null numeric initializer
-        // (docs/udon_specs.md §4.7). Scratch slots of these types must be
-        // declared as null — the value is produced by the EXTERN that
-        // writes into the slot.
-        .byte, .string, .object, .int64, .uint64, .double, .boolean => .null_literal,
-        .void_ => .null_literal,
-    };
+    // The per-`Prim` zero/null choice lives on `Literal.zeroFor` so that
+    // adding a new reference-type `Prim` variant doesn't ripple through
+    // this site. Scratch slots of types whose Udon assembler forbids
+    // non-null literals (`docs/udon_specs.md` §4.7) — Byte / Int64 /
+    // UInt64 / Boolean / String / Object / GameObject / Transform /
+    // UdonBehaviour — therefore land as `null` and the value is produced
+    // by the EXTERN that writes into the slot.
+    return udon.asm_.Literal.zeroFor(ty.prim);
 }
 
 fn hashStr(s: []const u8) u32 {
@@ -721,8 +733,8 @@ test "signature mismatch: WASM arity disagrees with Udon sig" {
     defer arena.deinit();
     var mh = MockHost.init(arena.allocator());
     defer mh.deinit();
-    // Udon signature expects 2 ints, but WASM says 3 params.
-    const params = [_]ValType{ .i32, .i32, .i32 };
+    // Udon signature expects 2 ints, but WASM says 4 — neither exact nor +1.
+    const params = [_]ValType{ .i32, .i32, .i32, .i32 };
     const imp: wasm.module.Import = .{
         .module = "env",
         .name = "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32",
@@ -730,6 +742,32 @@ test "signature mismatch: WASM arity disagrees with Udon sig" {
     };
     const ft: wasm.types.FuncType = .{ .params = &params, .results = &.{} };
     try std.testing.expectError(error.SignatureMismatch, emit(mh.host(), imp, ft));
+}
+
+test "instance method: WASM arity = sig arity + 1 treats leading as this" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var mh = MockHost.init(arena.allocator());
+    defer mh.deinit();
+    // Bare instance getter: signature has 0 args, WASM has 1 (the receiver).
+    mh.depth = 1; // one WASM param on the stack: `this`
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{.i32};
+    const imp: wasm.module.Import = .{
+        .module = "env",
+        .name = "UnityEngineTransform.__get_position__UnityEngineVector3",
+        .desc = .{ .func = 0 },
+    };
+    const ft: wasm.types.FuncType = .{ .params = &params, .results = &results };
+    try emit(mh.host(), imp, ft);
+
+    const out = mh.buf.items;
+    // The `this` slot must be pushed before the return scratch.
+    const this_push = std.mem.indexOf(u8, out, "PUSH __caller_S0_i32__").?;
+    const ret_push = std.mem.indexOf(u8, out, "PUSH __ext_ret_").?;
+    const extern_pos = std.mem.indexOf(u8, out, "EXTERN UnityEngineTransform.__get_position__UnityEngineVector3").?;
+    try expect(this_push < ret_push);
+    try expect(ret_push < extern_pos);
 }
 
 // Two back-to-back calls to a SystemString-taking import — the same WASM locals

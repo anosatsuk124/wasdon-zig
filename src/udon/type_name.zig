@@ -10,6 +10,13 @@
 const std = @import("std");
 
 /// Primitive .NET types used by the WASM → Udon translation.
+///
+/// `gameobject`, `transform`, and `udon_behaviour` are the three reference
+/// types the Udon runtime's heap-reference resolver accepts as `this`-init
+/// targets (despite `docs/udon_specs.md` §4.6 also listing `Object`, the
+/// runtime rejects raw `SystemObject` slots with
+/// "Unsupported GameObject/Component reference type"). Use these explicit
+/// variants when emitting `%T, this` data-section slots.
 pub const Prim = enum {
     int32,
     int64,
@@ -22,6 +29,9 @@ pub const Prim = enum {
     string,
     void_,
     object,
+    gameobject,
+    transform,
+    udon_behaviour,
 };
 
 pub fn primName(p: Prim) []const u8 {
@@ -37,6 +47,11 @@ pub fn primName(p: Prim) []const u8 {
         .string => "SystemString",
         .void_ => "SystemVoid",
         .object => "SystemObject",
+        .gameobject => "UnityEngineGameObject",
+        .transform => "UnityEngineTransform",
+        // Per `docs/udon_specs.md` §3.4, Udon Assembly spells UdonBehaviour as
+        // `VRCUdonCommonInterfacesIUdonEventReceiver` (the interface).
+        .udon_behaviour => "VRCUdonCommonInterfacesIUdonEventReceiver",
     };
 }
 
@@ -68,6 +83,9 @@ pub const string: TypeName = .{ .prim = .string };
 pub const void_: TypeName = .{ .prim = .void_ };
 pub const object: TypeName = .{ .prim = .object };
 pub const object_array: TypeName = .{ .prim = .object, .is_array = true };
+pub const gameobject: TypeName = .{ .prim = .gameobject };
+pub const transform: TypeName = .{ .prim = .transform };
+pub const udon_behaviour: TypeName = .{ .prim = .udon_behaviour };
 pub const uint32_array: TypeName = .{ .prim = .uint32, .is_array = true };
 pub const byte: TypeName = .{ .prim = .byte };
 pub const byte_array: TypeName = .{ .prim = .byte, .is_array = true };

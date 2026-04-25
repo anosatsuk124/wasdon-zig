@@ -367,7 +367,21 @@ const Translator = struct {
         var i: u32 = 0;
         for (self.mod.imports) |imp| switch (imp.desc) {
             .global => {
-                buf[i] = try std.fmt.allocPrint(self.aa(), "__G__imp_{s}_{s}", .{ imp.module, imp.name });
+                // Prefer a meta-configured udonName for `kind: import`
+                // bindings; fall back to `__G__imp_<module>_<name>`.
+                var chosen: ?[]const u8 = null;
+                if (self.meta) |m| {
+                    for (m.fields) |f| {
+                        if (importMetaMatches(f, imp)) {
+                            if (f.udon_name) |un| chosen = un;
+                            break;
+                        }
+                    }
+                }
+                if (chosen == null) {
+                    chosen = try std.fmt.allocPrint(self.aa(), "__G__imp_{s}_{s}", .{ imp.module, imp.name });
+                }
+                buf[i] = chosen.?;
                 i += 1;
             },
             else => {},
@@ -511,38 +525,157 @@ const Translator = struct {
         });
     }
 
+    /// Default Udon type for a WASM `ValType`. Used by both the
+    /// imported-globals and module-globals slot emitters.
+    fn udonTypeForValType(vt: wasm.types.ValType) tn.TypeName {
+        return switch (vt) {
+            .i32 => tn.int32,
+            .i64 => tn.int64,
+            .f32 => tn.single,
+            .f64 => tn.double,
+        };
+    }
+
+    /// True iff this meta field binds an imported WASM global with the
+    /// given `(module, name)` pair.
+    fn importMetaMatches(f: wasm.udon_meta.Field, imp: wasm.module.Import) bool {
+        if (f.source.kind != .import) return false;
+        const fmod = f.source.module orelse return false;
+        const fname = f.source.name orelse return false;
+        return std.mem.eql(u8, fmod, imp.module) and std.mem.eql(u8, fname, imp.name);
+    }
+
+    /// Apply meta-driven `is_export` / `sync` / type / `default: "this"`
+    /// overrides to a slot. Reference types (object / gameobject /
+    /// transform / udon_behaviour) override the WASM-valtype default; the
+    /// literal `"this"` lowers to the Udon `this` token
+    /// (docs/udon_specs.md §4.6). The runtime resolver only accepts
+    /// gameobject / transform / udon_behaviour as `this` targets — raw
+    /// `SystemObject` with `this` halts at load time, so callers should
+    /// pick the matching narrow type when defaulting to `this`.
+    fn applyMetaSlotOverrides(
+        f: wasm.udon_meta.Field,
+        ud_ty: *tn.TypeName,
+        lit: *Literal,
+        is_export: *bool,
+        sync: *?udon.asm_.SyncMode,
+    ) void {
+        is_export.* = f.is_export;
+        if (f.sync.enabled) sync.* = switch (f.sync.mode orelse .none) {
+            .none => .none,
+            .linear => .linear,
+            .smooth => .smooth,
+        };
+        if (f.type) |ft| switch (ft) {
+            .object, .gameobject, .transform, .udon_behaviour => {
+                ud_ty.* = switch (ft) {
+                    .object => tn.object,
+                    .gameobject => tn.gameobject,
+                    .transform => tn.transform,
+                    .udon_behaviour => tn.udon_behaviour,
+                    else => unreachable,
+                };
+                lit.* = .null_literal;
+                if (f.default) |dv| switch (dv) {
+                    .string => |s| if (std.mem.eql(u8, s, "this")) {
+                        lit.* = .this_ref;
+                    },
+                    else => {},
+                };
+            },
+            else => {},
+        };
+    }
+
     fn emitGlobalsData(self: *Translator) Error!void {
+        // (a) Imported WASM globals — their data-section slot is what
+        // `emitGlobalGet` PUSHes via the unified `global_udon_names`
+        // array. The slot type/init come entirely from meta (imports
+        // have no WASM-side init); without a meta override they default
+        // to the WASM-valtype zero.
+        var imp_idx: u32 = 0;
+        for (self.mod.imports) |imp| switch (imp.desc) {
+            .global => |gt| {
+                defer imp_idx += 1;
+                const name = self.global_udon_names[imp_idx];
+                var ud_ty: tn.TypeName = udonTypeForValType(gt.valtype);
+                var lit: Literal = .null_literal;
+                var is_export = false;
+                var sync: ?udon.asm_.SyncMode = null;
+                if (self.meta) |m| {
+                    for (m.fields) |f| {
+                        if (importMetaMatches(f, imp)) {
+                            applyMetaSlotOverrides(f, &ud_ty, &lit, &is_export, &sync);
+                            break;
+                        }
+                    }
+                }
+                try self.asm_.addData(.{
+                    .name = name,
+                    .ty = ud_ty,
+                    .init = lit,
+                    .is_export = is_export,
+                    .sync = sync,
+                });
+            },
+            else => {},
+        };
+
+        // (b) Meta-only slots backing function-import bindings. Zig 0.16
+        // cannot emit `(import (global …))` directly, so authors expose
+        // Udon-only singletons through a nullary function import and a
+        // `kind: import` meta entry that names the Udon slot. Each such
+        // binding needs its slot declared here (the matching `call` site
+        // is lowered in `tryEmitMetaImportRead` as a slot-copy).
+        if (self.meta) |m| {
+            outer: for (m.fields) |f| {
+                if (f.source.kind != .import) continue;
+                const udon_name = f.udon_name orelse continue;
+                // Skip if this binding already matched a `(import (global))`
+                // emitted in (a) — that path already declared the slot.
+                for (self.mod.imports) |imp| switch (imp.desc) {
+                    .global => if (importMetaMatches(f, imp)) continue :outer,
+                    else => {},
+                };
+                // Default to SystemObject for purely-meta-described slots;
+                // applyMetaSlotOverrides will narrow it to the right
+                // reference type when `f.type` is set.
+                var ud_ty: tn.TypeName = tn.object;
+                var lit: Literal = .null_literal;
+                var is_export = false;
+                var sync: ?udon.asm_.SyncMode = null;
+                applyMetaSlotOverrides(f, &ud_ty, &lit, &is_export, &sync);
+                try self.asm_.addData(.{
+                    .name = udon_name,
+                    .ty = ud_ty,
+                    .init = lit,
+                    .is_export = is_export,
+                    .sync = sync,
+                });
+            }
+        }
+
+        // (c) Module-defined globals.
         for (0..self.mod.globals.len) |i| {
             const gidx: u32 = self.num_imported_globals + @as(u32, @intCast(i));
             const g = self.mod.globals[i];
             const name = self.global_udon_names[gidx];
-            const ud_ty: tn.TypeName = switch (g.ty.valtype) {
-                .i32 => tn.int32,
-                .i64 => tn.int64,
-                .f32 => tn.single,
-                .f64 => tn.double,
-            };
+            var ud_ty: tn.TypeName = udonTypeForValType(g.ty.valtype);
             // Per docs/udon_specs.md §4.7, only SystemInt32/UInt32/Single/String
             // accept non-null/non-this numeric literals. i64/f64 must be null.
-            const lit: Literal = if (g.init.len == 1) switch (g.init[0]) {
+            var lit: Literal = if (g.init.len == 1) switch (g.init[0]) {
                 .i32_const => |v| Literal{ .int32 = v },
                 .i64_const => Literal.null_literal,
                 .f32_const => |v| Literal{ .single = v },
                 .f64_const => Literal.null_literal,
                 else => Literal{ .int32 = 0 },
             } else Literal{ .int32 = 0 };
-            // Figure out if this field should be exported / synced per meta.
             var is_export = false;
             var sync: ?udon.asm_.SyncMode = null;
             if (self.meta) |m| {
                 for (m.fields) |f| {
                     if (f.udon_name) |un| if (std.mem.eql(u8, un, name)) {
-                        is_export = f.is_export;
-                        if (f.sync.enabled) sync = switch (f.sync.mode orelse .none) {
-                            .none => .none,
-                            .linear => .linear,
-                            .smooth => .smooth,
-                        };
+                        applyMetaSlotOverrides(f, &ud_ty, &lit, &is_export, &sync);
                     };
                 }
             }
@@ -1672,6 +1805,8 @@ const Translator = struct {
             .memory_grow => try self.emitMemoryGrow(ctx),
             .i32_load => try self.emitMemLoadWord(ctx, ins),
             .i32_store => try self.emitMemStoreWord(ctx, ins),
+            .f32_load => try self.emitMemLoadF32(ctx, ins),
+            .f32_store => try self.emitMemStoreF32(ctx, ins),
             .i32_load8_u, .i32_load8_s => try self.emitMemLoadByte(ctx, ins),
             .i32_store8 => try self.emitMemStoreByte(ctx, ins),
             .i32_store16 => try self.emitMemStore16(ctx, ins),
@@ -2678,6 +2813,16 @@ const Translator = struct {
             .func => |tidx| {
                 if (seen == fn_idx) {
                     const imp_ty = self.mod.types_[tidx];
+                    // Meta-bound import: a `kind: import` field declares
+                    // that this WASM import (a `() -> T` function) is a
+                    // pure read of the named Udon data slot. Lower it as a
+                    // slot copy instead of a real EXTERN. This is how
+                    // Udon-only singletons (e.g. `__G__self: %Transform,
+                    // this`) are exposed to the WASM source — Zig cannot
+                    // emit `(import "env" "x" (global …))` directly, so
+                    // authors declare an import function and the binding
+                    // routes through here.
+                    if (try self.tryEmitMetaImportRead(ctx, imp, imp_ty)) return;
                     var bridge = HostBridge{ .t = self, .ctx = ctx };
                     const host = bridge.host();
                     lower_import.emit(host, imp, imp_ty) catch |err| switch (err) {
@@ -2695,6 +2840,45 @@ const Translator = struct {
             },
             else => {},
         };
+    }
+
+    /// If `imp` is a `() -> single-result` function bound by a
+    /// `__udon_meta.fields[*]` entry with `source.kind == "import"`,
+    /// emit a slot-read lowering and return `true`. Caller skips the
+    /// generic `lower_import.emit` path.
+    fn tryEmitMetaImportRead(
+        self: *Translator,
+        ctx: *FuncCtx,
+        imp: wasm.module.Import,
+        imp_ty: wasm.types.FuncType,
+    ) Error!bool {
+        const m = self.meta orelse return false;
+        var slot: ?[]const u8 = null;
+        for (m.fields) |f| {
+            if (importMetaMatches(f, imp)) {
+                slot = f.udon_name orelse continue;
+                break;
+            }
+        }
+        const src = slot orelse return false;
+        // Shape constraint: nullary function returning exactly one value.
+        // Anything else is a meta misconfiguration — surface a comment
+        // and fall through to the generic dispatcher (which will emit
+        // `unsupported import` or `SignatureMismatch`).
+        if (imp_ty.params.len != 0 or imp_ty.results.len != 1) {
+            try self.asm_.comment(try std.fmt.allocPrint(self.aa(),
+                "meta import binding {s}.{s} expects () -> T but WASM type is {d}->{d}",
+                .{ imp.module, imp.name, imp_ty.params.len, imp_ty.results.len }));
+            return false;
+        }
+        try self.asm_.comment(try std.fmt.allocPrint(self.aa(),
+            "meta import: {s}.{s} → {s}", .{ imp.module, imp.name, src }));
+        try ctx.push(imp_ty.results[0]);
+        const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        try self.asm_.push(src);
+        try self.asm_.push(dst);
+        try self.asm_.copy();
+        return true;
     }
 
     // ---- memory ----
@@ -2847,6 +3031,22 @@ const Translator = struct {
         try self.asm_.extern_("SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32");
     }
 
+    /// Reinterpret an Int32 bit pattern as a Single (f32). Used by
+    /// `emitMemLoadWord(... .f32)` to bridge the u32 chunk word to the
+    /// WASM-side f32 stack slot.
+    fn emitI32BitsToSingle(self: *Translator, val_i32: []const u8, out_f32: []const u8) Error!void {
+        try self.asm_.push(val_i32);
+        try self.asm_.push(out_f32);
+        try self.asm_.extern_("SystemBitConverter.__Int32BitsToSingle__SystemInt32__SystemSingle");
+    }
+
+    /// Inverse of `emitI32BitsToSingle`: Single → Int32 bit pattern.
+    fn emitSingleToI32Bits(self: *Translator, val_f32: []const u8, out_i32: []const u8) Error!void {
+        try self.asm_.push(val_f32);
+        try self.asm_.push(out_i32);
+        try self.asm_.extern_("SystemBitConverter.__SingleToInt32Bits__SystemSingle__SystemInt32");
+    }
+
     /// Int64 → UInt64 bit-pattern-preserving conversion.
     fn emitI64ToU64(self: *Translator, val: []const u8, out_u64: []const u8) Error!void {
         try self.asm_.push(val);
@@ -2897,16 +3097,52 @@ const Translator = struct {
 
     fn emitMemLoadWord(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
         const memarg = ins.i32_load;
+        return self.emitMemLoadWordTyped(ctx, memarg, .i32);
+    }
+
+    /// f32.load: same chunk-fetch machinery as i32.load, with the final
+    /// unpack step bridged through `SystemBitConverter.Int32BitsToSingle`
+    /// so the WASM-side f32 stack slot receives the correct typed value.
+    fn emitMemLoadF32(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
+        const memarg = ins.f32_load;
+        return self.emitMemLoadWordTyped(ctx, memarg, .f32);
+    }
+
+    fn emitMemLoadWordTyped(
+        self: *Translator,
+        ctx: *FuncCtx,
+        memarg: wasm.instruction.MemArg,
+        val_ty: ValType,
+    ) Error!void {
         const raw_addr = try ctx.slotAt(self.aa(), ctx.depth - 1);
         const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
         if (memarg.@"align" >= 2) {
-            return self.emitMemLoadWordFast(ctx, addr_slot);
+            return self.emitMemLoadWordFast(ctx, addr_slot, val_ty);
         }
-        return self.emitMemLoadWordGeneric(ctx, addr_slot);
+        return self.emitMemLoadWordGeneric(ctx, addr_slot, val_ty);
     }
 
-    fn emitMemLoadWordFast(self: *Translator, ctx: *FuncCtx, addr_slot: []const u8) Error!void {
-        try self.asm_.comment("i32.load (aligned, within-chunk fast path)");
+    /// Final unpack step shared by the load fast/generic paths: take the
+    /// `_mem_val_u32_buf` populated by the chunk read and convert it into
+    /// the value expected at the WASM stack's destination slot.
+    fn emitLoadWordUnpack(self: *Translator, val_ty: ValType, dst: []const u8) Error!void {
+        switch (val_ty) {
+            .i32 => try self.emitU32ToI32("_mem_val_u32_buf", dst),
+            .f32 => {
+                try self.emitU32ToI32("_mem_val_u32_buf", "_mem_val_i32_buf");
+                try self.emitI32BitsToSingle("_mem_val_i32_buf", dst);
+            },
+            else => unreachable, // word-sized loads are i32 or f32 only
+        }
+    }
+
+    fn emitMemLoadWordFast(self: *Translator, ctx: *FuncCtx, addr_slot: []const u8, val_ty: ValType) Error!void {
+        const op_label: []const u8 = switch (val_ty) {
+            .i32 => "i32.load (aligned, within-chunk fast path)",
+            .f32 => "f32.load (aligned, within-chunk fast path)",
+            else => unreachable,
+        };
+        try self.asm_.comment(op_label);
         ctx.pop();
         // page_idx := addr >> 16
         try self.asm_.push(addr_slot);
@@ -2923,24 +3159,38 @@ const Translator = struct {
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
         // outer[page_idx] → _mem_chunk (bounds-checked)
-        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.load", "primary");
+        const site_label: []const u8 = switch (val_ty) {
+            .i32 => "i32.load",
+            .f32 => "f32.load",
+            else => unreachable,
+        };
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, site_label, "primary");
         try self.emitOuterGetChecked("_mem_page_idx");
-        // chunk[word_in_page] → UInt32 scratch; then convert to Int32 dst.
+        // chunk[word_in_page] → UInt32 scratch; unpack per val_ty.
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.push("_mem_val_u32_buf");
         try self.asm_.extern_("SystemUInt32Array.__Get__SystemInt32__SystemUInt32");
-        try ctx.push(.i32);
+        try ctx.push(val_ty);
         const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
-        try self.emitU32ToI32("_mem_val_u32_buf", dst);
+        try self.emitLoadWordUnpack(val_ty, dst);
     }
 
-    /// Generic i32.load that handles unaligned access and page-straddle.
-    /// Per `docs/spec_linear_memory.md` §6.1, dispatches at runtime into one
-    /// of three branches based on `sub = addr & 3` and whether the 4-byte
-    /// window crosses a page boundary.
-    fn emitMemLoadWordGeneric(self: *Translator, ctx: *FuncCtx, addr_slot: []const u8) Error!void {
-        try self.asm_.comment("i32.load (generic: 3-branch alignment/straddle dispatch)");
+    /// Generic i32.load / f32.load that handles unaligned access and
+    /// page-straddle. Per `docs/spec_linear_memory.md` §6.1, dispatches at
+    /// runtime into one of three branches based on `sub = addr & 3` and
+    /// whether the 4-byte window crosses a page boundary.
+    fn emitMemLoadWordGeneric(self: *Translator, ctx: *FuncCtx, addr_slot: []const u8, val_ty: ValType) Error!void {
+        const site_label: []const u8 = switch (val_ty) {
+            .i32 => "i32.load",
+            .f32 => "f32.load",
+            else => unreachable,
+        };
+        try self.asm_.comment(switch (val_ty) {
+            .i32 => "i32.load (generic: 3-branch alignment/straddle dispatch)",
+            .f32 => "f32.load (generic: 3-branch alignment/straddle dispatch)",
+            else => unreachable,
+        });
         const id = self.block_counter;
         self.block_counter += 1;
         const fast_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mlw_fast_{d}__", .{ ctx.fn_name, id });
@@ -2949,7 +3199,7 @@ const Translator = struct {
         const end_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_mlw_end_{d}__", .{ ctx.fn_name, id });
 
         ctx.pop();
-        try ctx.push(.i32);
+        try ctx.push(val_ty);
         const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
 
         // Decompose address.
@@ -3003,7 +3253,7 @@ const Translator = struct {
         // Fall-through: unaligned within chunk.
         try self.asm_.label(slow_lbl);
         // chunk := outer[page_idx] (bounds-checked)
-        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.load", "slow");
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, site_label, "slow");
         try self.emitOuterGetChecked("_mem_page_idx");
         // lo := chunk[word_in_page]
         try self.asm_.push("_mem_chunk");
@@ -3020,12 +3270,12 @@ const Translator = struct {
         try self.asm_.push("_mem_word_in_page_hi");
         try self.asm_.push("_mlw_hi");
         try self.asm_.extern_("SystemUInt32Array.__Get__SystemInt32__SystemUInt32");
-        try self.emitMlwCombineAndEnd(dst, end_lbl);
+        try self.emitMlwCombineAndEnd(dst, end_lbl, val_ty);
 
         // Straddle branch.
         try self.asm_.label(straddle_lbl);
         // lo_chunk := outer[page_idx] (bounds-checked)
-        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.load", "straddle_lo");
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, site_label, "straddle_lo");
         try self.emitOuterGetChecked("_mem_page_idx");
         // lo := lo_chunk[16383]
         try self.asm_.push("_mem_chunk");
@@ -3038,31 +3288,31 @@ const Translator = struct {
         try self.asm_.push("_mem_word_in_page_hi");
         try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
         // hi_chunk := outer[page_idx + 1] (bounds-checked inside helper)
-        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.load", "straddle_hi");
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, site_label, "straddle_hi");
         try self.emitOuterGetChecked("_mem_word_in_page_hi");
         // hi := hi_chunk[0]
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("__c_i32_0");
         try self.asm_.push("_mlw_hi");
         try self.asm_.extern_("SystemUInt32Array.__Get__SystemInt32__SystemUInt32");
-        try self.emitMlwCombineAndEnd(dst, end_lbl);
+        try self.emitMlwCombineAndEnd(dst, end_lbl, val_ty);
 
         // Fast branch.
         try self.asm_.label(fast_lbl);
-        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.load", "fast");
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, site_label, "fast");
         try self.emitOuterGetChecked("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.push("_mem_val_u32_buf");
         try self.asm_.extern_("SystemUInt32Array.__Get__SystemInt32__SystemUInt32");
-        try self.emitU32ToI32("_mem_val_u32_buf", dst);
+        try self.emitLoadWordUnpack(val_ty, dst);
 
         try self.asm_.label(end_lbl);
     }
 
     /// Common trailer for the unaligned-within and straddle branches:
     /// dst := (lo >> shift) | (hi << rshift) ; then goto end.
-    fn emitMlwCombineAndEnd(self: *Translator, dst: []const u8, end_lbl: []const u8) Error!void {
+    fn emitMlwCombineAndEnd(self: *Translator, dst: []const u8, end_lbl: []const u8, val_ty: ValType) Error!void {
         // shift := sub << 3 (bytes → bits)
         try self.asm_.push("_mem_sub");
         try self.asm_.push("__c_i32_3");
@@ -3083,36 +3333,63 @@ const Translator = struct {
         try self.asm_.push("_mlw_rshift");
         try self.asm_.push("_mem_u32_shifted");
         try self.asm_.extern_("SystemUInt32.__op_LeftShift__SystemUInt32_SystemInt32__SystemUInt32");
-        // tmp | hi_shifted goes into UInt32 scratch, then convert to Int32 dst.
+        // tmp | hi_shifted goes into UInt32 scratch, then unpack per val_ty.
         try self.asm_.push("_mlw_tmp");
         try self.asm_.push("_mem_u32_shifted");
         try self.asm_.push("_mem_val_u32_buf");
         try self.asm_.extern_("SystemUInt32.__op_LogicalOr__SystemUInt32_SystemUInt32__SystemUInt32");
-        try self.emitU32ToI32("_mem_val_u32_buf", dst);
+        try self.emitLoadWordUnpack(val_ty, dst);
         try self.asm_.jump(end_lbl);
     }
 
     fn emitMemStoreWord(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
         const memarg = ins.i32_store;
+        return self.emitMemStoreWordTyped(ctx, memarg, .i32);
+    }
+
+    /// f32.store: bit-convert the Single stack value to Int32 via
+    /// `SystemBitConverter.SingleToInt32Bits`, widen to UInt32, then reuse
+    /// the i32.store chunk-write machinery.
+    fn emitMemStoreF32(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
+        const memarg = ins.f32_store;
+        return self.emitMemStoreWordTyped(ctx, memarg, .f32);
+    }
+
+    fn emitMemStoreWordTyped(
+        self: *Translator,
+        ctx: *FuncCtx,
+        memarg: wasm.instruction.MemArg,
+        val_ty: ValType,
+    ) Error!void {
         const val = try ctx.slotAt(self.aa(), ctx.depth - 1);
         ctx.pop();
         const raw_addr = try ctx.slotAt(self.aa(), ctx.depth - 1);
         // Offset must be applied *before* we pop the address slot, since
         // the downstream fast/generic helpers pop it themselves.
         const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
-        // Convert the Int32 stack slot to the UInt32 bit pattern the inner
-        // SystemUInt32Array and all SystemUInt32 ops expect. Using
-        // `SystemBitConverter` (not `SystemConvert`) avoids OverflowException
-        // for high-bit-set values like 0xDEADBEEF.
-        try self.emitI32ToU32(val, "_mem_val_u32_buf");
-        if (memarg.@"align" >= 2) {
-            return self.emitMemStoreWordFast(ctx, addr_slot, "_mem_val_u32_buf");
+        // Bridge the stack-type value into `_mem_val_u32_buf` (the UInt32
+        // expected by the chunk-write helpers). BitConverter is used
+        // throughout so high-bit values round-trip without OverflowException.
+        switch (val_ty) {
+            .i32 => try self.emitI32ToU32(val, "_mem_val_u32_buf"),
+            .f32 => {
+                try self.emitSingleToI32Bits(val, "_mem_val_i32_buf");
+                try self.emitI32ToU32("_mem_val_i32_buf", "_mem_val_u32_buf");
+            },
+            else => unreachable,
         }
-        return self.emitMemStoreWordGeneric(ctx, addr_slot, "_mem_val_u32_buf");
+        if (memarg.@"align" >= 2) {
+            return self.emitMemStoreWordFast(ctx, addr_slot, "_mem_val_u32_buf", val_ty);
+        }
+        return self.emitMemStoreWordGeneric(ctx, addr_slot, "_mem_val_u32_buf", val_ty);
     }
 
-    fn emitMemStoreWordFast(self: *Translator, ctx: *FuncCtx, addr_slot: []const u8, val: []const u8) Error!void {
-        try self.asm_.comment("i32.store (aligned, within-chunk fast path)");
+    fn emitMemStoreWordFast(self: *Translator, ctx: *FuncCtx, addr_slot: []const u8, val: []const u8, val_ty: ValType) Error!void {
+        try self.asm_.comment(switch (val_ty) {
+            .i32 => "i32.store (aligned, within-chunk fast path)",
+            .f32 => "f32.store (aligned, within-chunk fast path)",
+            else => unreachable,
+        });
         ctx.pop();
         try self.asm_.push(addr_slot);
         try self.asm_.push("__c_i32_16");
@@ -3126,7 +3403,12 @@ const Translator = struct {
         try self.asm_.push("__c_i32_2");
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
-        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.store", "primary");
+        const site_label: []const u8 = switch (val_ty) {
+            .i32 => "i32.store",
+            .f32 => "f32.store",
+            else => unreachable,
+        };
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, site_label, "primary");
         try self.emitOuterGetChecked("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
@@ -3134,10 +3416,20 @@ const Translator = struct {
         try self.asm_.extern_("SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid");
     }
 
-    /// Generic i32.store that handles unaligned access and page-straddle
-    /// via a 3-branch RMW (read-modify-write) of two adjacent words.
-    fn emitMemStoreWordGeneric(self: *Translator, ctx: *FuncCtx, addr_slot: []const u8, val: []const u8) Error!void {
-        try self.asm_.comment("i32.store (generic: 3-branch alignment/straddle RMW)");
+    /// Generic i32.store / f32.store that handles unaligned access and
+    /// page-straddle via a 3-branch RMW (read-modify-write) of two adjacent
+    /// words.
+    fn emitMemStoreWordGeneric(self: *Translator, ctx: *FuncCtx, addr_slot: []const u8, val: []const u8, val_ty: ValType) Error!void {
+        const site_label: []const u8 = switch (val_ty) {
+            .i32 => "i32.store",
+            .f32 => "f32.store",
+            else => unreachable,
+        };
+        try self.asm_.comment(switch (val_ty) {
+            .i32 => "i32.store (generic: 3-branch alignment/straddle RMW)",
+            .f32 => "f32.store (generic: 3-branch alignment/straddle RMW)",
+            else => unreachable,
+        });
         const id = self.block_counter;
         self.block_counter += 1;
         const fast_lbl = try std.fmt.allocPrint(self.aa(), "__{s}_msw_fast_{d}__", .{ ctx.fn_name, id });
@@ -3188,7 +3480,7 @@ const Translator = struct {
 
         // Unaligned within-chunk: read both words from same chunk.
         try self.asm_.label(slow_lbl);
-        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.store", "slow");
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, site_label, "slow");
         try self.emitOuterGetChecked("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
@@ -3219,7 +3511,7 @@ const Translator = struct {
         // Straddle: read lo from current chunk[16383], hi from next chunk[0].
         try self.asm_.label(straddle_lbl);
         // lo_chunk := outer[page_idx] (bounds-checked)
-        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.store", "straddle_lo");
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, site_label, "straddle_lo");
         try self.emitOuterGetChecked("_mem_page_idx");
         // lo := lo_chunk[16383]
         try self.asm_.push("_mem_chunk");
@@ -3236,7 +3528,7 @@ const Translator = struct {
         // hi_chunk := outer[page_idx + 1] (bounds-checked inside helper —
         // the page_idx_hi slot is mirrored into _mem_page_idx so the trap
         // message reflects the high page that tripped the check)
-        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.store", "straddle_hi");
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, site_label, "straddle_hi");
         try self.emitOuterGetChecked("_mem_word_in_page_hi");
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("__c_i32_0");
@@ -3252,7 +3544,7 @@ const Translator = struct {
         // Re-fetch lo_chunk := outer[page_idx] (page_idx is still valid,
         // and emitOuterGetChecked re-verifies just in case) and write
         // lo_out[16383].
-        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.store", "straddle_lo_writeback");
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, site_label, "straddle_lo_writeback");
         try self.emitOuterGetChecked("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("__c_i32_16383");
@@ -3262,7 +3554,7 @@ const Translator = struct {
 
         // Fast branch.
         try self.asm_.label(fast_lbl);
-        try self.recordMemOpSite(ctx.fn_name, addr_slot, "i32.store", "fast");
+        try self.recordMemOpSite(ctx.fn_name, addr_slot, site_label, "fast");
         try self.emitOuterGetChecked("_mem_page_idx");
         try self.asm_.push("_mem_chunk");
         try self.asm_.push("_mem_word_in_page");
@@ -7181,4 +7473,144 @@ test "__mem_oob_trap__ builds a diagnostic message with page= and max=" {
         "SystemString.__Concat__SystemString_SystemString_SystemString_SystemString__SystemString") != null);
     try std.testing.expect(std.mem.indexOf(u8, trap_tail,
         "UnityEngineDebug.__LogError__SystemObject__SystemVoid") != null);
+}
+
+// F3.1 — meta `type: object, default: "this"` on a global lowers the
+// corresponding Udon data slot to `%SystemObject, this`. Without this,
+// instance-method EXTERNs like `UnityEngineComponent.__get_transform` see a
+// SystemInt32 as their `this` argument and the Udon VM halts.
+test "meta field type=object default=\"this\" emits %SystemObject, this" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Single i32 mutable global, value 0.
+    const global_init = try a.alloc(Instruction, 1);
+    global_init[0] = .{ .i32_const = 0 };
+    const globals = try a.alloc(wasm.module.Global, 1);
+    globals[0] = .{
+        .ty = .{ .valtype = .i32, .mut = .mutable },
+        .init = global_init,
+    };
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "self", .desc = .{ .global = 0 } };
+
+    const mod: wasm.Module = .{ .globals = globals, .exports = exports };
+
+    const meta_fields = try a.alloc(wasm.udon_meta.Field, 1);
+    meta_fields[0] = .{
+        .key = "self",
+        .source = .{ .kind = .global, .name = "self" },
+        .udon_name = "__G__self",
+        .type = .object,
+        .default = std.json.Value{ .string = "this" },
+    };
+    const meta: wasm.UdonMeta = .{ .version = 1, .fields = meta_fields };
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, meta, &buf.writer, .{});
+    const out = buf.written();
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "__G__self: %SystemObject, this") != null);
+}
+
+// F3.2 — meta `type: object` without `default` keeps `null` as initial.
+// Regression guard: an incautious override could turn every object field
+// into `this`, which is illegal for non-UdonBehaviour-compatible slots.
+test "meta field type=object no default emits %SystemObject, null" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const global_init = try a.alloc(Instruction, 1);
+    global_init[0] = .{ .i32_const = 0 };
+    const globals = try a.alloc(wasm.module.Global, 1);
+    globals[0] = .{
+        .ty = .{ .valtype = .i32, .mut = .mutable },
+        .init = global_init,
+    };
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "handle", .desc = .{ .global = 0 } };
+
+    const mod: wasm.Module = .{ .globals = globals, .exports = exports };
+
+    const meta_fields = try a.alloc(wasm.udon_meta.Field, 1);
+    meta_fields[0] = .{
+        .key = "handle",
+        .source = .{ .kind = .global, .name = "handle" },
+        .udon_name = "__G__handle",
+        .type = .object,
+    };
+    const meta: wasm.UdonMeta = .{ .version = 1, .fields = meta_fields };
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, meta, &buf.writer, .{});
+    const out = buf.written();
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "__G__handle: %SystemObject, null") != null);
+}
+
+// F3.3 — `f32.store` / `f32.load` round-trip through the chunked linear
+// memory via `SystemBitConverter.SingleToInt32Bits` and its inverse. The
+// emitted uasm must contain both reinterpret externs and must NOT leave
+// an `__unsupported__` annotation in the code section.
+test "f32.store / f32.load round-trip via SystemBitConverter bridge" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // fn(f32) -> f32:
+    //   i32.const 0            ;; address
+    //   local.get 0            ;; value
+    //   f32.store align=2 offset=0
+    //   i32.const 0            ;; address
+    //   f32.load  align=2 offset=0
+    const params = try a.alloc(ValType, 1);
+    params[0] = .f32;
+    const results = try a.alloc(ValType, 1);
+    results[0] = .f32;
+    const types_ = try a.alloc(wasm.types.FuncType, 1);
+    types_[0] = .{ .params = params, .results = results };
+    const funcs = try a.alloc(u32, 1);
+    funcs[0] = 0;
+
+    const body = try a.alloc(Instruction, 5);
+    body[0] = .{ .i32_const = 0 };
+    body[1] = .{ .local_get = 0 };
+    body[2] = .{ .f32_store = .{ .@"align" = 2, .offset = 0 } };
+    body[3] = .{ .i32_const = 0 };
+    body[4] = .{ .f32_load = .{ .@"align" = 2, .offset = 0 } };
+    const codes = try a.alloc(wasm.module.Code, 1);
+    codes[0] = .{ .locals = &.{}, .body = body };
+
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "roundtrip", .desc = .{ .func = 0 } };
+
+    const memories = try a.alloc(wasm.types.Limits, 1);
+    memories[0] = .{ .min = 1, .max = 1 };
+
+    const mod: wasm.Module = .{
+        .types_ = types_,
+        .funcs = funcs,
+        .codes = codes,
+        .exports = exports,
+        .memories = memories,
+    };
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemBitConverter.__SingleToInt32Bits__SystemSingle__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemBitConverter.__Int32BitsToSingle__SystemInt32__SystemSingle") != null);
+
+    // No `ANNOTATION, __unsupported__` should remain in the code section.
+    const code_start = std.mem.indexOf(u8, out, ".code_start") orelse return error.TestExpectedEqual;
+    const code_tail = out[code_start..];
+    try std.testing.expect(std.mem.indexOf(u8, code_tail, "ANNOTATION, __unsupported__") == null);
 }
