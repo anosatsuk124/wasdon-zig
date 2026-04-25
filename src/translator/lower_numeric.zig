@@ -43,8 +43,19 @@ pub fn lookup(inst: wasm.Instruction) ?Entry {
         .i32_mul => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32" },
         .i32_div_s => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32" },
         .i32_div_u => .{ .arity = .binary, .operand_ty = tn.uint32, .result_ty = tn.uint32, .sig = "SystemUInt32.__op_Division__SystemUInt32_SystemUInt32__SystemUInt32" },
-        .i32_rem_s => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_Modulus__SystemInt32_SystemInt32__SystemInt32" },
-        .i32_rem_u => .{ .arity = .binary, .operand_ty = tn.uint32, .result_ty = tn.uint32, .sig = "SystemUInt32.__op_Modulus__SystemUInt32_SystemUInt32__SystemUInt32" },
+        // C# names the `%` operator method `op_Modulus`, but Udon's static
+        // node list exposes it under the older CLR name `op_Remainder` (and
+        // only for SystemInt32 / SystemDecimal among the integer types).
+        // Emitting `__op_Modulus__` makes UdonBehaviour silently halt at
+        // load time. See docs/udon_specs.md §7.4.
+        .i32_rem_s => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_Remainder__SystemInt32_SystemInt32__SystemInt32" },
+        // i32.rem_u: Udon's node list has no SystemUInt32.__op_Modulus__
+        // (verified against docs/udon_nodes.txt). Emitting that signature
+        // makes UdonBehaviour silently halt at load time. translate.zig's
+        // emitOne intercepts .i32_rem_u and expands it to a - (a/b)*b
+        // using the existing UInt32 Division/Multiplication/Subtraction
+        // nodes. This lookup must therefore return null so the generic
+        // sig path cannot re-introduce the missing extern.
         .i32_and => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32" },
         .i32_or => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_LogicalOr__SystemInt32_SystemInt32__SystemInt32" },
         .i32_xor => .{ .arity = .binary, .operand_ty = tn.int32, .result_ty = tn.int32, .sig = "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32" },
@@ -76,7 +87,11 @@ pub fn lookup(inst: wasm.Instruction) ?Entry {
         .i64_shr_u => .{ .arity = .binary, .operand_ty = tn.uint64, .result_ty = tn.uint64, .sig = "SystemUInt64.__op_RightShift__SystemUInt64_SystemInt32__SystemUInt64" },
         .i64_div_s => .{ .arity = .binary, .operand_ty = tn.int64, .result_ty = tn.int64, .sig = "SystemInt64.__op_Division__SystemInt64_SystemInt64__SystemInt64" },
         .i64_div_u => .{ .arity = .binary, .operand_ty = tn.uint64, .result_ty = tn.uint64, .sig = "SystemUInt64.__op_Division__SystemUInt64_SystemUInt64__SystemUInt64" },
-        .i64_rem_s => .{ .arity = .binary, .operand_ty = tn.int64, .result_ty = tn.int64, .sig = "SystemInt64.__op_Modulus__SystemInt64_SystemInt64__SystemInt64" },
+        // i64.rem_s: Udon ships neither SystemInt64.__op_Modulus__ nor
+        // SystemInt64.__op_Remainder__. translate.zig's emitOne intercepts
+        // .i64_rem_s and synthesizes it as a - (a/b)*b using the existing
+        // SystemInt64 Division/Multiplication/Subtraction nodes — same
+        // shape as the i32.rem_u and i64.rem_u expansions.
         // i64.rem_u: Udon には SystemUInt64.__op_Modulus__ が存在しないため、
         // translate.zig 側で a - (a/b)*b の 3-EXTERN シーケンスに展開する。
         // この lookup テーブルからは意図的に除外する。
@@ -169,6 +184,17 @@ test "i32.eq produces SystemBoolean result" {
 // ArgumentOutOfRangeException を投げた (bench.uasm 実行時 PC 43048 crash)。
 test "i32.eqz is not dispatched via the numeric table" {
     try std.testing.expect(lookup(.i32_eqz) == null);
+}
+
+// SystemUInt32.__op_Modulus__ does not exist in Udon's node list (verified
+// against docs/udon_nodes.txt). Emitting that signature makes UdonBehaviour
+// silently halt at load time — no exception message, no _onEnable, no
+// Start event. translate.zig's emitOne intercepts .i32_rem_u and expands
+// it to a - (a/b)*b using the existing UInt32 Division/Multiplication/
+// Subtraction nodes. This guard makes sure the lookup path never resurrects
+// the missing signature.
+test "i32.rem_u is not in the numeric table (handled via emitI32RemU expansion)" {
+    try std.testing.expect(lookup(.i32_rem_u) == null);
 }
 
 test "non-numeric instructions return null" {

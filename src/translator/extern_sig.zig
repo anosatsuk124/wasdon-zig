@@ -312,7 +312,7 @@ test "numeric dispatch table round-trips through parser" {
         "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32",
         "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32",
         "SystemUInt32.__op_Division__SystemUInt32_SystemUInt32__SystemUInt32",
-        "SystemInt32.__op_Modulus__SystemInt32_SystemInt32__SystemInt32",
+        "SystemInt32.__op_Remainder__SystemInt32_SystemInt32__SystemInt32",
         "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32",
         "SystemInt32.__op_LogicalOr__SystemInt32_SystemInt32__SystemInt32",
         "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32",

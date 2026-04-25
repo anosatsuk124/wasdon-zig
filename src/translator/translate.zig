@@ -910,6 +910,13 @@ const Translator = struct {
         // Scratch for i64.rem_u expansion (Udon has no SystemUInt64.__op_Modulus__).
         try self.asm_.addData(.{ .name = "_rem_q_u64", .ty = tn.uint64, .init = .null_literal });
         try self.asm_.addData(.{ .name = "_rem_qb_u64", .ty = tn.uint64, .init = .null_literal });
+        // Scratch for i32.rem_u expansion (Udon has no SystemUInt32.__op_Modulus__).
+        try self.asm_.addData(.{ .name = "_rem_q_u32", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "_rem_qb_u32", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        // Scratch for i64.rem_s expansion (Udon ships neither SystemInt64
+        // Modulus nor Remainder).
+        try self.asm_.addData(.{ .name = "_rem_q_i64", .ty = tn.int64, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_rem_qb_i64", .ty = tn.int64, .init = .null_literal });
     }
 
     fn emitFunctionData(self: *Translator) Error!void {
@@ -1750,6 +1757,23 @@ const Translator = struct {
             try self.emitI64RemU(ctx);
             return;
         }
+        // i32.rem_u has no SystemUInt32.__op_Modulus__ node in Udon either;
+        // mirror the i64.rem_u expansion. Without this the resulting program
+        // is silently rejected at UdonBehaviour load time (no exception
+        // message — the only log line is "VM execution errored, halted").
+        // Encountered in the wild from `(x as u32) % N` patterns inside Rust
+        // `alloc` users (e.g. `examples/wasm-bench-alloc-rs`).
+        if (ins == .i32_rem_u) {
+            try self.emitI32RemU(ctx);
+            return;
+        }
+        // i64.rem_s also has no Udon node (neither Modulus nor Remainder
+        // is exposed for SystemInt64). Synthesize as a - (a/b)*b using the
+        // existing SystemInt64 Division/Multiplication/Subtraction nodes.
+        if (ins == .i64_rem_s) {
+            try self.emitI64RemS(ctx);
+            return;
+        }
         if (ins == .i32_eqz) {
             try self.emitI32Eqz(ctx);
             return;
@@ -1808,6 +1832,7 @@ const Translator = struct {
             .f32_load => try self.emitMemLoadF32(ctx, ins),
             .f32_store => try self.emitMemStoreF32(ctx, ins),
             .i32_load8_u, .i32_load8_s => try self.emitMemLoadByte(ctx, ins),
+            .i32_load16_u, .i32_load16_s => try self.emitMemLoad16(ctx, ins),
             .i32_store8 => try self.emitMemStoreByte(ctx, ins),
             .i32_store16 => try self.emitMemStore16(ctx, ins),
             .i64_load => try self.emitMemLoadI64(ctx, ins),
@@ -2139,6 +2164,68 @@ const Translator = struct {
     /// defense-in-depth.
     fn emitI64ToI32(self: *Translator, i64_slot: []const u8, out_i32_slot: []const u8) Error!void {
         try self.emitI64TruncI32(i64_slot, out_i32_slot);
+    }
+
+    /// Expand `i32.rem_u` as `a - (a / b) * b`. Mirror of `emitI64RemU`.
+    /// Udon's node list has no `SystemUInt32.__op_Modulus__` but provides
+    /// Division/Multiplication/Subtraction in UInt32. Emitting the missing
+    /// Modulus node makes UdonBehaviour silently halt at load time — no
+    /// exception message, no `_onEnable`, no Start event — because Udon
+    /// validates EXTERN signatures against its static node list and
+    /// flips `_isReady` to false on a miss.
+    fn emitI32RemU(self: *Translator, ctx: *FuncCtx) Error!void {
+        try self.asm_.comment("i32.rem_u (synthesized: a - (a/b)*b)");
+        const rhs = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        const lhs = try ctx.slotAt(self.aa(), ctx.depth - 2);
+        // Stack slots are typed Int32 — route through BitConverter so the
+        // UInt32 EXTERNs below receive correctly-typed heap variables.
+        try self.emitI32ToU32(lhs, "_num_lhs_u32");
+        try self.emitI32ToU32(rhs, "_num_rhs_u32");
+        // _rem_q_u32 := a / b
+        try self.asm_.push("_num_lhs_u32");
+        try self.asm_.push("_num_rhs_u32");
+        try self.asm_.push("_rem_q_u32");
+        try self.asm_.extern_("SystemUInt32.__op_Division__SystemUInt32_SystemUInt32__SystemUInt32");
+        // _rem_qb_u32 := _rem_q_u32 * b
+        try self.asm_.push("_rem_q_u32");
+        try self.asm_.push("_num_rhs_u32");
+        try self.asm_.push("_rem_qb_u32");
+        try self.asm_.extern_("SystemUInt32.__op_Multiplication__SystemUInt32_SystemUInt32__SystemUInt32");
+        // _num_res_u32 := a - _rem_qb_u32
+        try self.asm_.push("_num_lhs_u32");
+        try self.asm_.push("_rem_qb_u32");
+        try self.asm_.push("_num_res_u32");
+        try self.asm_.extern_("SystemUInt32.__op_Subtraction__SystemUInt32_SystemUInt32__SystemUInt32");
+        // lhs (Int32 stack slot) := _num_res_u32
+        try self.emitU32ToI32("_num_res_u32", lhs);
+        ctx.pop(); // rhs consumed
+    }
+
+    /// Expand `i64.rem_s` as `a - (a / b) * b`. Udon ships neither
+    /// `SystemInt64.__op_Modulus__` nor `SystemInt64.__op_Remainder__`
+    /// (only SystemInt32 / SystemDecimal got the Remainder node). Stack
+    /// slots are already typed Int64, so no BitConverter routing is needed
+    /// — just three SystemInt64 EXTERN calls.
+    fn emitI64RemS(self: *Translator, ctx: *FuncCtx) Error!void {
+        try self.asm_.comment("i64.rem_s (synthesized: a - (a/b)*b)");
+        const rhs = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        const lhs = try ctx.slotAt(self.aa(), ctx.depth - 2);
+        // _rem_q_i64 := a / b
+        try self.asm_.push(lhs);
+        try self.asm_.push(rhs);
+        try self.asm_.push("_rem_q_i64");
+        try self.asm_.extern_("SystemInt64.__op_Division__SystemInt64_SystemInt64__SystemInt64");
+        // _rem_qb_i64 := _rem_q_i64 * b
+        try self.asm_.push("_rem_q_i64");
+        try self.asm_.push(rhs);
+        try self.asm_.push("_rem_qb_i64");
+        try self.asm_.extern_("SystemInt64.__op_Multiplication__SystemInt64_SystemInt64__SystemInt64");
+        // lhs := a - _rem_qb_i64
+        try self.asm_.push(lhs);
+        try self.asm_.push("_rem_qb_i64");
+        try self.asm_.push(lhs);
+        try self.asm_.extern_("SystemInt64.__op_Subtraction__SystemInt64_SystemInt64__SystemInt64");
+        ctx.pop(); // rhs consumed
     }
 
     /// Expand `i64.rem_u` as `a - (a / b) * b`. Udon's node list has no
@@ -3749,6 +3836,64 @@ const Translator = struct {
         }
     }
 
+    /// `i32.load16_u` / `i32.load16_s` — read two bytes from linear memory
+    /// as an unsigned half-word, then optionally sign-extend. Mirrors
+    /// `emitMemLoadByte` with mask `0xFFFF` and 16-bit sign-extension.
+    /// Assumes the half-word fits in one chunk word, i.e. `(addr & 3) ∈ {0, 2}`.
+    /// Rust on `wasm32v1-none` always emits 2-byte-aligned half-word loads,
+    /// so this assumption holds for `examples/wasm-bench-alloc-rs` and
+    /// every alloc/BTreeMap user. Without this opcode the translator falls
+    /// through to `__unsupported__` (a no-op annotation), pushing nothing
+    /// onto the WASM stack — the next instruction then runs against a
+    /// stale stack and Udon halts the UdonBehaviour with no exception
+    /// message.
+    fn emitMemLoad16(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
+        const signed = switch (ins) {
+            .i32_load16_s => true,
+            else => false,
+        };
+        try self.asm_.comment(if (signed) "i32.load16_s" else "i32.load16_u");
+        const raw_addr = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        const memarg = switch (ins) {
+            .i32_load16_u => |m| m,
+            .i32_load16_s => |m| m,
+            else => unreachable,
+        };
+        const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
+        ctx.pop();
+
+        const load_tag: []const u8 = if (signed) "i32.load16_s" else "i32.load16_u";
+        try self.emitByteAccessPreamble(addr_slot, ctx.fn_name, load_tag);
+
+        // _mem_u32_shifted := _mem_u32 >> shift (unsigned)
+        try self.asm_.push("_mem_u32");
+        try self.asm_.push("_mem_shift");
+        try self.asm_.push("_mem_u32_shifted");
+        try self.asm_.extern_("SystemUInt32.__op_RightShift__SystemUInt32_SystemInt32__SystemUInt32");
+
+        try ctx.push(.i32);
+        const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
+
+        // masked := _mem_u32_shifted & 0xFFFF (UInt32), then convert to Int32 dst.
+        try self.asm_.push("_mem_u32_shifted");
+        try self.asm_.push("__c_u32_0xFFFF_32");
+        try self.asm_.push("_mem_val_u32_buf");
+        try self.asm_.extern_("SystemUInt32.__op_LogicalAnd__SystemUInt32_SystemUInt32__SystemUInt32");
+        try self.emitU32ToI32("_mem_val_u32_buf", dst);
+
+        if (signed) {
+            // Sign-extend 16-bit → 32-bit: (dst << 16) >> 16 arithmetically.
+            try self.asm_.push(dst);
+            try self.asm_.push("__c_i32_16");
+            try self.asm_.push(dst);
+            try self.asm_.extern_("SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32");
+            try self.asm_.push(dst);
+            try self.asm_.push("__c_i32_16");
+            try self.asm_.push(dst);
+            try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+        }
+    }
+
     fn emitMemStoreByte(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
         try self.asm_.comment("i32.store8");
         const memarg = ins.i32_store8;
@@ -5313,11 +5458,15 @@ test "f64.const +0.0 uses __K64f_zero; -0.0 goes through synthesis" {
     const out = buf.written();
 
     // -0.0 bit pattern is 0x8000000000000000 → hi = Int32.MinValue,
-    // lo = 0. The synthesis must fire (non-zero bit pattern).
+    // lo = 0. The synthesis must fire (non-zero bit pattern). Note that
+    // `Literal.write` emits Int32.MinValue as the hex bit-pattern form
+    // `0x80000000` (not the decimal `-2147483648`) because the Udon
+    // Assembler's literal parser overflows on the decimal form — see
+    // the test in `udon/asm.zig`.
     try std.testing.expect(std.mem.indexOf(u8, out,
         "64-bit constant slot init") != null);
     try std.testing.expect(std.mem.indexOf(u8, out,
-        "_hi: %SystemInt32, -2147483648") != null);
+        "_hi: %SystemInt32, 0x80000000") != null);
     // And it must NOT just reuse the zero slot.
     try std.testing.expect(std.mem.indexOf(u8, out, "__K64f_zero") == null);
 }
@@ -5912,6 +6061,71 @@ test "i32.load8_u applies memarg.offset to effective address" {
     try std.testing.expect(body_out.len > 0);
     try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_eff_addr") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_off_5:") != null);
+}
+
+// Without an emitMemLoad16 the translator falls back to `__unsupported__`
+// (a no-op annotation), pushing nothing onto the WASM stack. The next
+// instruction then runs against a stale stack and Udon halts the
+// UdonBehaviour at load time with no exception message. Encountered in
+// the wild from `examples/wasm-bench-alloc-rs` (Rust `alloc::raw_vec`
+// emits a 2-byte unsigned half-word load against the Vec pre-allocation
+// table). Verify the synthesized lowering is present.
+test "i32.load16_u synthesizes the half-word read (no __unsupported__ fallthrough)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .i32_load16_u = .{ .@"align" = 1, .offset = 92 } };
+    body[2] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // The unsupported sentinel must NOT appear — its presence at runtime
+    // produces a stack-imbalance silent halt.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "TODO unsupported: i32_load16_u") == null);
+    // The synthesis comment marks the new path.
+    try std.testing.expect(std.mem.indexOf(u8, out, "i32.load16_u") != null);
+    // The half-word mask 0xFFFF must be applied (vs the byte path's 0xFF).
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_u32_0xFFFF_32") != null);
+    // Memarg offset still resolved through the standard helper.
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_off_92:") != null);
+}
+
+test "i32.load16_s sign-extends the half-word with shift-left/shift-right by 16" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .i32_load16_s = .{ .@"align" = 1, .offset = 0 } };
+    body[2] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const body_out = probeFnBody(out);
+    try std.testing.expect(body_out.len > 0);
+    // The sign-extension uses `__c_i32_16` for both shifts (vs `__c_i32_24`
+    // for the byte path). Just check the comment marker is correct here —
+    // shift-count constants are shared with other lowerings so their
+    // presence isn't unique to this op.
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "i32.load16_s") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "TODO unsupported") == null);
 }
 
 test "i32.store8 applies memarg.offset to effective address" {
@@ -6621,6 +6835,75 @@ test "i64.rem_u expansion routes operands and result through BitConverter" {
         "SystemUInt64.__op_Multiplication__SystemUInt64_SystemUInt64__SystemUInt64") != null);
     try std.testing.expect(std.mem.indexOf(u8, body_out,
         "SystemUInt64.__op_Subtraction__SystemUInt64_SystemUInt64__SystemUInt64") != null);
+}
+
+// Gate test: every EXTERN signature emitted by the canonical bench module
+// must exist in `docs/udon_nodes.txt`. UdonBehaviour validates EXTERN
+// signatures against its static node list at load time and silently halts
+// (`_isReady = false`, no events fired, only "VM execution errored, halted"
+// log line) when one is missing. This caught the original i32.rem_u
+// silent-halt bug — keep it green.
+test "gate: every EXTERN emitted by bench resolves to a real Udon node" {
+    const out = try translateBench(std.testing.allocator);
+    defer std.testing.allocator.free(out);
+    const node_list = @embedFile("testdata/udon_nodes.txt");
+
+    var it = std.mem.splitScalar(u8, out, '\n');
+    while (it.next()) |line| {
+        const prefix = "EXTERN, \"";
+        const start = std.mem.indexOf(u8, line, prefix) orelse continue;
+        const sig_start = start + prefix.len;
+        const sig_end = std.mem.indexOfScalarPos(u8, line, sig_start, '"') orelse continue;
+        const sig = line[sig_start..sig_end];
+        if (std.mem.indexOf(u8, node_list, sig) == null) {
+            std.debug.print(
+                "missing Udon node (would silently halt UdonBehaviour at load): {s}\n",
+                .{sig},
+            );
+            return error.MissingUdonNode;
+        }
+    }
+}
+
+// SystemUInt32.__op_Modulus__ is missing from Udon's node list, just like
+// SystemUInt64.__op_Modulus__. The translator must expand i32.rem_u into
+// the same a - (a/b)*b shape the i64 path already uses, otherwise the
+// resulting program is silently rejected at UdonBehaviour load time
+// (no exception message — a real bug encountered with Rust `(x as u32) % N`
+// patterns inside `examples/wasm-bench-alloc-rs`'s string_concat scenario).
+test "i32.rem_u expansion uses Division/Multiplication/Subtraction (Udon has no UInt32 Modulus)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 4);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .i32_rem_u;
+    body[3] = .return_;
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // The forbidden missing-node signature must NOT appear anywhere in the
+    // output — emitting it makes UdonBehaviour silently halt at load time.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt32.__op_Modulus__SystemUInt32_SystemUInt32__SystemUInt32") == null);
+    // The 3-EXTERN expansion must be present.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt32.__op_Division__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt32.__op_Multiplication__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "SystemUInt32.__op_Subtraction__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+    // And the comment marker confirming the synthesis path was taken.
+    try std.testing.expect(std.mem.indexOf(u8, out,
+        "i32.rem_u (synthesized: a - (a/b)*b)") != null);
 }
 
 test "signed numeric ops do not emit BitConverter conversion" {

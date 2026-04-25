@@ -38,7 +38,21 @@ pub const Literal = union(enum) {
 
     pub fn write(self: Literal, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
-            .int32 => |v| try writer.print("{d}", .{v}),
+            .int32 => |v| {
+                if (v == std.math.minInt(i32)) {
+                    // The Udon Assembler parses signed-decimal literals by
+                    // splitting sign and magnitude, then `Int32.Parse(magnitude)`.
+                    // For Int32.MinValue this throws OverflowException because
+                    // |MinValue| = 2147483648 > Int32.MaxValue. Emit the
+                    // bit-pattern hex literal instead — `int.Parse` with
+                    // `NumberStyles.HexNumber` returns Int32.MinValue without
+                    // overflowing. Triggered in the wild by Rust
+                    // `alloc::raw_vec`'s capacity-check idiom.
+                    try writer.writeAll("0x80000000");
+                } else {
+                    try writer.print("{d}", .{v});
+                }
+            },
             .uint32 => |v| {
                 if (v <= std.math.maxInt(i32)) {
                     try writer.print("{d}", .{v});
@@ -503,6 +517,35 @@ test "uint32 literal above int32 range uses u suffix" {
     defer std.testing.allocator.free(out);
     try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 2147483648u\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 4294967295u\n") != null);
+}
+
+// The Udon Assembler chokes on the decimal form `-2147483648` with
+// `OverflowException: Value was either too large or too small for an Int32.`
+// — it parses sign and magnitude separately and `Int32.Parse("2147483648")`
+// overflows. Hex bit-pattern form sidesteps the bug. Encountered in the wild
+// from Rust `alloc::raw_vec`'s capacity-check idiom in
+// `examples/wasm-bench-alloc-rs`.
+test "int32 literal at Int32.MinValue renders as hex bit pattern" {
+    var a: Asm = .init(std.testing.allocator);
+    defer a.deinit();
+    try a.addData(.{ .name = "__min__", .ty = type_name.int32, .init = .{ .int32 = std.math.minInt(i32) } });
+    const out = try renderToOwned(&a, std.testing.allocator);
+    defer std.testing.allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemInt32, 0x80000000\n") != null);
+    // Make sure the decimal form is NOT present anywhere — this is the form
+    // that crashes the Udon Assembler.
+    try std.testing.expect(std.mem.indexOf(u8, out, "-2147483648") == null);
+}
+
+test "int32 literal at MinValue+1 keeps decimal form" {
+    // Only Int32.MinValue is special; -2147483647 and friends parse fine as
+    // decimal because the magnitude (2147483647) fits in Int32.
+    var a: Asm = .init(std.testing.allocator);
+    defer a.deinit();
+    try a.addData(.{ .name = "__almost_min__", .ty = type_name.int32, .init = .{ .int32 = -2147483647 } });
+    const out = try renderToOwned(&a, std.testing.allocator);
+    defer std.testing.allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemInt32, -2147483647\n") != null);
 }
 
 // Per docs/udon_specs.md §4.7 the UAssembly assembler rejects any non-null,

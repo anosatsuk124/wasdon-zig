@@ -113,6 +113,24 @@ All multi-byte accesses are little-endian (WASM is LE by specification). Every a
 | `memory.copy` | for word-aligned src/dst within a chunk, inner `GetValue`/`SetValue` loop; otherwise byte RMW loop | implementation-defined |
 | `memory.fill` | word-at-a-time loop, falling back to RMW at unaligned ends | implementation-defined |
 
+> **Implementation status note for `i32.load16_u` / `i32.load16_s`.** The
+> current lowering reuses the byte-access preamble (single outer + single
+> inner fetch) and shifts/masks the 16-bit window inside that one chunk
+> word. This assumes `(addr & 3) ∈ {0, 2}` — i.e. the half-word is
+> 2-byte aligned and does not straddle the word boundary. Rust on
+> `wasm32v1-none` and Zig with default alignment always emit half-word
+> accesses against 2-byte-aligned pointers, so this assumption holds for
+> every example in `examples/`. A producer that issues a misaligned
+> half-word load (e.g. `addr & 3 == 3`) will silently read only the
+> high byte; the cross-word fallback is not yet implemented. Without
+> this lowering, `i32.load16_u` falls through to a `__unsupported__`
+> sentinel that pushes nothing onto the WASM stack — the resulting
+> assembly imbalances the stack and Udon halts the UdonBehaviour at load
+> time with no exception message (the only log line is "VM execution
+> errored, halted"). This was the root cause of `wasm-bench-alloc-rs`
+> halting before `_onEnable` could fire — Rust `alloc::raw_vec` reads a
+> 2-byte u16 cap field via `i32.load16_u`.
+
 ### Example 1 — `i32.load` aligned, within-chunk
 
 ```uasm

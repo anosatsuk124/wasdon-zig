@@ -143,6 +143,60 @@ let prev = core::arch::wasm32::memory_grow(0, 1) as i32;
 These are safe to call directly — they lower to the matching MVP
 opcodes, no `unsafe` needed.
 
+### Using `alloc` (`Vec`, `Box`, `String`, `BTreeMap`)
+
+`wasm32v1-none` ships no global allocator, but the translator does not
+forbid heap-using Rust code. Register a `#[global_allocator]` of your
+own and `extern crate alloc;`, and the standard heap types come back:
+
+```rust
+extern crate alloc;
+use alloc::vec::Vec;
+
+const ARENA_SIZE: usize = 256 * 1024;
+static mut ARENA: [u8; ARENA_SIZE] = [0; ARENA_SIZE];
+static mut BUMP: usize = 0;
+
+struct BumpAlloc;
+unsafe impl core::alloc::GlobalAlloc for BumpAlloc {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        let cur = unsafe { *(&raw const BUMP) };
+        let aligned = (cur + layout.align() - 1) & !(layout.align() - 1);
+        let new = aligned + layout.size();
+        if new > ARENA_SIZE { return core::ptr::null_mut(); }
+        unsafe { *(&raw mut BUMP) = new; }
+        unsafe { (&raw mut ARENA as *mut u8).add(aligned) }
+    }
+    unsafe fn dealloc(&self, _: *mut u8, _: core::alloc::Layout) {}
+}
+
+#[global_allocator]
+static GLOBAL: BumpAlloc = BumpAlloc;
+```
+
+A `static mut` arena is the smallest MVP-clean option:
+
+- It lives in the data section, so the allocator never has to call
+  `memory.grow` on the hot path. The hot path stays trivially
+  MVP-only.
+- `dealloc` as a no-op is allowed by `GlobalAlloc`. Reset the bump
+  pointer at the top of every event entrypoint to keep memory bounded
+  across Udon's per-event 10 s budget.
+- `Vec` realloc still copies, but on `wasm32v1-none` Rust's
+  `core::ptr::copy_nonoverlapping` lowers to a compiler-builtins
+  software memcpy loop — *not* the post-MVP `memory.copy` opcode the
+  translator rejects.
+
+Avoid `dlmalloc`, `talc`, `wee_alloc`, and any other third-party
+allocator that you have not first audited for `memory.copy` /
+`memory.fill` emission. If `wasm-tools print foo.wasm | grep
+'memory\.\(copy\|fill\)'` matches, the translator will reject the
+binary.
+
+See `examples/wasm-bench-alloc-rs` for a worked end-to-end example
+covering `Vec`, `Box`, `String`, nested `Vec<Vec<_>>`, `BTreeMap`,
+and a direct `memory.grow` probe.
+
 ---
 
 ## 4. Declaring host imports (Udon externs)
