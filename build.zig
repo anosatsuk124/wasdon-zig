@@ -252,6 +252,22 @@ pub fn build(b: *std.Build) void {
     const wasm_orbit_step = b.step("udon-orbit-example", "Build the udon-orbit showcase WASM");
     wasm_orbit_step.dependOn(&wasm_orbit_install.step);
 
+    // === wasi-hello example fixture mirror ===
+    // The producer for this fixture is hand-written WAT (see
+    // `examples/wasi-hello/wasi_hello.wat`); regenerate the .wasm with
+    // `wat2wasm` per the example README. This step copies the compiled
+    // .wasm into the translator test-data tree so `@embedFile` in
+    // `src/translator/lower_wasi.zig`'s end-to-end test can pick it up.
+    // The source .wasm is gitignored — if it does not exist locally, this
+    // step fails loudly so the developer regenerates it.
+    const copy_wasi_hello = b.addUpdateSourceFiles();
+    copy_wasi_hello.addCopyFileToSource(
+        b.path("examples/wasi-hello/wasi_hello.wasm"),
+        "src/translator/testdata/wasi_hello.wasm",
+    );
+    const wasi_hello_step = b.step("wasi-hello-example", "Mirror the wasi-hello .wasm fixture into translator testdata");
+    wasi_hello_step.dependOn(&copy_wasi_hello.step);
+
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
     // The Zig build system is entirely implemented in userland, which means

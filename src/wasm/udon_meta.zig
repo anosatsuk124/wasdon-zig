@@ -95,12 +95,24 @@ pub const Options = struct {
     recursion: RecursionMode = .disabled,
 };
 
+/// Optional `__udon_meta.wasi` block (`docs/spec_wasi_preview_1.md` §5).
+/// Every field is optional; missing fields fall back to defaults defined in
+/// `src/translator/lower_wasi.zig`.
+pub const Wasi = struct {
+    stdout_extern: ?[]const u8 = null,
+    stderr_extern: ?[]const u8 = null,
+    random_extern: ?[]const u8 = null,
+    clock_realtime_extern: ?[]const u8 = null,
+    clock_monotonic_extern: ?[]const u8 = null,
+};
+
 pub const UdonMeta = struct {
     version: u32,
     behaviour: ?Behaviour = null,
     fields: []const Field = &.{},
     functions: []const Function = &.{},
     options: Options = .{},
+    wasi: ?Wasi = null,
     /// Keeps the backing std.json.Value alive for the duration of the meta
     /// (Field.default, Field.comment etc. may alias strings inside it).
     _json_root: std.json.Value = .null,
@@ -339,7 +351,22 @@ pub fn parse(allocator: std.mem.Allocator, json_bytes: []const u8) errors.ParseE
         meta.options = try parseOptions(oobj);
     }
 
+    if (obj.get("wasi")) |wv| {
+        const wobj = try getObjectFromValue(wv);
+        meta.wasi = try parseWasi(wobj);
+    }
+
     return meta;
+}
+
+fn parseWasi(obj: std.json.ObjectMap) errors.ParseError!Wasi {
+    var w: Wasi = .{};
+    if (obj.get("stdout_extern")) |v| w.stdout_extern = try getStringFromValue(v);
+    if (obj.get("stderr_extern")) |v| w.stderr_extern = try getStringFromValue(v);
+    if (obj.get("random_extern")) |v| w.random_extern = try getStringFromValue(v);
+    if (obj.get("clock_realtime_extern")) |v| w.clock_realtime_extern = try getStringFromValue(v);
+    if (obj.get("clock_monotonic_extern")) |v| w.clock_monotonic_extern = try getStringFromValue(v);
+    return w;
 }
 
 // ---------------- module-side discovery ----------------

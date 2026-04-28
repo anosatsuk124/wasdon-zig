@@ -531,6 +531,43 @@ structurally spec-conformant Udon Assembly program."
 
 ---
 
+## WASI Preview 1 subset
+
+The translator recognises the import module `wasi_snapshot_preview1`. The
+implemented MVP subset (`docs/spec_wasi_preview_1.md` §2.1) covers
+`proc_exit`, `fd_write`, `fd_read`, `environ_get` / `environ_sizes_get`,
+`args_get` / `args_sizes_get`, `fd_close`, `fd_seek`, `fd_fdstat_get`. Every
+other WASI function is recognised but lowered as an `errno.nosys` (52)
+stub. Strict mode (`__udon_meta.options.strict = true`) elevates an
+unrecognised WASI name to a translate-time error.
+
+Producer-side pitfalls specific to WASI:
+
+- **`fd_write` is the only sink.** `println!` / `eprintln!` / Zig's stdout
+  writer reach `Debug.Log`; everything else either silently no-ops
+  (`fd_close`) or reports `errno.spipe` (`fd_seek`). Do not depend on a
+  `fd_write` round trip — `*nwritten` reflects only what the translator
+  consumed, not what the host actually displayed.
+- **No filesystem, no sockets.** `path_*`, `sock_*`, `fd_pread`, etc.
+  return `errno.nosys`. A program that conditionally reads a file in
+  `_start` will still translate, but the runtime path will surface the
+  `nosys` errno; check for it in producer code if you cannot guarantee
+  the call sites are dead.
+- **`std::process::exit(n)` works.** It lowers to `proc_exit(n)`, which
+  emits the Udon program-end sentinel `JUMP, 0xFFFFFFFC`. The exit code
+  is currently dropped — see `spec_wasi_preview_1.md` §4.1.
+- **Override the log sink** through `__udon_meta.wasi.stdout_extern` /
+  `wasi.stderr_extern` if your scene uses a `Text` component or VRChat
+  ChatBox sink instead of `Debug.Log`. Use the verbatim Udon signature.
+- **wasi-libc static initialisers**. `_start` typically references
+  `fd_close` / `fd_seek` / `environ_*` even in a trivial `println!`
+  program. The translator emits the documented stubs for all of these,
+  so they link cleanly without a producer-side workaround.
+
+A worked example is `examples/wasi-hello/` (hand-rolled WAT + a tiny
+`__udon_meta` blob). See its README for the `wat2wasm` build incantation
+and the verified `wasm-objdump -x` output.
+
 ## Quick checklist before opening a PR
 
 - [ ] Toolchain pinned to MVP (`cpu_model = .mvp` for Zig,

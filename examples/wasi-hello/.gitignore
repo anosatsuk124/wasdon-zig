@@ -1,0 +1,2 @@
+# Built fixture — regenerate with `wat2wasm wasi_hello.wat -o wasi_hello.wasm`.
+wasi_hello.wasm

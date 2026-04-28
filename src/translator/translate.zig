@@ -31,6 +31,7 @@ const udon = @import("udon");
 const names = @import("names.zig");
 const numeric = @import("lower_numeric.zig");
 const lower_import = @import("lower_import.zig");
+const lower_wasi = @import("lower_wasi.zig");
 const recursion = @import("recursion.zig");
 
 const tn = udon.type_name;
@@ -284,6 +285,21 @@ const Translator = struct {
 
     fn aa(self: *Translator) std.mem.Allocator {
         return self.arena.allocator();
+    }
+
+    /// Resolve the WASI configuration for this translation unit by overlaying
+    /// `__udon_meta.wasi.*` overrides on top of the static defaults from
+    /// `lower_wasi.Config`.
+    fn wasiConfig(self: *Translator) lower_wasi.Config {
+        var cfg = lower_wasi.Config{};
+        if (self.meta) |m| {
+            cfg.strict = m.options.strict;
+            if (m.wasi) |w| {
+                if (w.stdout_extern) |s| cfg.stdout_extern = s;
+                if (w.stderr_extern) |s| cfg.stderr_extern = s;
+            }
+        }
+        return cfg;
     }
 
     // ============================================================
@@ -3466,6 +3482,24 @@ const Translator = struct {
                     if (try self.tryEmitMetaImportRead(ctx, imp, imp_ty)) return;
                     var bridge = HostBridge{ .t = self, .ctx = ctx };
                     const host = bridge.host();
+                    if (lower_wasi.isWasiImport(imp)) {
+                        const wasi_cfg = self.wasiConfig();
+                        lower_wasi.emit(host, imp, imp_ty, wasi_cfg) catch |err| switch (err) {
+                            error.WasiSignatureMismatch, error.WasiUnknownImport => {
+                                // Recover by consuming/producing whatever the WASM type said.
+                                var i: u32 = 0;
+                                while (i < imp_ty.params.len) : (i += 1) ctx.pop();
+                                for (imp_ty.results) |vt| try ctx.push(vt);
+                            },
+                            error.SignatureMismatch, error.UnrecognizedImport => {
+                                var i: u32 = 0;
+                                while (i < imp_ty.params.len) : (i += 1) ctx.pop();
+                                for (imp_ty.results) |vt| try ctx.push(vt);
+                            },
+                            error.OutOfMemory => return error.OutOfMemory,
+                        };
+                        return;
+                    }
                     lower_import.emit(host, imp, imp_ty) catch |err| switch (err) {
                         error.SignatureMismatch, error.UnrecognizedImport => {
                             // Recover by consuming whatever the WASM type said.
@@ -4317,6 +4351,97 @@ const Translator = struct {
     /// and shift/mask sequence, then converts to SystemByte via
     /// `SystemConvert.__ToByte__SystemInt32__SystemByte`. Used by the
     /// host-import string marshaller.
+    /// Aligned i32 store at `*addr_slot + offset`. Used by WASI lowerings
+    /// (iovec out-pointers, fdstat zero-fill); WASM-side i32.store goes
+    /// through `emitMemStoreWord` which handles the unaligned case via
+    /// `emitMemStoreWordGeneric`. WASI pointers from iovecs and out-params
+    /// are always 4-aligned per the upstream ABI, so the fast path suffices.
+    pub fn emitWasiStoreI32(
+        self: *Translator,
+        addr_slot: []const u8,
+        offset: u32,
+        val_slot: []const u8,
+    ) Error!void {
+        // val_u32 := bit-pattern of val
+        try self.emitI32ToU32(val_slot, "_mem_val_u32_buf");
+        // eff_addr := addr_slot + offset
+        const eff_addr_name = "_wasi_mem_addr";
+        try self.declareScratchIfAbsent(eff_addr_name, tn.int32, .{ .int32 = 0 });
+        if (offset == 0) {
+            try self.asm_.push(addr_slot);
+            try self.asm_.push(eff_addr_name);
+            try self.asm_.copy();
+        } else {
+            const off_name = try std.fmt.allocPrint(self.aa(), "__c_i32_off_{d}", .{offset});
+            try self.declareScratchIfAbsent(off_name, tn.int32, .{ .int32 = @intCast(offset) });
+            try self.asm_.push(addr_slot);
+            try self.asm_.push(off_name);
+            try self.asm_.push(eff_addr_name);
+            try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        }
+        // page_idx, word_in_page (assumes alignment 4)
+        try self.asm_.push(eff_addr_name);
+        try self.asm_.push("__c_i32_16");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push(eff_addr_name);
+        try self.asm_.push("__c_i32_0xFFFF");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("__c_i32_2");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+        try self.recordMemOpSite("__wasi__", eff_addr_name, "wasi.i32_store", "primary");
+        try self.emitOuterGetChecked("_mem_page_idx");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("_mem_val_u32_buf");
+        try self.asm_.extern_("SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid");
+    }
+
+    /// Aligned i32 load at `*addr_slot + offset`, result in `out_slot`.
+    pub fn emitWasiLoadI32(
+        self: *Translator,
+        addr_slot: []const u8,
+        offset: u32,
+        out_slot: []const u8,
+    ) Error!void {
+        const eff_addr_name = "_wasi_mem_addr";
+        try self.declareScratchIfAbsent(eff_addr_name, tn.int32, .{ .int32 = 0 });
+        if (offset == 0) {
+            try self.asm_.push(addr_slot);
+            try self.asm_.push(eff_addr_name);
+            try self.asm_.copy();
+        } else {
+            const off_name = try std.fmt.allocPrint(self.aa(), "__c_i32_off_{d}", .{offset});
+            try self.declareScratchIfAbsent(off_name, tn.int32, .{ .int32 = @intCast(offset) });
+            try self.asm_.push(addr_slot);
+            try self.asm_.push(off_name);
+            try self.asm_.push(eff_addr_name);
+            try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        }
+        try self.asm_.push(eff_addr_name);
+        try self.asm_.push("__c_i32_16");
+        try self.asm_.push("_mem_page_idx");
+        try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push(eff_addr_name);
+        try self.asm_.push("__c_i32_0xFFFF");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("__c_i32_2");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.extern_("SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+        try self.recordMemOpSite("__wasi__", eff_addr_name, "wasi.i32_load", "primary");
+        try self.emitOuterGetChecked("_mem_page_idx");
+        try self.asm_.push("_mem_chunk");
+        try self.asm_.push("_mem_word_in_page");
+        try self.asm_.push("_mem_val_u32_buf");
+        try self.asm_.extern_("SystemUInt32Array.__Get__SystemInt32__SystemUInt32");
+        try self.emitU32ToI32("_mem_val_u32_buf", out_slot);
+    }
+
     fn emitReadMemoryByte(self: *Translator, addr_slot: []const u8, out_slot: []const u8) Error!void {
         try self.emitByteAccessPreamble(addr_slot, "__marshal__", "host_import.read_byte");
         // _mem_u32_shifted := _mem_u32 >> shift
@@ -5036,6 +5161,12 @@ const HostBridge = struct {
         .jumpIfFalse = jumpIfFalseFn,
         .readByteFromMemory = readByteFromMemoryFn,
         .uniqueId = uniqueId,
+        .jumpAddr = jumpAddrFn,
+        .storeI32 = storeI32Fn,
+        .storeI32Offset = storeI32OffsetFn,
+        .loadI32 = loadI32Fn,
+        .loadI32Offset = loadI32OffsetFn,
+        .marshalSystemString = marshalSystemStringFn,
     };
 
     fn self_(ctx: *anyopaque) *HostBridge {
@@ -5106,6 +5237,40 @@ const HostBridge = struct {
         const id = t.unique_id_counter;
         t.unique_id_counter += 1;
         return id;
+    }
+    fn jumpAddrFn(ctx: *anyopaque, addr: u32) lower_import.Error!void {
+        try self_(ctx).t.asm_.jumpAddr(addr);
+    }
+    fn storeI32Fn(ctx: *anyopaque, addr_slot: []const u8, val_slot: []const u8) lower_import.Error!void {
+        const hb = self_(ctx);
+        hb.t.emitWasiStoreI32(addr_slot, 0, val_slot) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.OutOfMemory,
+        };
+    }
+    fn storeI32OffsetFn(ctx: *anyopaque, addr_slot: []const u8, offset: u32, val_slot: []const u8) lower_import.Error!void {
+        const hb = self_(ctx);
+        hb.t.emitWasiStoreI32(addr_slot, offset, val_slot) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.OutOfMemory,
+        };
+    }
+    fn loadI32Fn(ctx: *anyopaque, addr_slot: []const u8, out_slot: []const u8) lower_import.Error!void {
+        const hb = self_(ctx);
+        hb.t.emitWasiLoadI32(addr_slot, 0, out_slot) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.OutOfMemory,
+        };
+    }
+    fn loadI32OffsetFn(ctx: *anyopaque, addr_slot: []const u8, offset: u32, out_slot: []const u8) lower_import.Error!void {
+        const hb = self_(ctx);
+        hb.t.emitWasiLoadI32(addr_slot, offset, out_slot) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.OutOfMemory,
+        };
+    }
+    fn marshalSystemStringFn(ctx: *anyopaque, ptr_slot: []const u8, len_slot: []const u8) lower_import.Error!void {
+        try lower_import.emitStringMarshalPub(self_(ctx).host(), ptr_slot, len_slot);
     }
 };
 
