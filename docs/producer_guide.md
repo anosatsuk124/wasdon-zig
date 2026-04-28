@@ -21,28 +21,66 @@ Working examples that follow every rule below live under
 
 ## 1. Target the WebAssembly MVP, not "modern" WASM
 
-The translator is a Core 1 / MVP parser. It rejects post-MVP opcodes
-(`i32.trunc_sat_*`, anything in the `0xFC` prefix, sign-extension ops,
-bulk-memory, multi-value results, reference types, mutable globals from
-the `mutable-globals` proposal, etc.) with `UnknownOpcode` or related
-parse errors.
+The translator is a Core 1 / MVP parser. It rejects most post-MVP
+opcodes (the rest of the `0xFC` prefix space beyond the supported
+bulk-memory / saturating-truncation ops, multi-value results,
+reference types, etc.) with `UnknownOpcode` or related parse errors.
+
+A handful of post-MVP proposals are accepted as deliberate, opt-in
+extensions (the parser **and** the translator both implement them
+end-to-end):
+
+- **`mutable-globals`** — see "Mutable globals across the boundary"
+  below and `docs/spec_variable_conversion.md` ("Mutability").
+- **Sign-extension ops** (`i32.extend8_s`, `i32.extend16_s`,
+  `i64.extend8_s`, `i64.extend16_s`, `i64.extend32_s`) — see
+  `docs/spec_numeric_instruction_lowering.md` §4.
+- **`memory.copy`** (bulk-memory, opcode `0xFC 0x0A`) — overlap-safe
+  byte-loop lowering, see `docs/spec_linear_memory.md`
+  §"memory.copy lowering" and `examples/post-mvp/memory-copy/`.
+- **`memory.fill`** (bulk-memory, opcode `0xFC 0x0B`) — forward
+  byte-store loop, see `docs/spec_linear_memory.md`
+  §"memory.fill lowering" and `examples/post-mvp/memory-fill/`.
+- **`nontrapping-fptoint`** — saturating float-to-int family
+  (`i32.trunc_sat_f32_s/u`, `i32.trunc_sat_f64_s/u`,
+  `i64.trunc_sat_f32_s/u`, `i64.trunc_sat_f64_s/u`, opcodes
+  `0xFC 0x00`–`0xFC 0x07`) — lowered through two shared NaN /
+  low-clamp / high-clamp / SystemConvert helper subroutines per
+  output bit width; see `docs/spec_numeric_instruction_lowering.md`
+  §5 and `examples/post-mvp/nontrapping-fptoint/`.
 
 You **must** pin your toolchain to MVP-only output:
 
 | Toolchain | What to do                                                          |
 |-----------|---------------------------------------------------------------------|
-| Zig       | `cpu_model = .{ .explicit = &std.Target.wasm.cpu.mvp }` on a `wasm32-freestanding` target. The default `generic` model enables `sign-ext` / `bulk-memory` / `multivalue` / `mutable-globals` / `nontrapping-fptoint` / `reference-types`, all of which the parser refuses. See `build.zig` in this repo for the canonical setup. |
+| Zig       | `cpu_model = .{ .explicit = &std.Target.wasm.cpu.mvp }` on a `wasm32-freestanding` target. The default `generic` model enables `multivalue` / `reference-types` (the parser still refuses these), in addition to the proposals listed above as accepted post-MVP extensions (`mutable-globals`, `sign-ext`, the `bulk-memory` ops `memory.copy` / `memory.fill`, and `nontrapping-fptoint` — those flow through end-to-end). See `build.zig` in this repo for the canonical setup. |
 | Rust      | Use the `wasm32v1-none` target — it is the official "WASM 1.0 / MVP only" target and disables every post-MVP feature by default. `wasm32-unknown-unknown` will *not* work without aggressive `-C target-feature=-…` flags, and even then is a moving target. |
 | WAT/wasm-tools | Hand-author or process with `wasm-tools` and avoid the proposal extensions. |
 
-### Implication: no mutable WASM globals
+### Mutable globals across the boundary
 
-The MVP only allows immutable globals. The Rust target enforces this
-strictly: Rust `static mut` variables live in **linear memory**, with
-their address exported as an immutable i32 global. Zig with the MVP CPU
-model behaves the same way. There is no language-level workaround on
-the producer side; design your `__udon_meta.fields` accordingly
-(see [§5](#5-state--__udon_metafields)).
+Mutable WASM globals are accepted (the post-MVP `mutable-globals`
+proposal is opted in deliberately — see the list of accepted post-MVP
+extensions above for the full set). Both module-defined and imported mutable globals lower
+to ordinary mutable Udon data fields, because Udon has no `const`
+concept for fields. The translator does not filter on the `mut` bit.
+
+Practical consequence for shared host↔WASM state: a host-supplied
+mutable global import (e.g. `env.timer_ms`) is observed as follows:
+
+1. The translator allocates a backing Udon field for the import
+   (named per `__udon_meta.fields[*].udonName` when matched, otherwise
+   `__G__imp_<module>_<name>`).
+2. The host writes to that field with the established Udon
+   `SetVariable` mechanism.
+3. The WASM module observes those writes through normal `global.get`.
+
+The Rust `wasm32v1-none` target still emits `static mut` into linear
+memory rather than as WASM globals; if you want host-visible state from
+Rust today, expose it through this mutable-globals path or wait for the
+`kind: "symbol"` field source in `__udon_meta` (see
+[§5](#5-state--__udon_metafields)). A worked WAT example lives at
+`examples/post-mvp/mutable-globals/`.
 
 ---
 
@@ -182,16 +220,15 @@ A `static mut` arena is the smallest MVP-clean option:
 - `dealloc` as a no-op is allowed by `GlobalAlloc`. Reset the bump
   pointer at the top of every event entrypoint to keep memory bounded
   across Udon's per-event 10 s budget.
-- `Vec` realloc still copies, but on `wasm32v1-none` Rust's
+- `Vec` realloc still copies. On `wasm32v1-none` today, Rust's
   `core::ptr::copy_nonoverlapping` lowers to a compiler-builtins
-  software memcpy loop — *not* the post-MVP `memory.copy` opcode the
-  translator rejects.
-
-Avoid `dlmalloc`, `talc`, `wee_alloc`, and any other third-party
-allocator that you have not first audited for `memory.copy` /
-`memory.fill` emission. If `wasm-tools print foo.wasm | grep
-'memory\.\(copy\|fill\)'` matches, the translator will reject the
-binary.
+  software memcpy loop. The translator now also accepts the post-MVP
+  `memory.copy` and `memory.fill` opcodes directly (overlap-safe byte
+  loop and forward byte-store loop respectively, see
+  `docs/spec_linear_memory.md`), so a producer that *does* emit
+  either — for example `wasm-opt -O` rewriting the software loops into
+  one bulk-memory op — is fine. Both bulk-memory ops are now accepted
+  with no extra producer-side work required.
 
 See `examples/wasm-bench-alloc-rs` for a worked end-to-end example
 covering `Vec`, `Box`, `String`, nested `Vec<Vec<_>>`, `BTreeMap`,
@@ -297,20 +334,23 @@ in the translator:
 | `symbol` | A symbol-name pointing into linear memory.                               | Documented, not yet implemented |
 
 Practical consequence: only state that lives in a true WASM global can
-be exposed to Udon as a field today. Because **MVP forbids mutable
-globals** (§1), this means:
+be exposed to Udon as a field today. The translator opts in to the
+post-MVP `mutable-globals` proposal (see §1), so both mutable and
+immutable WASM globals are valid sources:
 
 - **Zig** can place tweakable scalars (`f32`, `i32`, …) as `export var`
-  globals — these become exported WASM globals and `kind: "global"`
+  globals — these become exported WASM globals (immutable in MVP-mode
+  builds, mutable when authored as such in WAT) and `kind: "global"`
   picks them up.
-- **Rust** cannot. `static mut` lives in linear memory; only the address
-  is an exported global, which is not what `kind: "global"` resolves
-  to. Until `kind: "symbol"` is implemented, Rust producers should
-  keep mutable state private to the wasm side and expose only
-  `udon.self`-style imports as fields.
+- **Rust** still emits `static mut` into linear memory rather than as a
+  WASM global. Until `kind: "symbol"` is implemented, Rust producers
+  should keep mutable state private to the wasm side and expose only
+  `udon.self`-style imports — or hand-author the boundary with the
+  WAT-level mutable-globals pattern in
+  `examples/post-mvp/mutable-globals/`.
 
 If you need Inspector-tunable parameters today, write the relevant
-example in Zig.
+example in Zig (or use a hand-rolled WAT shim).
 
 ---
 

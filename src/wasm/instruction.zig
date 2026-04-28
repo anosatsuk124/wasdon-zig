@@ -36,6 +36,15 @@ pub const If = struct {
     else_body: ?[]const Instruction,
 };
 
+pub const MemoryCopyArgs = struct {
+    src_mem: u32,
+    dst_mem: u32,
+};
+
+pub const MemoryFillArgs = struct {
+    mem: u32,
+};
+
 /// One variant per Core 1 opcode. Keep in lockstep with `opcode.spec`.
 pub const Instruction = union(enum) {
     // control
@@ -235,15 +244,38 @@ pub const Instruction = union(enum) {
     i64_reinterpret_f64,
     f32_reinterpret_i32,
     f64_reinterpret_i64,
+
+    // sign-extension operators (0xC0..0xC4)
+    i32_extend8_s,
+    i32_extend16_s,
+    i64_extend8_s,
+    i64_extend16_s,
+    i64_extend32_s,
+
+    // 0xFC-prefixed: saturating truncation (0xFC 0x00..0x07)
+    i32_trunc_sat_f32_s,
+    i32_trunc_sat_f32_u,
+    i32_trunc_sat_f64_s,
+    i32_trunc_sat_f64_u,
+    i64_trunc_sat_f32_s,
+    i64_trunc_sat_f32_u,
+    i64_trunc_sat_f64_s,
+    i64_trunc_sat_f64_u,
+
+    // 0xFC-prefixed: bulk memory subset
+    memory_copy: MemoryCopyArgs,
+    memory_fill: MemoryFillArgs,
 };
 
-// Compile-time invariant: every opcode in `spec` has a matching union tag,
-// and the union has exactly the same number of fields as `spec` has entries.
+// Compile-time invariant: every opcode in `spec` and every entry in
+// `prefix_fc_spec` has a matching union tag, and the union has exactly the
+// same number of fields as the combined spec lengths.
 comptime {
     @setEvalBranchQuota(100_000);
     const union_fields = @typeInfo(Instruction).@"union".fields;
-    if (union_fields.len != opcode.spec.len) {
-        @compileError("Instruction union field count does not match opcode.spec length");
+    const expected = opcode.spec.len + opcode.prefix_fc_spec.len;
+    if (union_fields.len != expected) {
+        @compileError("Instruction union field count does not match opcode.spec + prefix_fc_spec length");
     }
     for (opcode.spec) |s| {
         var found = false;
@@ -255,6 +287,18 @@ comptime {
         }
         if (!found) {
             @compileError("opcode.spec tag missing from Instruction union: " ++ s.tag);
+        }
+    }
+    for (opcode.prefix_fc_spec) |s| {
+        var found = false;
+        for (union_fields) |f| {
+            if (std.mem.eql(u8, f.name, s.tag)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            @compileError("opcode.prefix_fc_spec tag missing from Instruction union: " ++ s.tag);
         }
     }
 }
@@ -285,6 +329,42 @@ pub fn decodeInstruction(allocator: std.mem.Allocator, r: *Reader) errors.ParseE
     if (op == 0x0B) return error.UnexpectedEndOpcode;
     if (op == 0x05) return error.UnexpectedElseOpcode;
 
+    // 0xFC-prefixed family: read sub-opcode (u32 LEB128) and dispatch through
+    // `prefix_fc_spec`. Currently covers saturating truncation (0x00..0x07)
+    // and the bulk-memory subset memory.copy / memory.fill.
+    if (op == 0xFC) {
+        const sub = try leb128.readULEB128(u32, r);
+        const fc_spec = opcode.findPrefixFc(sub) orelse return error.UnknownPrefixedOpcode;
+        inline for (opcode.prefix_fc_spec) |s| {
+            if (comptime s.imm == .none) {
+                if (s.opcode == fc_spec.opcode) {
+                    return @unionInit(Instruction, s.tag, {});
+                }
+            } else if (comptime s.imm == .memory_copy_args) {
+                if (s.opcode == fc_spec.opcode) {
+                    const src = try r.readByte();
+                    if (src != 0x00) return error.MalformedReserved;
+                    const dst = try r.readByte();
+                    if (dst != 0x00) return error.MalformedReserved;
+                    return @unionInit(Instruction, s.tag, MemoryCopyArgs{
+                        .src_mem = 0,
+                        .dst_mem = 0,
+                    });
+                }
+            } else if (comptime s.imm == .memory_fill_args) {
+                if (s.opcode == fc_spec.opcode) {
+                    const reserved = try r.readByte();
+                    if (reserved != 0x00) return error.MalformedReserved;
+                    return @unionInit(Instruction, s.tag, MemoryFillArgs{ .mem = 0 });
+                }
+            }
+        }
+        // Unreachable: findPrefixFc returned non-null, so the loop above must
+        // have matched. Defensive fall-through in case prefix_fc_spec gains
+        // a new immediate kind that this dispatch hasn't been taught yet.
+        return error.UnknownPrefixedOpcode;
+    }
+
     inline for (opcode.spec) |s| {
         if (s.opcode == op) {
             switch (s.imm) {
@@ -312,6 +392,10 @@ pub fn decodeInstruction(allocator: std.mem.Allocator, r: *Reader) errors.ParseE
                     if (reserved != 0x00) return error.MalformedReserved;
                     return @unionInit(Instruction, s.tag, {});
                 },
+                // memory_copy_args / memory_fill_args are only used by entries
+                // in `prefix_fc_spec`, which is dispatched separately above.
+                // No primary-spec entry should ever reach these arms.
+                .memory_copy_args, .memory_fill_args => unreachable,
                 .i32_imm => {
                     const v = try leb128.readSLEB128(i32, r);
                     return @unionInit(Instruction, s.tag, v);
@@ -407,7 +491,7 @@ fn mk(bytes: []const u8) Reader {
 
 test "Instruction union matches opcode.spec length" {
     const union_fields = @typeInfo(Instruction).@"union".fields;
-    try std.testing.expectEqual(opcode.spec.len, union_fields.len);
+    try std.testing.expectEqual(opcode.spec.len + opcode.prefix_fc_spec.len, union_fields.len);
 }
 
 test "decode nop" {
@@ -521,8 +605,81 @@ test "decode unknown opcode rejected" {
         error.UnexpectedElseOpcode,
         decodeInstruction(std.testing.allocator, &r),
     );
-    var r2 = mk(&[_]u8{0xC0});
+    // 0xC5 is the first byte past the sign-extension block (0xC0..0xC4) and
+    // is still unassigned in Core 1, so it remains UnknownOpcode.
+    var r2 = mk(&[_]u8{0xC5});
     try std.testing.expectError(error.UnknownOpcode, decodeInstruction(std.testing.allocator, &r2));
+}
+
+test "decodeInstruction handles i32.extend8_s (0xC0)" {
+    var r = mk(&[_]u8{0xC0});
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expect(inst == .i32_extend8_s);
+}
+
+test "decodeInstruction handles i32.extend16_s (0xC1)" {
+    var r = mk(&[_]u8{0xC1});
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expect(inst == .i32_extend16_s);
+}
+
+test "decodeInstruction handles i64.extend8_s (0xC2)" {
+    var r = mk(&[_]u8{0xC2});
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expect(inst == .i64_extend8_s);
+}
+
+test "decodeInstruction handles i64.extend16_s (0xC3)" {
+    var r = mk(&[_]u8{0xC3});
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expect(inst == .i64_extend16_s);
+}
+
+test "decodeInstruction handles i64.extend32_s (0xC4)" {
+    var r = mk(&[_]u8{0xC4});
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expect(inst == .i64_extend32_s);
+}
+
+test "decodeInstruction handles memory.copy (0xFC 0x0A 0x00 0x00)" {
+    var r = mk(&[_]u8{ 0xFC, 0x0A, 0x00, 0x00 });
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expectEqual(@as(u32, 0), inst.memory_copy.src_mem);
+    try std.testing.expectEqual(@as(u32, 0), inst.memory_copy.dst_mem);
+}
+
+test "decodeInstruction handles memory.fill (0xFC 0x0B 0x00)" {
+    var r = mk(&[_]u8{ 0xFC, 0x0B, 0x00 });
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expectEqual(@as(u32, 0), inst.memory_fill.mem);
+}
+
+test "decodeInstruction handles i32.trunc_sat_f32_s (0xFC 0x00)" {
+    var r = mk(&[_]u8{ 0xFC, 0x00 });
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expect(inst == .i32_trunc_sat_f32_s);
+}
+
+test "decodeInstruction handles i64.trunc_sat_f64_u (0xFC 0x07)" {
+    var r = mk(&[_]u8{ 0xFC, 0x07 });
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expect(inst == .i64_trunc_sat_f64_u);
+}
+
+test "decodeInstruction rejects unknown 0xFC sub-opcode" {
+    var r = mk(&[_]u8{ 0xFC, 0x7F });
+    try std.testing.expectError(
+        error.UnknownPrefixedOpcode,
+        decodeInstruction(std.testing.allocator, &r),
+    );
+}
+
+test "decodeInstruction rejects bad reserved byte in memory.copy" {
+    var r = mk(&[_]u8{ 0xFC, 0x0A, 0x01, 0x00 });
+    try std.testing.expectError(
+        error.MalformedReserved,
+        decodeInstruction(std.testing.allocator, &r),
+    );
 }
 
 test "decodeExpr empty" {

@@ -490,6 +490,8 @@ __<methodName>__<argTypeList>__<returnType>
 - **Missing nodes silently halt at load time.** UdonBehaviour validates every EXTERN signature against the static Udon node list when the program is loaded. A signature that does not resolve sets `_isReady = false`, after which Udon dispatches no events at all — neither `_onEnable` nor `_start` runs, and the only log line is `[UdonBehaviour] Udon VM execution errored, this UdonBehaviour will be halted.` (no exception name, no node name, no PC). When debugging a producer that assembles cleanly but never executes, the first hypothesis to test is "did we emit a node not in `docs/udon_nodes.txt`?". Confirmed missing arithmetic nodes that translators must synthesize from primitives:
   - **Modulus / Remainder.** C# names the `%` operator method `op_Modulus`, but Udon's static node list calls it `op_Remainder` — and only ships the `SystemInt32` and `SystemDecimal` variants. `SystemUInt32`, `SystemInt64`, and `SystemUInt64` have **neither** `op_Modulus` nor `op_Remainder` exposed. The translator must therefore (a) emit `SystemInt32.__op_Remainder__` (not `__op_Modulus__`) for `i32.rem_s`, and (b) synthesize the other three as `a - (a/b)*b` using the corresponding `__op_Division__` / `__op_Multiplication__` / `__op_Subtraction__` nodes (all present in the node list).
 
+> See `docs/spec_numeric_instruction_lowering.md` for the full mapping from WASM numeric opcodes to Udon EXTERN signatures, including the synthesised multi-EXTERN sequences (e.g. post-MVP sign-extension as `(x << N) >> N`).
+
 ### 7.5 Absence of a Complete Reference
 
 - **There is no official, complete reference of externs.**

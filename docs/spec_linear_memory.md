@@ -110,8 +110,8 @@ All multi-byte accesses are little-endian (WASM is LE by specification). Every a
 | `i32.store16` | RMW with 16-bit window | 8 |
 | `i64.store` aligned | outer GetValue + 2 inner SetValue | 3 |
 | `f32.store` / `f64.store` | bit-reinterpret to integer then integer store | 2 + store |
-| `memory.copy` | for word-aligned src/dst within a chunk, inner `GetValue`/`SetValue` loop; otherwise byte RMW loop | implementation-defined |
-| `memory.fill` | word-at-a-time loop, falling back to RMW at unaligned ends | implementation-defined |
+| `memory.copy` | runtime direction check + byte-by-byte loop reusing the byte load/store helpers (see §"memory.copy lowering" below) | 6 + 12·n |
+| `memory.fill` | forward byte-store loop reusing the byte store helper (see §"memory.fill lowering" below) | 4 + 8·n |
 
 > **Implementation status note for `i32.load16_u` / `i32.load16_s`.** The
 > current lowering reuses the byte-access preamble (single outer + single
@@ -459,6 +459,228 @@ A module that grows memory by one page and writes/reads an i32 at address `0x100
 .code_end
 ```
 
+## memory.copy lowering
+
+`memory.copy` consumes `(dst, src, n)` from the operand stack and copies
+`n` bytes from `src` to `dst`. The WASM bulk-memory specification
+requires overlap-safe semantics: when the two ranges overlap, the
+result must equal what a disjoint copy would produce. The translator
+implements this with a **runtime direction check** rather than a static
+disjointness proof:
+
+- If `dst <= src`, copy ascending  (`for i in 0 .. n-1: mem[dst+i] = mem[src+i]`).
+- Otherwise, copy descending      (`for i in n-1 .. 0:  mem[dst+i] = mem[src+i]`).
+
+Both branches walk byte-by-byte through the existing byte load/store
+helpers (`emitMemLoadByteAt` / `emitMemStoreByteAt`). The byte path is
+the only safe choice today because it reuses the bounds-checked outer
+`GetValue` and the RMW that already handle every alignment case; a
+word-aligned bulk-copy fast path is left for a future optimisation
+pass (see "Open Questions" below).
+
+**Direction-test asymmetry.** The descending branch loops while
+`i > -1` rather than `i >= 0`. Both forms are correct for signed
+arithmetic, but `i > -1` future-proofs the lowering: if `n` is ever
+treated as unsigned (e.g. for forward-compat with memory64-style
+addresses), an `i >= 0` form would silently underflow at `i == 0` and
+trip an OOB on the next iteration. The constant `__c_i32_neg1` is
+already declared in the shared common-data block.
+
+### Scratch slots
+
+The lowering allocates eight `_mc_*` fields once in the data section
+(via `emitMemoryData`) and reuses them across **every** `memory.copy`
+site in the program. Reuse is sound because each call body fully
+writes each scratch before reading it, and `memory.copy` cannot be
+nested inside another `memory.copy` (each site is one straight-line
+instruction sequence with no calls):
+
+| Field | Type | Role |
+|---|---|---|
+| `_mc_dst` | `SystemInt32` | snapshot of the popped `dst` operand |
+| `_mc_src` | `SystemInt32` | snapshot of the popped `src` operand |
+| `_mc_n`   | `SystemInt32` | snapshot of the popped `n` operand |
+| `_mc_i`   | `SystemInt32` | loop induction variable |
+| `_mc_addr_src` | `SystemInt32` | `src + i` for the current iteration |
+| `_mc_addr_dst` | `SystemInt32` | `dst + i` for the current iteration |
+| `_mc_byte` | `SystemInt32` | byte value transferred between load and store |
+| `_mc_cmp`  | `SystemBoolean` | direction-check and per-iteration loop guard result |
+
+The byte helpers freely use the shared `_mem_*` scratch (`_mem_chunk`,
+`_mem_u32`, `_mem_shift`, etc.) — those are clobbered on every call,
+so the snapshots into `_mc_*` are necessary even though `dst` / `src`
+/ `n` arrive on the WASM stack as already-named slots.
+
+### Per-call labels via `block_counter`
+
+The four labels emitted per call (`__memcopy_back_<id>__`,
+`__memcopy_fwd_loop_<id>__`, `__memcopy_back_loop_<id>__`,
+`__memcopy_end_<id>__`) are uniqued by `Translator.block_counter`,
+which the call increments at the start. Two `memory.copy` ops in the
+same function therefore produce two disjoint label families even
+though they share the underlying scratch fields.
+
+### Skeleton (per call)
+
+```uasm
+    # snapshot operands
+    PUSH, <wasm_stack_dst>; PUSH, _mc_dst; COPY
+    PUSH, <wasm_stack_src>; PUSH, _mc_src; COPY
+    PUSH, <wasm_stack_n>;   PUSH, _mc_n;   COPY
+
+    # direction: dst <= src ?
+    PUSH, _mc_dst; PUSH, _mc_src; PUSH, _mc_cmp
+    EXTERN, "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+    PUSH, _mc_cmp
+    JUMP_IF_FALSE, __memcopy_back_<id>__
+
+    # forward branch: i = 0; while i < n { mem[dst+i] = mem[src+i]; i++ }
+    PUSH, __c_i32_0; PUSH, _mc_i; COPY
+__memcopy_fwd_loop_<id>__:
+    PUSH, _mc_i; PUSH, _mc_n; PUSH, _mc_cmp
+    EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+    PUSH, _mc_cmp
+    JUMP_IF_FALSE, __memcopy_end_<id>__
+    # _mc_addr_src := src + i ; _mc_addr_dst := dst + i
+    PUSH, _mc_src; PUSH, _mc_i; PUSH, _mc_addr_src
+    EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+    PUSH, _mc_dst; PUSH, _mc_i; PUSH, _mc_addr_dst
+    EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+    # mem[dst+i] := mem[src+i]   (via the shared byte helpers)
+    # ... emitMemLoadByteAt(_mc_addr_src, _mc_byte) ...
+    # ... emitMemStoreByteAt(_mc_addr_dst, _mc_byte) ...
+    PUSH, _mc_i; PUSH, __c_i32_1; PUSH, _mc_i
+    EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+    JUMP, __memcopy_fwd_loop_<id>__
+
+__memcopy_back_<id>__:
+    # backward branch: i = n - 1; while i > -1 { mem[dst+i] = mem[src+i]; i-- }
+    PUSH, _mc_n; PUSH, __c_i32_1; PUSH, _mc_i
+    EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+__memcopy_back_loop_<id>__:
+    PUSH, _mc_i; PUSH, __c_i32_neg1; PUSH, _mc_cmp
+    EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+    PUSH, _mc_cmp
+    JUMP_IF_FALSE, __memcopy_end_<id>__
+    # ... same per-iteration body as the forward branch ...
+    PUSH, _mc_i; PUSH, __c_i32_1; PUSH, _mc_i
+    EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+    JUMP, __memcopy_back_loop_<id>__
+
+__memcopy_end_<id>__:
+```
+
+### Known limitations / future work
+
+- **Pure byte loop, no bulk fast path.** Even when `dst`, `src`, and
+  `n` are all word-aligned and lie within a single chunk, the current
+  lowering still walks one byte at a time through the RMW byte-store
+  helper. A future optimiser could detect alignment statically (or at
+  runtime) and emit a `SystemUInt32Array.__Get__` / `__Set__` pair per
+  word. Until then, large `memory.copy` calls are O(n) in the number
+  of EXTERN calls — roughly twelve EXTERNs per byte copied — and will
+  be visibly slower than a hand-rolled word loop.
+- **No early-exit for `n == 0`.** The forward branch's first
+  comparison short-circuits via `JUMP_IF_FALSE` to the end label, so
+  a zero-length copy is correct but still pays the direction-check
+  and one comparison.
+
+## memory.fill lowering
+
+`memory.fill` consumes `(dst, val, n)` from the operand stack and
+writes the low 8 bits of `val` to `n` consecutive bytes starting at
+`dst`. There is no overlap concern (only one range), so the
+translator emits a single forward byte-store loop:
+
+```
+for i in 0 .. n-1: mem[dst+i] = val & 0xFF
+```
+
+The body reuses the shared `emitMemStoreByteAt` helper, which already
+performs the `val & 0xFF` mask (via `SystemUInt32` AND) inside the
+RMW. The full Int32 `val` is therefore forwarded as-is — the lowering
+does not pre-mask. Just like `memory.copy`, the byte path is the only
+safe choice today because it reuses the bounds-checked outer
+`GetValue` and the RMW that already handle every alignment case; a
+word-aligned bulk-fill fast path is left for a future optimisation
+pass.
+
+### Scratch slots
+
+The lowering allocates six `_mf_*` fields once in the data section
+(via `emitMemoryData`) and reuses them across **every** `memory.fill`
+site in the program. Reuse is sound because each call body fully
+writes each scratch before reading it, and `memory.fill` cannot be
+nested inside another `memory.fill` (each site is one straight-line
+instruction sequence with no calls):
+
+| Field | Type | Role |
+|---|---|---|
+| `_mf_dst` | `SystemInt32` | snapshot of the popped `dst` operand |
+| `_mf_val` | `SystemInt32` | snapshot of the popped `val` operand (full Int32; masked inside the byte-store helper) |
+| `_mf_n`   | `SystemInt32` | snapshot of the popped `n` operand |
+| `_mf_i`   | `SystemInt32` | loop induction variable |
+| `_mf_addr` | `SystemInt32` | `dst + i` for the current iteration |
+| `_mf_cmp`  | `SystemBoolean` | per-iteration `i < n` guard result |
+
+The `_mf_*` family is intentionally distinct from `_mc_*` so
+`memory.copy` and `memory.fill` never alias even if a future
+optimisation pass interleaves them; per-site uniqueness is provided
+by the loop labels.
+
+### Per-call labels via `block_counter`
+
+The two labels emitted per call (`__memfill_loop_<id>__`,
+`__memfill_end_<id>__`) are uniqued by `Translator.block_counter`,
+which the call increments at the start. Two `memory.fill` ops in the
+same function therefore produce two disjoint label families even
+though they share the underlying scratch fields.
+
+### Skeleton (per call)
+
+```uasm
+    # snapshot operands
+    PUSH, <wasm_stack_dst>; PUSH, _mf_dst; COPY
+    PUSH, <wasm_stack_val>; PUSH, _mf_val; COPY
+    PUSH, <wasm_stack_n>;   PUSH, _mf_n;   COPY
+
+    # i := 0
+    PUSH, __c_i32_0; PUSH, _mf_i; COPY
+
+__memfill_loop_<id>__:
+    # _mf_cmp := i < n
+    PUSH, _mf_i; PUSH, _mf_n; PUSH, _mf_cmp
+    EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+    PUSH, _mf_cmp
+    JUMP_IF_FALSE, __memfill_end_<id>__
+    # _mf_addr := dst + i
+    PUSH, _mf_dst; PUSH, _mf_i; PUSH, _mf_addr
+    EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+    # mem[dst+i] := val   (byte-store helper masks to low 8 bits)
+    # ... emitMemStoreByteAt(_mf_addr, _mf_val) ...
+    PUSH, _mf_i; PUSH, __c_i32_1; PUSH, _mf_i
+    EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+    JUMP, __memfill_loop_<id>__
+
+__memfill_end_<id>__:
+```
+
+### Known limitations / future work
+
+- **Pure byte loop, no bulk fast path.** Even when `dst` and `n` are
+  word-aligned and lie within a single chunk, the current lowering
+  still walks one byte at a time through the RMW byte-store helper.
+  A future optimiser could detect alignment statically (or at runtime)
+  and emit a `SystemUInt32Array.__Set__` per word, with a single
+  pre-broadcast of the byte into all four lanes of a `SystemUInt32`.
+  Until then, large `memory.fill` calls are O(n) in the number of
+  EXTERN calls — roughly eight EXTERNs per byte filled — and will be
+  visibly slower than a hand-rolled word loop.
+- **Zero-length is naturally a no-op.** The first `i < n` test fails
+  immediately at `i == 0` for `n == 0`, so the body is skipped without
+  any special-case branching. The lowering still pays one comparison
+  and one `JUMP_IF_FALSE` for the zero-length case.
+
 ## Open Questions and Constraints
 
 - Shared memory and the threads proposal are not supported; loads and stores emit no fence/atomic semantics.
@@ -466,3 +688,6 @@ A module that grows memory by one page and writes/reads an i32 at address `0x100
 - Atomic memory instructions (`memory.atomic.*`) are not supported.
 - Straddling accesses (i64 or unaligned i32 that cross a page boundary) require two outer `GetValue` calls. The translator should emit a straddle-safe path unless alignment can be statically proven.
 - `SystemBitConverter` EXTERN names used for float reinterpretation have not been enumerated here; they are documented alongside float support in a separate spec revision.
+- A word-aligned fast path for `memory.copy` and `memory.fill` is
+  open work — the current byte-only loops are correct but pay per-byte
+  EXTERN overhead even when the operands are trivially aligned.

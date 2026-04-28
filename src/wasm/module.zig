@@ -423,6 +423,30 @@ test "parseGlobalSection single i32 global" {
     try std.testing.expectEqual(@as(i32, 42), gs[0].init[0].i32_const);
 }
 
+test "parseImportSection accepts mutable global import" {
+    // Post-MVP "mutable-globals" proposal: an imported global with `mut = 0x01`
+    // must round-trip through the parser unmodified. The translator already
+    // emits every global as a mutable Udon field (Udon has no const concept
+    // for fields), so allowing the bit through here is the only piece of
+    // parser-side support the feature needs. See `docs/spec_variable_conversion.md`
+    // ("Mutability") and `docs/producer_guide.md` §1.
+    //
+    // count=01 mod="env" name="g" desc=0x03 valtype=i32 mut=0x01
+    const payload = &[_]u8{ 0x01, 0x03, 'e', 'n', 'v', 0x01, 'g', 0x03, 0x7F, 0x01 };
+    const is = try parseImportSection(std.testing.allocator, payload);
+    defer std.testing.allocator.free(is);
+    try std.testing.expectEqual(@as(usize, 1), is.len);
+    try std.testing.expectEqualStrings("env", is[0].module);
+    try std.testing.expectEqualStrings("g", is[0].name);
+    switch (is[0].desc) {
+        .global => |gt| {
+            try std.testing.expectEqual(types.ValType.i32, gt.valtype);
+            try std.testing.expectEqual(types.Mutability.mutable, gt.mut);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "parseImportSection one func import" {
     // count=01 mod="env" name="foo" desc=0x00 typeidx=0
     const payload = &[_]u8{

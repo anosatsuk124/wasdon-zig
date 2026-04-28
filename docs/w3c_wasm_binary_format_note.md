@@ -582,6 +582,41 @@ All of the following load/store instructions take `memarg` as their immediate.
 
 An unknown opcode is malformed at the binary-format level.
 
+## Post-MVP Extensions Accepted by the Translator
+
+The opcodes in the following tables fall outside the Core 1 / MVP set above, but `wasdon-zig` accepts them as deliberate, opt-in post-MVP extensions. They are listed here so that a parser implementer working from this note can reproduce what the translator decodes.
+
+### Sign-extension (post-MVP)
+
+These five opcodes belong to the `sign-extension-ops` proposal. The translator decodes them as single-byte opcodes with no immediate. Their lowering to Udon is described in `docs/spec_numeric_instruction_lowering.md` §4.
+
+| opcode | instruction      |
+| ------ | ---------------- |
+| `0xC0` | `i32.extend8_s`  |
+| `0xC1` | `i32.extend16_s` |
+| `0xC2` | `i64.extend8_s`  |
+| `0xC3` | `i64.extend16_s` |
+| `0xC4` | `i64.extend32_s` |
+
+### `0xFC` prefix sub-opcodes (post-MVP)
+
+The `0xFC` byte introduces a prefix-encoded family of post-MVP opcodes whose sub-opcode is itself encoded as a `u32` LEB128. The translator decodes the following sub-opcodes; the saturating-truncation entries belong to the `nontrapping-fptoint` proposal (lowering: `docs/spec_numeric_instruction_lowering.md` §5), and the `memory.copy` / `memory.fill` entries belong to the `bulk-memory` proposal (lowering: `docs/spec_linear_memory.md`).
+
+| opcode      | instruction           | trailing immediates                      |
+| ----------- | --------------------- | ---------------------------------------- |
+| `0xFC 0x00` | `i32.trunc_sat_f32_s` | none                                     |
+| `0xFC 0x01` | `i32.trunc_sat_f32_u` | none                                     |
+| `0xFC 0x02` | `i32.trunc_sat_f64_s` | none                                     |
+| `0xFC 0x03` | `i32.trunc_sat_f64_u` | none                                     |
+| `0xFC 0x04` | `i64.trunc_sat_f32_s` | none                                     |
+| `0xFC 0x05` | `i64.trunc_sat_f32_u` | none                                     |
+| `0xFC 0x06` | `i64.trunc_sat_f64_s` | none                                     |
+| `0xFC 0x07` | `i64.trunc_sat_f64_u` | none                                     |
+| `0xFC 0x0A` | `memory.copy`         | two reserved `0x00` bytes (dst, src mem) |
+| `0xFC 0x0B` | `memory.fill`         | one reserved `0x00` byte (mem)           |
+
+Other `0xFC` sub-opcodes (e.g. `memory.init`, `data.drop`, `table.copy`, `table.init`, `elem.drop`) are rejected by the translator as unknown post-MVP opcodes.
+
 ## Sections
 
 Each section has the following form.

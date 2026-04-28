@@ -211,6 +211,19 @@ const Translator = struct {
     /// `SystemBitConverter.__ToDouble__SystemByteArray_SystemInt32__SystemDouble`.
     f64_const_inits: std.ArrayListUnmanaged(Const64Init) = .empty,
 
+    /// Per-translation-unit flags controlling the lazy emission of the two
+    /// shared trunc_sat helper subroutines (see
+    /// `docs/spec_numeric_instruction_lowering.md` §5). Set the first time
+    /// `emitTruncSat` lowers an opcode whose output is i32 / i64; consumed
+    /// by `emitTruncSatHelpers` after `emitDefinedFunctions` to materialise
+    /// the helper body exactly once per output bit-width.
+    trunc_sat_helper_needed_i32: bool = false,
+    trunc_sat_helper_needed_i64: bool = false,
+    /// Have we already declared the trunc_sat data slots and registered
+    /// the f64 clamp constants? Set on first use so pure non-trunc_sat
+    /// modules don't pay the `_onEnable` synthesis cost.
+    trunc_sat_data_declared: bool = false,
+
     /// Shared init descriptor for both `SystemInt64` and `SystemDouble`
     /// constants. The synthesis pipeline is shared across the two types;
     /// only the terminal conversion EXTERN differs (see
@@ -300,6 +313,7 @@ const Translator = struct {
         // from events and resolved during the final layout pass, so the
         // reverse order doesn't break call targeting.
         try self.emitDefinedFunctions();
+        try self.emitTruncSatHelpers();
         try self.emitEventEntries();
         try self.emitIndirectTrampolines();
         try self.emitMemOobTrap();
@@ -767,6 +781,12 @@ const Translator = struct {
         try self.asm_.addData(.{ .name = "__c_u32_0xFFFF_32", .ty = tn.uint32, .init = .{ .uint32 = 0xFFFF } });
         try self.asm_.addData(.{ .name = "__c_u32_0xFFFFFFFF", .ty = tn.uint32, .init = .{ .uint32 = 0xFFFFFFFF } });
         try self.asm_.addData(.{ .name = "__c_i32_32", .ty = tn.int32, .init = .{ .int32 = 32 } });
+        // Shift counts for the post-MVP sign-extension opcodes
+        // (`i64.extend16_s` = 48, `i64.extend8_s` = 56). Both shift EXTERNs
+        // (i32 and i64) take SystemInt32 for the RHS, hence Int32 fields.
+        // See docs/spec_numeric_instruction_lowering.md §4.
+        try self.asm_.addData(.{ .name = "__c_i32_48", .ty = tn.int32, .init = .{ .int32 = 48 } });
+        try self.asm_.addData(.{ .name = "__c_i32_56", .ty = tn.int32, .init = .{ .int32 = 56 } });
         // Scratch slots for i64 memory access (load/store split across two words).
         try self.asm_.addData(.{ .name = "_mem_u32_hi", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
         try self.asm_.addData(.{ .name = "_mem_i64_lo", .ty = tn.int64, .init = .null_literal });
@@ -788,6 +808,28 @@ const Translator = struct {
         try self.asm_.addData(.{ .name = "_mem_u32_cleared", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
         try self.asm_.addData(.{ .name = "_mem_u32_new", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
         try self.asm_.addData(.{ .name = "_mem_byte", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        // Scratch slots for memory.copy (overlap-safe byte loop). Shared
+        // across every memory.copy site in the program — each call body
+        // fully writes them before reading, so reuse is safe. Per-call
+        // uniqueness is provided by the loop labels (see emitMemoryCopy).
+        try self.asm_.addData(.{ .name = "_mc_dst", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mc_src", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mc_n", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mc_i", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mc_addr_src", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mc_addr_dst", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mc_byte", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mc_cmp", .ty = tn.boolean, .init = .null_literal });
+        // Scratch slots for memory.fill (forward byte-store loop). Distinct
+        // from `_mc_*` so memory.copy and memory.fill never alias even if a
+        // future optimisation pass interleaves them; per-call uniqueness is
+        // provided by the loop labels (see emitMemoryFill).
+        try self.asm_.addData(.{ .name = "_mf_dst", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mf_val", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mf_n", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mf_i", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mf_addr", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mf_cmp", .ty = tn.boolean, .init = .null_literal });
         // Scratch slots for memory.grow.
         try self.asm_.addData(.{ .name = "_mg_old", .ty = tn.int32, .init = .{ .int32 = 0 } });
         try self.asm_.addData(.{ .name = "_mg_new", .ty = tn.int32, .init = .{ .int32 = 0 } });
@@ -1396,8 +1438,7 @@ const Translator = struct {
         const len: u32 = @intCast(d.init.len);
         const end: u32 = offset + len;
 
-        try self.asm_.comment(try std.fmt.allocPrint(self.aa(),
-            "data segment: offset={d} len={d}", .{ offset, len }));
+        try self.asm_.comment(try std.fmt.allocPrint(self.aa(), "data segment: offset={d} len={d}", .{ offset, len }));
 
         // Track which outer page's chunk is currently in `_mem_chunk`. A
         // null means we must fetch before the next access.
@@ -1422,8 +1463,7 @@ const Translator = struct {
             // Routing this through `emitOuterGetChecked` would be dead
             // code at runtime.
             if (last_page == null or last_page.? != page) {
-                const page_name = try std.fmt.allocPrint(self.aa(),
-                    "__ds_page_{d}_{d}", .{ seg_id, page });
+                const page_name = try std.fmt.allocPrint(self.aa(), "__ds_page_{d}_{d}", .{ seg_id, page });
                 try self.asm_.addData(.{
                     .name = page_name,
                     .ty = tn.int32,
@@ -1437,8 +1477,7 @@ const Translator = struct {
             }
 
             // Word-index constant, re-declared per op to keep names unique.
-            const widx_name = try std.fmt.allocPrint(self.aa(),
-                "__ds_widx_{d}_{d}", .{ seg_id, op_idx });
+            const widx_name = try std.fmt.allocPrint(self.aa(), "__ds_widx_{d}_{d}", .{ seg_id, op_idx });
             try self.asm_.addData(.{
                 .name = widx_name,
                 .ty = tn.int32,
@@ -1451,8 +1490,7 @@ const Translator = struct {
                     (@as(u32, d.init[off_in_seg + 1]) << 8) |
                     (@as(u32, d.init[off_in_seg + 2]) << 16) |
                     (@as(u32, d.init[off_in_seg + 3]) << 24);
-                const val_name = try std.fmt.allocPrint(self.aa(),
-                    "__ds_word_{d}_{d}", .{ seg_id, op_idx });
+                const val_name = try std.fmt.allocPrint(self.aa(), "__ds_word_{d}_{d}", .{ seg_id, op_idx });
                 try self.asm_.addData(.{
                     .name = val_name,
                     .ty = tn.uint32,
@@ -1473,10 +1511,8 @@ const Translator = struct {
                 const inv_mask: u32 = ~mask;
                 const shifted_byte: u32 = @as(u32, byte_val) << shift_bits;
 
-                const inv_name = try std.fmt.allocPrint(self.aa(),
-                    "__ds_invm_{d}_{d}", .{ seg_id, op_idx });
-                const or_name = try std.fmt.allocPrint(self.aa(),
-                    "__ds_orbyte_{d}_{d}", .{ seg_id, op_idx });
+                const inv_name = try std.fmt.allocPrint(self.aa(), "__ds_invm_{d}_{d}", .{ seg_id, op_idx });
+                const or_name = try std.fmt.allocPrint(self.aa(), "__ds_orbyte_{d}_{d}", .{ seg_id, op_idx });
                 try self.asm_.addData(.{
                     .name = inv_name,
                     .ty = tn.uint32,
@@ -1787,6 +1823,68 @@ const Translator = struct {
             try self.emitI32WrapI64(ctx);
             return;
         }
+        // Post-MVP sign-extension opcodes (0xC0..0xC4) lower as
+        // `(x << N) >> N` — a synthesised two-EXTERN sequence, not a
+        // single-EXTERN op, so they bypass the numeric.lookup table on
+        // purpose. See `emitSignExtend` and
+        // docs/spec_numeric_instruction_lowering.md §4.
+        switch (ins) {
+            .i32_extend8_s => {
+                try self.emitSignExtend(ctx, .i32, 24);
+                return;
+            },
+            .i32_extend16_s => {
+                try self.emitSignExtend(ctx, .i32, 16);
+                return;
+            },
+            .i64_extend8_s => {
+                try self.emitSignExtend(ctx, .i64, 56);
+                return;
+            },
+            .i64_extend16_s => {
+                try self.emitSignExtend(ctx, .i64, 48);
+                return;
+            },
+            .i64_extend32_s => {
+                try self.emitSignExtend(ctx, .i64, 32);
+                return;
+            },
+            // Post-MVP nontrapping-fptoint (saturating truncation).
+            // See docs/spec_numeric_instruction_lowering.md §5.
+            .i32_trunc_sat_f32_s => {
+                try self.emitTruncSat(ctx, .f32, .i32, .signed);
+                return;
+            },
+            .i32_trunc_sat_f32_u => {
+                try self.emitTruncSat(ctx, .f32, .i32, .unsigned);
+                return;
+            },
+            .i32_trunc_sat_f64_s => {
+                try self.emitTruncSat(ctx, .f64, .i32, .signed);
+                return;
+            },
+            .i32_trunc_sat_f64_u => {
+                try self.emitTruncSat(ctx, .f64, .i32, .unsigned);
+                return;
+            },
+            .i64_trunc_sat_f32_s => {
+                try self.emitTruncSat(ctx, .f32, .i64, .signed);
+                return;
+            },
+            .i64_trunc_sat_f32_u => {
+                try self.emitTruncSat(ctx, .f32, .i64, .unsigned);
+                return;
+            },
+            .i64_trunc_sat_f64_s => {
+                try self.emitTruncSat(ctx, .f64, .i64, .signed);
+                return;
+            },
+            .i64_trunc_sat_f64_u => {
+                try self.emitTruncSat(ctx, .f64, .i64, .unsigned);
+                return;
+            },
+            else => {},
+        }
         // Handle numeric ops uniformly via the table.
         if (numeric.lookup(ins)) |entry| {
             try self.emitNumericOp(ctx, entry);
@@ -1827,6 +1925,8 @@ const Translator = struct {
 
             .memory_size => try self.emitMemorySize(ctx),
             .memory_grow => try self.emitMemoryGrow(ctx),
+            .memory_copy => try self.emitMemoryCopy(ctx),
+            .memory_fill => |args| try self.emitMemoryFill(ctx, args),
             .i32_load => try self.emitMemLoadWord(ctx, ins),
             .i32_store => try self.emitMemStoreWord(ctx, ins),
             .f32_load => try self.emitMemLoadF32(ctx, ins),
@@ -2078,6 +2178,460 @@ const Translator = struct {
         const dst_i32 = try ctx.slotAt(self.aa(), ctx.depth - 1);
         try self.asm_.comment("i32.wrap_i64 (bit truncation via BitConverter)");
         try self.emitI64TruncI32(src_i64, dst_i32);
+    }
+
+    /// Post-MVP sign-extension opcodes (`i32.extend8_s`, `i32.extend16_s`,
+    /// `i64.extend8_s`, `i64.extend16_s`, `i64.extend32_s`) all lower as
+    /// `(x << N) >> N` over the existing `__op_LeftShift__` /
+    /// `__op_RightShift__` EXTERNs on SystemInt32 / SystemInt64. The shift
+    /// count `N` is materialised through the shared `__c_i32_<N>` data
+    /// field — both the i32 and i64 shift EXTERNs take SystemInt32 for
+    /// the RHS (see lower_numeric.zig lines 85–86 area), so a single
+    /// Int32 constant suffices for every variant.
+    ///
+    /// Modeled as a unary op on the WASM stack: pops one operand, pushes
+    /// one result of the same value type. The destination slot reuses the
+    /// source slot (same WASM type ⇒ same stack name); the two EXTERNs
+    /// chain through it directly.
+    ///
+    /// This is intentionally NOT a `lower_numeric.zig` table entry: that
+    /// table is for single-EXTERN ops, and the sign-extension is a
+    /// synthesised two-EXTERN sequence. Mirrors the post-load tail of
+    /// `i32.load8_s` / `i32.load16_s` (see `emitMemLoadByte` /
+    /// `emitMemLoad16`).
+    fn emitSignExtend(
+        self: *Translator,
+        ctx: *FuncCtx,
+        comptime vt: enum { i32, i64 },
+        comptime shift: u8,
+    ) Error!void {
+        const slot = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        const ls_sig = switch (vt) {
+            .i32 => "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32",
+            .i64 => "SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64",
+        };
+        const rs_sig = switch (vt) {
+            .i32 => "SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32",
+            .i64 => "SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64",
+        };
+        const tag = switch (vt) {
+            .i32 => switch (shift) {
+                24 => "i32.extend8_s",
+                16 => "i32.extend16_s",
+                else => @compileError("unsupported i32 sign-extend shift count"),
+            },
+            .i64 => switch (shift) {
+                56 => "i64.extend8_s",
+                48 => "i64.extend16_s",
+                32 => "i64.extend32_s",
+                else => @compileError("unsupported i64 sign-extend shift count"),
+            },
+        };
+        const count_const = std.fmt.comptimePrint("__c_i32_{d}", .{shift});
+
+        try self.asm_.comment(tag ++ " ((x << N) >> N)");
+        // slot := slot << N
+        try self.asm_.push(slot);
+        try self.asm_.push(count_const);
+        try self.asm_.push(slot);
+        try self.asm_.extern_(ls_sig);
+        // slot := slot >> N (arithmetic — SystemInt{32,64} is signed)
+        try self.asm_.push(slot);
+        try self.asm_.push(count_const);
+        try self.asm_.push(slot);
+        try self.asm_.extern_(rs_sig);
+        // Net WASM-stack effect: pop one + push one of the same type, so
+        // ctx.depth and the slot's recorded value type are unchanged.
+    }
+
+    /// Lower a non-trapping saturating-truncation opcode (§5 of
+    /// `docs/spec_numeric_instruction_lowering.md`). Each call site
+    ///   1. (if input is f32) promotes to f64 in `_ts_in_f64`,
+    ///   2. stages the low/high f64 clamps and the low/high integer
+    ///      result constants into the helper-shared slots,
+    ///   3. installs a unique return-address constant into
+    ///      `__ret_addr_trunc_sat_<i32|i64>__` and JUMPs into the
+    ///      shared helper subroutine,
+    ///   4. picks up the saturated result from `_ts_out_<i32|i64>` after
+    ///      the helper's `JUMP_INDIRECT` returns.
+    ///
+    /// The helper body itself is emitted once per output bit-width by
+    /// `emitTruncSatHelpers`, gated by `trunc_sat_helper_needed_*`.
+    fn emitTruncSat(
+        self: *Translator,
+        ctx: *FuncCtx,
+        comptime in_vt: enum { f32, f64 },
+        comptime out_vt: enum { i32, i64 },
+        comptime signedness: enum { signed, unsigned },
+    ) Error!void {
+        try self.ensureTruncSatData();
+
+        const in_slot = try ctx.slotAt(self.aa(), ctx.depth - 1);
+
+        // Step 1: promote f32 → f64 if needed; result lands in `_ts_in_f64`.
+        switch (in_vt) {
+            .f32 => {
+                try self.asm_.comment("trunc_sat: promote f32 input to f64 (_ts_in_f64)");
+                try self.asm_.push(in_slot);
+                try self.asm_.push("_ts_in_f64");
+                try self.asm_.extern_("SystemConvert.__ToDouble__SystemSingle__SystemDouble");
+            },
+            .f64 => {
+                try self.asm_.comment("trunc_sat: stage f64 input in _ts_in_f64");
+                try self.asm_.push(in_slot);
+                try self.asm_.push("_ts_in_f64");
+                try self.asm_.copy();
+            },
+        }
+
+        // Pick clamp constants per (out_vt, signedness).
+        const lo_clamp_const: []const u8 = switch (out_vt) {
+            .i32 => switch (signedness) {
+                .signed => "__c_f64_int32_min",
+                .unsigned => "__c_f64_zero",
+            },
+            .i64 => switch (signedness) {
+                .signed => "__c_f64_int64_min",
+                .unsigned => "__c_f64_zero",
+            },
+        };
+        const hi_clamp_const: []const u8 = switch (out_vt) {
+            .i32 => switch (signedness) {
+                .signed => "__c_f64_int32_max",
+                .unsigned => "__c_f64_uint32_max",
+            },
+            .i64 => switch (signedness) {
+                .signed => "__c_f64_int64_max",
+                .unsigned => "__c_f64_uint64_max",
+            },
+        };
+        const lo_out_const: []const u8 = switch (out_vt) {
+            .i32 => switch (signedness) {
+                .signed => "__c_i32_int_min",
+                .unsigned => "__c_i32_0", // 0 for unsigned
+            },
+            .i64 => switch (signedness) {
+                .signed => "__c_i64_int_min",
+                .unsigned => "__c_i64_zero",
+            },
+        };
+        const hi_out_const: []const u8 = switch (out_vt) {
+            .i32 => switch (signedness) {
+                .signed => "__c_i32_int_max",
+                .unsigned => "__c_i32_neg1", // UINT32_MAX as Int32 = -1
+            },
+            .i64 => switch (signedness) {
+                .signed => "__c_i64_int_max",
+                .unsigned => "__c_i64_neg1", // UINT64_MAX as Int64 = -1
+            },
+        };
+
+        // Step 2: stage clamps. Each helper-shared scratch slot is
+        // overwritten on every call site, so reuse is safe.
+        try self.asm_.push(lo_clamp_const);
+        try self.asm_.push("_ts_lo_f64");
+        try self.asm_.copy();
+        try self.asm_.push(hi_clamp_const);
+        try self.asm_.push("_ts_hi_f64");
+        try self.asm_.copy();
+        switch (out_vt) {
+            .i32 => {
+                try self.asm_.push(lo_out_const);
+                try self.asm_.push("_ts_lo_out_i32");
+                try self.asm_.copy();
+                try self.asm_.push(hi_out_const);
+                try self.asm_.push("_ts_hi_out_i32");
+                try self.asm_.copy();
+            },
+            .i64 => {
+                try self.asm_.push(lo_out_const);
+                try self.asm_.push("_ts_lo_out_i64");
+                try self.asm_.copy();
+                try self.asm_.push(hi_out_const);
+                try self.asm_.push("_ts_hi_out_i64");
+                try self.asm_.copy();
+            },
+        }
+
+        // Step 3: install RAC + JUMP into the helper.
+        const out_tag: []const u8 = switch (out_vt) {
+            .i32 => "i32",
+            .i64 => "i64",
+        };
+        const k = self.call_site_counter;
+        self.call_site_counter += 1;
+        const ret_label = try std.fmt.allocPrint(
+            self.aa(),
+            "__rt_trunc_sat_ret_{s}_{d}__",
+            .{ out_tag, k },
+        );
+        const rac = try std.fmt.allocPrint(
+            self.aa(),
+            "__rt_trunc_sat_rac_{s}_{d}__",
+            .{ out_tag, k },
+        );
+        try self.asm_.addData(.{ .name = rac, .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.rac_sites.append(self.gpa, .{ .const_name = rac, .target_label = ret_label });
+
+        const ret_addr_slot: []const u8 = switch (out_vt) {
+            .i32 => "__ret_addr_trunc_sat_i32__",
+            .i64 => "__ret_addr_trunc_sat_i64__",
+        };
+        const helper_entry: []const u8 = switch (out_vt) {
+            .i32 => "__rt_trunc_sat_to_i32__",
+            .i64 => "__rt_trunc_sat_to_i64__",
+        };
+
+        try self.asm_.push(rac);
+        try self.asm_.push(ret_addr_slot);
+        try self.asm_.copy();
+        try self.asm_.jump(helper_entry);
+        try self.asm_.label(ret_label);
+
+        // Mark the helper as needed so emitTruncSatHelpers materialises it.
+        switch (out_vt) {
+            .i32 => self.trunc_sat_helper_needed_i32 = true,
+            .i64 => self.trunc_sat_helper_needed_i64 = true,
+        }
+
+        // Step 4: pop the (f32 or f64) input, push the (i32 or i64) result,
+        // copy the saturated value into the new top-of-stack slot.
+        ctx.pop();
+        const result_vt: ValType = switch (out_vt) {
+            .i32 => .i32,
+            .i64 => .i64,
+        };
+        try ctx.push(result_vt);
+        const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        const out_slot: []const u8 = switch (out_vt) {
+            .i32 => "_ts_out_i32",
+            .i64 => "_ts_out_i64",
+        };
+        try self.asm_.push(out_slot);
+        try self.asm_.push(dst);
+        try self.asm_.copy();
+    }
+
+    /// Declare the trunc_sat scratch slots and register the f64 clamp
+    /// constants into `f64_const_inits` so `_onEnable` synthesises them.
+    /// Idempotent — runs at most once per translation unit, on the first
+    /// call to `emitTruncSat`.
+    fn ensureTruncSatData(self: *Translator) Error!void {
+        if (self.trunc_sat_data_declared) return;
+        self.trunc_sat_data_declared = true;
+
+        // Helper-shared input / clamp / output scratch slots. Per-helper
+        // slots match the names used by `emitTruncSat` and the helper
+        // bodies in `emitTruncSatHelpers`.
+        try self.asm_.addData(.{ .name = "_ts_in_f64", .ty = tn.double, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_ts_lo_f64", .ty = tn.double, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_ts_hi_f64", .ty = tn.double, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_ts_lo_out_i32", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_ts_hi_out_i32", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_ts_lo_out_i64", .ty = tn.int64, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_ts_hi_out_i64", .ty = tn.int64, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_ts_out_i32", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_ts_out_i64", .ty = tn.int64, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_ts_cmp", .ty = tn.boolean, .init = .null_literal });
+
+        // Return-address slots for the two helper subroutines.
+        try self.asm_.addData(.{ .name = "__ret_addr_trunc_sat_i32__", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+        try self.asm_.addData(.{ .name = "__ret_addr_trunc_sat_i64__", .ty = tn.uint32, .init = .{ .uint32 = 0 } });
+
+        // Integer result constants. Some of these may already exist in
+        // `emitMemoryData` (`__c_i32_0`, `__c_i32_neg1`); we only declare
+        // the trunc_sat-specific ones here.
+        try self.asm_.addData(.{ .name = "__c_i32_int_min", .ty = tn.int32, .init = .{ .int32 = std.math.minInt(i32) } });
+        try self.asm_.addData(.{ .name = "__c_i32_int_max", .ty = tn.int32, .init = .{ .int32 = std.math.maxInt(i32) } });
+        // Int64 constants must be initialised to null per Udon spec §4.7
+        // and synthesised at `_onEnable`. Reuse the existing
+        // `i64_const_inits` machinery via `registerNamedI64Const`.
+        try self.registerNamedI64Const("__c_i64_zero", 0);
+        try self.registerNamedI64Const("__c_i64_neg1", -1);
+        try self.registerNamedI64Const("__c_i64_int_min", std.math.minInt(i64));
+        try self.registerNamedI64Const("__c_i64_int_max", std.math.maxInt(i64));
+
+        // f64 clamp constants. Register through the same hi/lo init
+        // machinery used by `emitF64Const` so `_onEnable` synthesises
+        // them via BitConverter (Udon spec §4.7 forbids non-null Double
+        // literals).
+        try self.registerNamedF64Const("__c_f64_zero", 0.0);
+        try self.registerNamedF64Const("__c_f64_int32_min", -2147483648.0);
+        try self.registerNamedF64Const("__c_f64_int32_max", 2147483648.0);
+        try self.registerNamedF64Const("__c_f64_uint32_max", 4294967296.0);
+        try self.registerNamedF64Const("__c_f64_int64_min", -9223372036854775808.0);
+        try self.registerNamedF64Const("__c_f64_int64_max", 9223372036854775808.0);
+        try self.registerNamedF64Const("__c_f64_uint64_max", 18446744073709551616.0);
+    }
+
+    /// Declare a SystemInt64 data slot named `name` with bit-pattern
+    /// `value`, and register the synthesis triple into `i64_const_inits`
+    /// so `_onEnable` initialises it. Mirrors `emitI64Const`'s heap
+    /// machinery but with a caller-chosen stable name (rather than the
+    /// auto-generated `__K64_<n>`), so callers can refer to the slot by
+    /// a known identifier.
+    fn registerNamedI64Const(self: *Translator, name: []const u8, value: i64) Error!void {
+        const bits: u64 = @bitCast(value);
+        const hi_name = try std.fmt.allocPrint(self.aa(), "{s}__hi", .{name});
+        const lo_name = try std.fmt.allocPrint(self.aa(), "{s}__lo", .{name});
+        const hi_bits: u32 = @truncate(bits >> 32);
+        const lo_bits: u32 = @truncate(bits);
+        try self.asm_.addData(.{ .name = name, .ty = tn.int64, .init = .null_literal });
+        try self.asm_.addData(.{ .name = hi_name, .ty = tn.int32, .init = .{ .int32 = @bitCast(hi_bits) } });
+        try self.asm_.addData(.{ .name = lo_name, .ty = tn.int32, .init = .{ .int32 = @bitCast(lo_bits) } });
+        try self.i64_const_inits.append(self.gpa, .{
+            .slot = name,
+            .hi_slot = hi_name,
+            .lo_slot = lo_name,
+            .bits = bits,
+        });
+    }
+
+    /// Declare a SystemDouble data slot named `name` with bit-pattern
+    /// `value`, and register the synthesis triple into `f64_const_inits`.
+    /// Mirrors `registerNamedI64Const` but for the Double terminal
+    /// conversion in `emit64BitConstInits`.
+    fn registerNamedF64Const(self: *Translator, name: []const u8, value: f64) Error!void {
+        const bits: u64 = @bitCast(value);
+        const hi_name = try std.fmt.allocPrint(self.aa(), "{s}__hi", .{name});
+        const lo_name = try std.fmt.allocPrint(self.aa(), "{s}__lo", .{name});
+        const hi_bits: u32 = @truncate(bits >> 32);
+        const lo_bits: u32 = @truncate(bits);
+        try self.asm_.addData(.{ .name = name, .ty = tn.double, .init = .null_literal });
+        try self.asm_.addData(.{ .name = hi_name, .ty = tn.int32, .init = .{ .int32 = @bitCast(hi_bits) } });
+        try self.asm_.addData(.{ .name = lo_name, .ty = tn.int32, .init = .{ .int32 = @bitCast(lo_bits) } });
+        try self.f64_const_inits.append(self.gpa, .{
+            .slot = name,
+            .hi_slot = hi_name,
+            .lo_slot = lo_name,
+            .bits = bits,
+        });
+    }
+
+    /// Emit the trunc_sat helper subroutines once per translation unit,
+    /// gated on the `trunc_sat_helper_needed_*` flags set by
+    /// `emitTruncSat` call sites. The helpers are reached via JUMP from
+    /// every call site and return via `JUMP_INDIRECT` against
+    /// `__ret_addr_trunc_sat_<i32|i64>__`. They are placed AFTER all
+    /// defined functions — never reachable as fall-through.
+    fn emitTruncSatHelpers(self: *Translator) Error!void {
+        if (self.trunc_sat_helper_needed_i32) {
+            try self.emitTruncSatHelperBody(.i32);
+        }
+        if (self.trunc_sat_helper_needed_i64) {
+            try self.emitTruncSatHelperBody(.i64);
+        }
+    }
+
+    fn emitTruncSatHelperBody(self: *Translator, comptime out_vt: enum { i32, i64 }) Error!void {
+        const entry_label: []const u8 = switch (out_vt) {
+            .i32 => "__rt_trunc_sat_to_i32__",
+            .i64 => "__rt_trunc_sat_to_i64__",
+        };
+        const done_label: []const u8 = switch (out_vt) {
+            .i32 => "__rt_trunc_sat_done_i32__",
+            .i64 => "__rt_trunc_sat_done_i64__",
+        };
+        const lo_branch_label: []const u8 = switch (out_vt) {
+            .i32 => "__rt_trunc_sat_lo_i32__",
+            .i64 => "__rt_trunc_sat_lo_i64__",
+        };
+        const hi_branch_label: []const u8 = switch (out_vt) {
+            .i32 => "__rt_trunc_sat_hi_i32__",
+            .i64 => "__rt_trunc_sat_hi_i64__",
+        };
+        const not_lo_label: []const u8 = switch (out_vt) {
+            .i32 => "__rt_trunc_sat_not_lo_i32__",
+            .i64 => "__rt_trunc_sat_not_lo_i64__",
+        };
+        const not_hi_label: []const u8 = switch (out_vt) {
+            .i32 => "__rt_trunc_sat_not_hi_i32__",
+            .i64 => "__rt_trunc_sat_not_hi_i64__",
+        };
+        const lo_out_slot: []const u8 = switch (out_vt) {
+            .i32 => "_ts_lo_out_i32",
+            .i64 => "_ts_lo_out_i64",
+        };
+        const hi_out_slot: []const u8 = switch (out_vt) {
+            .i32 => "_ts_hi_out_i32",
+            .i64 => "_ts_hi_out_i64",
+        };
+        const out_slot: []const u8 = switch (out_vt) {
+            .i32 => "_ts_out_i32",
+            .i64 => "_ts_out_i64",
+        };
+        const zero_int_const: []const u8 = switch (out_vt) {
+            .i32 => "__c_i32_0",
+            .i64 => "__c_i64_zero",
+        };
+        const ret_addr_slot: []const u8 = switch (out_vt) {
+            .i32 => "__ret_addr_trunc_sat_i32__",
+            .i64 => "__ret_addr_trunc_sat_i64__",
+        };
+        const convert_sig: []const u8 = switch (out_vt) {
+            .i32 => "SystemConvert.__ToInt32__SystemDouble__SystemInt32",
+            .i64 => "SystemConvert.__ToInt64__SystemDouble__SystemInt64",
+        };
+
+        try self.asm_.comment("trunc_sat helper: NaN→0, x≤lo→lo_out, x≥hi→hi_out, else SystemConvert");
+        try self.asm_.label(entry_label);
+
+        // Step 1: NaN guard (x != x). SystemDouble.__op_Inequality__.
+        try self.asm_.push("_ts_in_f64");
+        try self.asm_.push("_ts_in_f64");
+        try self.asm_.push("_ts_cmp");
+        try self.asm_.extern_("SystemDouble.__op_Inequality__SystemDouble_SystemDouble__SystemBoolean");
+        // If NOT (x != x) — i.e. x is finite or non-NaN — skip to lo branch test.
+        try self.asm_.push("_ts_cmp");
+        try self.asm_.jumpIfFalse(not_lo_label);
+        // x is NaN: write 0 to out and JUMP done.
+        try self.asm_.push(zero_int_const);
+        try self.asm_.push(out_slot);
+        try self.asm_.copy();
+        try self.asm_.jump(done_label);
+
+        // Step 2: low clamp — x <= lo.
+        try self.asm_.label(not_lo_label);
+        try self.asm_.push("_ts_in_f64");
+        try self.asm_.push("_ts_lo_f64");
+        try self.asm_.push("_ts_cmp");
+        try self.asm_.extern_("SystemDouble.__op_LessThanOrEqual__SystemDouble_SystemDouble__SystemBoolean");
+        try self.asm_.push("_ts_cmp");
+        try self.asm_.jumpIfFalse(not_hi_label);
+        try self.asm_.label(lo_branch_label);
+        try self.asm_.push(lo_out_slot);
+        try self.asm_.push(out_slot);
+        try self.asm_.copy();
+        try self.asm_.jump(done_label);
+
+        // Step 3: high clamp — x >= hi.
+        try self.asm_.label(not_hi_label);
+        try self.asm_.push("_ts_in_f64");
+        try self.asm_.push("_ts_hi_f64");
+        try self.asm_.push("_ts_cmp");
+        try self.asm_.extern_("SystemDouble.__op_GreaterThanOrEqual__SystemDouble_SystemDouble__SystemBoolean");
+        try self.asm_.push("_ts_cmp");
+        // Branch to the in-range conversion when NOT (x >= hi).
+        const inrange_label: []const u8 = switch (out_vt) {
+            .i32 => "__rt_trunc_sat_inrange_i32__",
+            .i64 => "__rt_trunc_sat_inrange_i64__",
+        };
+        try self.asm_.jumpIfFalse(inrange_label);
+        try self.asm_.label(hi_branch_label);
+        try self.asm_.push(hi_out_slot);
+        try self.asm_.push(out_slot);
+        try self.asm_.copy();
+        try self.asm_.jump(done_label);
+
+        // Step 4: in-range — SystemConvert.ToInt{32,64}(SystemDouble).
+        try self.asm_.label(inrange_label);
+        try self.asm_.push("_ts_in_f64");
+        try self.asm_.push(out_slot);
+        try self.asm_.extern_(convert_sig);
+
+        // Step 5: return to caller via the shared RAC slot.
+        try self.asm_.label(done_label);
+        try self.asm_.jumpIndirect(ret_addr_slot);
     }
 
     /// WASM `select` (0x1B): pops `(v1, v2, cond)` where `cond` is the top
@@ -2953,13 +3507,10 @@ const Translator = struct {
         // and fall through to the generic dispatcher (which will emit
         // `unsupported import` or `SignatureMismatch`).
         if (imp_ty.params.len != 0 or imp_ty.results.len != 1) {
-            try self.asm_.comment(try std.fmt.allocPrint(self.aa(),
-                "meta import binding {s}.{s} expects () -> T but WASM type is {d}->{d}",
-                .{ imp.module, imp.name, imp_ty.params.len, imp_ty.results.len }));
+            try self.asm_.comment(try std.fmt.allocPrint(self.aa(), "meta import binding {s}.{s} expects () -> T but WASM type is {d}->{d}", .{ imp.module, imp.name, imp_ty.params.len, imp_ty.results.len }));
             return false;
         }
-        try self.asm_.comment(try std.fmt.allocPrint(self.aa(),
-            "meta import: {s}.{s} → {s}", .{ imp.module, imp.name, src }));
+        try self.asm_.comment(try std.fmt.allocPrint(self.aa(), "meta import: {s}.{s} → {s}", .{ imp.module, imp.name, src }));
         try ctx.push(imp_ty.results[0]);
         const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
         try self.asm_.push(src);
@@ -3789,6 +4340,34 @@ const Translator = struct {
         try self.asm_.extern_("SystemConvert.__ToByte__SystemInt32__SystemByte");
     }
 
+    /// Ctx-free byte load core. Reads `addr_slot` (an Int32 address slot)
+    /// and writes the unsigned byte value into `dst_slot` (a SystemInt32
+    /// scratch with high bits zero). Emits the bounds-checked outer/inner
+    /// fetch and the shift/mask sequence; does not touch any FuncCtx state.
+    /// `site_fn_name` / `site_op_tag` feed the trap-site telemetry.
+    fn emitMemLoadByteAt(
+        self: *Translator,
+        addr_slot: []const u8,
+        dst_slot: []const u8,
+        site_fn_name: []const u8,
+        site_op_tag: []const u8,
+    ) Error!void {
+        try self.emitByteAccessPreamble(addr_slot, site_fn_name, site_op_tag);
+
+        // _mem_u32_shifted := _mem_u32 >> shift (unsigned)
+        try self.asm_.push("_mem_u32");
+        try self.asm_.push("_mem_shift");
+        try self.asm_.push("_mem_u32_shifted");
+        try self.asm_.extern_("SystemUInt32.__op_RightShift__SystemUInt32_SystemInt32__SystemUInt32");
+
+        // masked := _mem_u32_shifted & 0xFF   (UInt32), then convert to Int32 dst.
+        try self.asm_.push("_mem_u32_shifted");
+        try self.asm_.push("__c_u32_0xFF");
+        try self.asm_.push("_mem_val_u32_buf");
+        try self.asm_.extern_("SystemUInt32.__op_LogicalAnd__SystemUInt32_SystemUInt32__SystemUInt32");
+        try self.emitU32ToI32("_mem_val_u32_buf", dst_slot);
+    }
+
     fn emitMemLoadByte(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
         const signed = switch (ins) {
             .i32_load8_s => true,
@@ -3804,24 +4383,11 @@ const Translator = struct {
         const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
         ctx.pop();
 
-        const load_tag: []const u8 = if (signed) "i32.load8_s" else "i32.load8_u";
-        try self.emitByteAccessPreamble(addr_slot, ctx.fn_name, load_tag);
-
-        // _mem_u32_shifted := _mem_u32 >> shift (unsigned)
-        try self.asm_.push("_mem_u32");
-        try self.asm_.push("_mem_shift");
-        try self.asm_.push("_mem_u32_shifted");
-        try self.asm_.extern_("SystemUInt32.__op_RightShift__SystemUInt32_SystemInt32__SystemUInt32");
-
         try ctx.push(.i32);
         const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
 
-        // masked := _mem_u32_shifted & 0xFF   (UInt32), then convert to Int32 dst.
-        try self.asm_.push("_mem_u32_shifted");
-        try self.asm_.push("__c_u32_0xFF");
-        try self.asm_.push("_mem_val_u32_buf");
-        try self.asm_.extern_("SystemUInt32.__op_LogicalAnd__SystemUInt32_SystemUInt32__SystemUInt32");
-        try self.emitU32ToI32("_mem_val_u32_buf", dst);
+        const load_tag: []const u8 = if (signed) "i32.load8_s" else "i32.load8_u";
+        try self.emitMemLoadByteAt(addr_slot, dst, ctx.fn_name, load_tag);
 
         if (signed) {
             // Sign-extend 8-bit → 32-bit: (dst << 24) >> 24 arithmetically.
@@ -3894,20 +4460,22 @@ const Translator = struct {
         }
     }
 
-    fn emitMemStoreByte(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
-        try self.asm_.comment("i32.store8");
-        const memarg = ins.i32_store8;
-        const val_i32 = try ctx.slotAt(self.aa(), ctx.depth - 1);
-        ctx.pop();
-        const raw_addr = try ctx.slotAt(self.aa(), ctx.depth - 1);
-        const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
-        ctx.pop();
-
+    /// Ctx-free byte store core. Reads `addr_slot` (Int32 address) and
+    /// `val_slot` (an Int32 value — the masking to the low 8 bits is done
+    /// inside this helper). Performs the read-modify-write into the
+    /// corresponding chunk word; does not touch any FuncCtx state.
+    fn emitMemStoreByteAt(
+        self: *Translator,
+        addr_slot: []const u8,
+        val_slot: []const u8,
+        site_fn_name: []const u8,
+        site_op_tag: []const u8,
+    ) Error!void {
         // UInt32 bit-pattern of val for the RMW.
-        try self.emitI32ToU32(val_i32, "_mem_val_u32_buf");
+        try self.emitI32ToU32(val_slot, "_mem_val_u32_buf");
         const val = "_mem_val_u32_buf";
 
-        try self.emitByteAccessPreamble(addr_slot, ctx.fn_name, "i32.store8");
+        try self.emitByteAccessPreamble(addr_slot, site_fn_name, site_op_tag);
 
         // _mem_mask_lo := 0xFF << shift (unsigned)
         try self.asm_.push("__c_u32_0xFF");
@@ -3951,6 +4519,206 @@ const Translator = struct {
         try self.asm_.push("_mem_word_in_page");
         try self.asm_.push("_mem_u32_new");
         try self.asm_.extern_("SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid");
+    }
+
+    fn emitMemStoreByte(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
+        try self.asm_.comment("i32.store8");
+        const memarg = ins.i32_store8;
+        const val_i32 = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        ctx.pop();
+        const raw_addr = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        const addr_slot = try self.applyMemOffset(raw_addr, memarg.offset);
+        ctx.pop();
+
+        try self.emitMemStoreByteAt(addr_slot, val_i32, ctx.fn_name, "i32.store8");
+    }
+
+    /// `memory.copy` — overlap-safe byte-by-byte copy with runtime
+    /// direction selection. Stack: `(dst, src, n)` (top). Per the WASM
+    /// bulk-memory spec, source and destination ranges may overlap, so we
+    /// dispatch on `dst <= src`:
+    ///   - true  → ascending loop  for i in [0, n) : mem[dst+i] = mem[src+i]
+    ///   - false → descending loop for i in [n-1, 0] : mem[dst+i] = mem[src+i]
+    /// Loop labels are uniqued via `block_counter`; the byte slots
+    /// (`_mc_*`) are shared across calls because each call body fully
+    /// writes them before any read. See docs/spec_linear_memory.md
+    /// §"memory.copy lowering".
+    fn emitMemoryCopy(self: *Translator, ctx: *FuncCtx) Error!void {
+        try self.asm_.comment("memory.copy (overlap-safe byte loop)");
+
+        // Pop (n, src, dst) into `_mc_*` so they survive subsequent
+        // helper calls (which freely use `_mem_*` scratch slots).
+        const n_slot = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        ctx.pop();
+        const src_slot = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        ctx.pop();
+        const dst_slot = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        ctx.pop();
+
+        // _mc_dst := dst ; _mc_src := src ; _mc_n := n
+        try self.asm_.push(dst_slot);
+        try self.asm_.push("_mc_dst");
+        try self.asm_.copy();
+        try self.asm_.push(src_slot);
+        try self.asm_.push("_mc_src");
+        try self.asm_.copy();
+        try self.asm_.push(n_slot);
+        try self.asm_.push("_mc_n");
+        try self.asm_.copy();
+
+        const id = self.block_counter;
+        self.block_counter += 1;
+        const back_lbl = try std.fmt.allocPrint(self.aa(), "__memcopy_back_{d}__", .{id});
+        const fwd_loop_lbl = try std.fmt.allocPrint(self.aa(), "__memcopy_fwd_loop_{d}__", .{id});
+        const back_loop_lbl = try std.fmt.allocPrint(self.aa(), "__memcopy_back_loop_{d}__", .{id});
+        const end_lbl = try std.fmt.allocPrint(self.aa(), "__memcopy_end_{d}__", .{id});
+        const site_tag = try std.fmt.allocPrint(self.aa(), "memory.copy_{d}", .{id});
+
+        // Direction: _mc_cmp := dst <= src
+        try self.asm_.push("_mc_dst");
+        try self.asm_.push("_mc_src");
+        try self.asm_.push("_mc_cmp");
+        try self.asm_.extern_("SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean");
+        try self.asm_.push("_mc_cmp");
+        try self.asm_.jumpIfFalse(back_lbl);
+
+        // ---- Forward branch: i = 0; while i < n { copy(i); i += 1 } ----
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push("_mc_i");
+        try self.asm_.copy();
+
+        try self.asm_.label(fwd_loop_lbl);
+        // _mc_cmp := i < n
+        try self.asm_.push("_mc_i");
+        try self.asm_.push("_mc_n");
+        try self.asm_.push("_mc_cmp");
+        try self.asm_.extern_("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
+        try self.asm_.push("_mc_cmp");
+        try self.asm_.jumpIfFalse(end_lbl);
+        // _mc_addr_src := src + i ; _mc_addr_dst := dst + i
+        try self.asm_.push("_mc_src");
+        try self.asm_.push("_mc_i");
+        try self.asm_.push("_mc_addr_src");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push("_mc_dst");
+        try self.asm_.push("_mc_i");
+        try self.asm_.push("_mc_addr_dst");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        // mem[dst+i] := mem[src+i]
+        try self.emitMemLoadByteAt("_mc_addr_src", "_mc_byte", ctx.fn_name, site_tag);
+        try self.emitMemStoreByteAt("_mc_addr_dst", "_mc_byte", ctx.fn_name, site_tag);
+        // i += 1
+        try self.asm_.push("_mc_i");
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("_mc_i");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.jump(fwd_loop_lbl);
+
+        // ---- Backward branch: i = n - 1; while i > -1 { copy(i); i -= 1 } ----
+        try self.asm_.label(back_lbl);
+        // i := n - 1
+        try self.asm_.push("_mc_n");
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("_mc_i");
+        try self.asm_.extern_("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32");
+
+        try self.asm_.label(back_loop_lbl);
+        // _mc_cmp := i > -1   (avoids unsigned-overflow trap at i==0 that
+        // a `i >= 0` lowering would risk if WASM ever fed a u32 length)
+        try self.asm_.push("_mc_i");
+        try self.asm_.push("__c_i32_neg1");
+        try self.asm_.push("_mc_cmp");
+        try self.asm_.extern_("SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean");
+        try self.asm_.push("_mc_cmp");
+        try self.asm_.jumpIfFalse(end_lbl);
+        // _mc_addr_src := src + i ; _mc_addr_dst := dst + i
+        try self.asm_.push("_mc_src");
+        try self.asm_.push("_mc_i");
+        try self.asm_.push("_mc_addr_src");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push("_mc_dst");
+        try self.asm_.push("_mc_i");
+        try self.asm_.push("_mc_addr_dst");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        try self.emitMemLoadByteAt("_mc_addr_src", "_mc_byte", ctx.fn_name, site_tag);
+        try self.emitMemStoreByteAt("_mc_addr_dst", "_mc_byte", ctx.fn_name, site_tag);
+        // i -= 1
+        try self.asm_.push("_mc_i");
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("_mc_i");
+        try self.asm_.extern_("SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.jump(back_loop_lbl);
+
+        try self.asm_.label(end_lbl);
+    }
+
+    /// `memory.fill` — forward byte-store loop. Stack: `(dst, val, n)`
+    /// (top). No overlap concern (single range), so a single ascending
+    /// loop suffices. The byte-store helper masks `val` to the low 8
+    /// bits internally, so the full Int32 is forwarded as-is. Loop
+    /// labels are uniqued via `block_counter`; the `_mf_*` scratch
+    /// fields are shared across calls because each call body fully
+    /// writes them before any read. Zero-length input naturally
+    /// short-circuits at the first `i < n` test (i=0, n=0). See
+    /// docs/spec_linear_memory.md §"memory.fill lowering".
+    fn emitMemoryFill(self: *Translator, ctx: *FuncCtx, ins: anytype) Error!void {
+        _ = ins;
+        try self.asm_.comment("memory.fill (forward byte-store loop)");
+
+        // Pop (n, val, dst) into `_mf_*` so they survive the byte-store
+        // helper's clobbering of the shared `_mem_*` scratch.
+        const n_slot = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        ctx.pop();
+        const val_slot = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        ctx.pop();
+        const dst_slot = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        ctx.pop();
+
+        // _mf_dst := dst ; _mf_val := val ; _mf_n := n
+        try self.asm_.push(dst_slot);
+        try self.asm_.push("_mf_dst");
+        try self.asm_.copy();
+        try self.asm_.push(val_slot);
+        try self.asm_.push("_mf_val");
+        try self.asm_.copy();
+        try self.asm_.push(n_slot);
+        try self.asm_.push("_mf_n");
+        try self.asm_.copy();
+
+        const id = self.block_counter;
+        self.block_counter += 1;
+        const loop_lbl = try std.fmt.allocPrint(self.aa(), "__memfill_loop_{d}__", .{id});
+        const end_lbl = try std.fmt.allocPrint(self.aa(), "__memfill_end_{d}__", .{id});
+        const site_tag = try std.fmt.allocPrint(self.aa(), "memory.fill_{d}", .{id});
+
+        // i := 0
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push("_mf_i");
+        try self.asm_.copy();
+
+        try self.asm_.label(loop_lbl);
+        // _mf_cmp := i < n
+        try self.asm_.push("_mf_i");
+        try self.asm_.push("_mf_n");
+        try self.asm_.push("_mf_cmp");
+        try self.asm_.extern_("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
+        try self.asm_.push("_mf_cmp");
+        try self.asm_.jumpIfFalse(end_lbl);
+        // _mf_addr := dst + i
+        try self.asm_.push("_mf_dst");
+        try self.asm_.push("_mf_i");
+        try self.asm_.push("_mf_addr");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        // mem[dst+i] := val (helper masks to low 8 bits)
+        try self.emitMemStoreByteAt("_mf_addr", "_mf_val", ctx.fn_name, site_tag);
+        // i += 1
+        try self.asm_.push("_mf_i");
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("_mf_i");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.jump(loop_lbl);
+
+        try self.asm_.label(end_lbl);
     }
 
     fn emitMemStore16(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
@@ -4432,8 +5200,7 @@ test "translate bench.wasm end-to-end (structural)" {
     // The bench declares UnityEngineDebug.__Log via a raw-identifier import
     // name; the translator should emit EXTERN with that exact string, with
     // no hardcoded table.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "UnityEngineDebug.__Log__SystemString__SystemVoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "UnityEngineDebug.__Log__SystemString__SystemVoid") != null);
     // Generic SystemString marshaling helper is declared once for all
     // string arguments regardless of which extern they target.
     try std.testing.expect(std.mem.indexOf(u8, out, "_marshal_str_tmp:") != null);
@@ -4443,17 +5210,13 @@ test "translate bench.wasm end-to-end (structural)" {
     // ---- string-marshaling helper correctness ----
     // The encoding singleton must be declared and cached in _start.
     try std.testing.expect(std.mem.indexOf(u8, out, "_marshal_encoding_utf8:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemTextEncoding.__get_UTF8__SystemTextEncoding") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemTextEncoding.__get_UTF8__SystemTextEncoding") != null);
     // A real byte array must be allocated and written into.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemByteArray.__ctor__SystemInt32__SystemByteArray") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemByteArray.__Set__SystemInt32_SystemByte__SystemVoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemByteArray.__ctor__SystemInt32__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemByteArray.__Set__SystemInt32_SystemByte__SystemVoid") != null);
     // GetString must be a non-static call: the encoding instance is
     // pushed immediately before the byte[] and the result slot.
-    const gs_at = std.mem.indexOf(u8, out,
-        "SystemTextEncoding.__GetString__SystemByteArray__SystemString").?;
+    const gs_at = std.mem.indexOf(u8, out, "SystemTextEncoding.__GetString__SystemByteArray__SystemString").?;
     const prefix = out[0..gs_at];
     const this_at = std.mem.lastIndexOf(u8, prefix, "PUSH, _marshal_encoding_utf8").?;
     const bytes_at = std.mem.lastIndexOf(u8, prefix, "PUSH, _marshal_str_bytes").?;
@@ -4461,8 +5224,7 @@ test "translate bench.wasm end-to-end (structural)" {
     try std.testing.expect(this_at < bytes_at);
     try std.testing.expect(bytes_at < tmp_at);
     // Regression guard: the old 2-arg TODO stub must be gone.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "byte-copy from linear memory into _marshal_str_bytes — TODO") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "byte-copy from linear memory into _marshal_str_bytes — TODO") == null);
 
     // ---- call_indirect full ABI emitted ----
     // Bench's `ops` array puts 3+ functions in the WASM table; each becomes
@@ -4472,10 +5234,8 @@ test "translate bench.wasm end-to-end (structural)" {
     try std.testing.expect(std.mem.indexOf(u8, out, "_indirect_entry__:") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "_indirect_trampoline__:") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "JUMP_INDIRECT, __indirect_target__") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32Array.__Get__SystemInt32__SystemUInt32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32Array.__Get__SystemInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
     // Regression guard: the old "simplified — single shared indirect target"
     // comment must be gone.
     try std.testing.expect(std.mem.indexOf(u8, out, "simplified — single shared indirect target") == null);
@@ -4484,14 +5244,11 @@ test "translate bench.wasm end-to-end (structural)" {
     // bench sets `options.memory.udonName = "_memory"`, so companion scalars
     // are renamed in lockstep per docs/spec_udonmeta_conversion.md §options.memory.
     try std.testing.expect(std.mem.indexOf(u8, out, "_memory_size_pages") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array") != null);
 
     // ---- at least one i32 arithmetic op was emitted ----
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
 
     // ---- metadata-driven globals exported under the configured udonName ----
     // The bench's __udon_meta maps `counter` → udonName `_counter` with
@@ -4508,17 +5265,13 @@ test "translate bench.wasm end-to-end (structural)" {
     // The translator emits those through the chunked-memory fast path — each
     // access leaves a distinctive RightShift + LogicalAnd preamble. We check
     // for the field-word-fetch extern used by both load and store.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32Array.__Get__SystemInt32__SystemUInt32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32Array.__Get__SystemInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
     // Subtraction and multiplication come from test_struct's rect_width and
     // point_area (when not fully folded). Multiplication is already covered
     // by test_arithmetic but its presence is reassuring.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32") != null);
 
     // ---- PC-42856 regression guard ----
     // After Cycle 3, _onEnable must pre-materialize *every* page up to
@@ -4540,8 +5293,7 @@ test "translate bench.wasm end-to-end (structural)" {
     // `_memory_max_pages`. The alternate name (without `__G__`) is
     // selected here because bench's __udon_meta overrides the udon
     // name via `options.memory.udonName`.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "PUSH, _memory_max_pages") != null);
 }
 
@@ -4594,19 +5346,277 @@ test "bench: memory.grow allocates inner chunks via SystemUInt32Array ctor" {
     const after = out[grow_marker..];
 
     // 新チャンクのアロケート
-    try std.testing.expect(std.mem.indexOf(u8, after,
-        "SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array") != null);
+    try std.testing.expect(std.mem.indexOf(u8, after, "SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array") != null);
     // outer への設置
-    try std.testing.expect(std.mem.indexOf(u8, after,
-        "SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, after, "SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid") != null);
     // page counter の更新と、-1 (失敗時) のコンスタント
     // bench の __udon_meta で memory.udonName = "_memory" を指定しているので
     // companion スカラも lockstep で改名される。
     try std.testing.expect(std.mem.indexOf(u8, after, "_memory_size_pages") != null);
 
     // 未実装プレースホルダは残っていないこと
-    try std.testing.expect(std.mem.indexOf(u8, after,
-        "simplified: returns current pages, no real growth") == null);
+    try std.testing.expect(std.mem.indexOf(u8, after, "simplified: returns current pages, no real growth") == null);
+}
+
+// ----------------------------------------------------------------
+// memory.copy lowering — overlap-safe byte loop with runtime direction
+// check. Strategy: if dst <= src, copy ascending; otherwise descending.
+// Both branches walk byte-by-byte, reusing the existing byte load/store
+// helpers (after refactor into `emitMemLoadByteAt` / `emitMemStoreByteAt`).
+// See docs/spec_linear_memory.md §"memory.copy lowering".
+// ----------------------------------------------------------------
+
+fn buildMemoryCopyOnceModule(a: std.mem.Allocator) !wasm.Module {
+    const body = try a.alloc(Instruction, 5);
+    body[0] = .{ .local_get = 0 }; // dst
+    body[1] = .{ .local_get = 1 }; // src
+    body[2] = .{ .local_get = 2 }; // n
+    body[3] = .{ .memory_copy = .{ .src_mem = 0, .dst_mem = 0 } };
+    body[4] = .return_;
+    const params = [_]ValType{ .i32, .i32, .i32 };
+    const results = [_]ValType{};
+    return buildOneFuncMemModule(a, &params, &results, body);
+}
+
+test "memory.copy emits forward and backward loop labels with unique IDs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const mod = try buildMemoryCopyOnceModule(a);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "__memcopy_fwd_loop_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__memcopy_back_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__memcopy_end_") != null);
+}
+
+test "memory.copy direction selection uses LessThanOrEqual before any loop label" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const mod = try buildMemoryCopyOnceModule(a);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const cmp_sig = "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean";
+    const cmp_idx = std.mem.indexOf(u8, out, cmp_sig) orelse return error.TestExpectedEqual;
+    const fwd_idx = std.mem.indexOf(u8, out, "__memcopy_fwd_loop_") orelse return error.TestExpectedEqual;
+    try std.testing.expect(cmp_idx < fwd_idx);
+}
+
+test "memory.copy reuses byte load/store helpers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const mod = try buildMemoryCopyOnceModule(a);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // The byte-store helper writes via the canonical UInt32Array __Set
+    // signature after the shift/mask RMW. Confirm the signature appears
+    // inside the loop body (between the forward-loop label and the end
+    // label).
+    const fwd_marker = "__memcopy_fwd_loop_";
+    const end_marker = "__memcopy_end_";
+    const fwd_idx = std.mem.indexOf(u8, out, fwd_marker) orelse return error.TestExpectedEqual;
+    const end_rel = std.mem.indexOf(u8, out[fwd_idx..], end_marker) orelse return error.TestExpectedEqual;
+    const loop_body = out[fwd_idx .. fwd_idx + end_rel];
+
+    try std.testing.expect(std.mem.indexOf(u8, loop_body, "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
+    // The byte store goes through the RMW XOR-based mask invert.
+    try std.testing.expect(std.mem.indexOf(u8, loop_body, "SystemUInt32.__op_LogicalXor__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+}
+
+test "memory.copy: scratch fields are declared in data section" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const mod = try buildMemoryCopyOnceModule(a);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // Each scratch must be declared as a top-level data field once. Look
+    // for the bare "<name>:" label form that the data-section emitter
+    // uses.
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mc_i:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mc_addr_src:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mc_addr_dst:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mc_byte:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mc_n:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mc_dst:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mc_src:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mc_cmp:") != null);
+}
+
+test "memory.copy: two calls in one function reuse scratch but have unique labels" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 9);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .{ .local_get = 1 };
+    body[2] = .{ .local_get = 2 };
+    body[3] = .{ .memory_copy = .{ .src_mem = 0, .dst_mem = 0 } };
+    body[4] = .{ .local_get = 0 };
+    body[5] = .{ .local_get = 1 };
+    body[6] = .{ .local_get = 2 };
+    body[7] = .{ .memory_copy = .{ .src_mem = 0, .dst_mem = 0 } };
+    body[8] = .return_;
+    const params = [_]ValType{ .i32, .i32, .i32 };
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // Two distinct forward-loop label definitions must appear (definitions
+    // end with `:` so they aren't confused with JUMP operand references).
+    var def_count: usize = 0;
+    var it = std.mem.splitScalar(u8, out, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (!std.mem.endsWith(u8, line, ":")) continue;
+        if (std.mem.indexOf(u8, line, "__memcopy_fwd_loop_") != null) def_count += 1;
+    }
+    try std.testing.expect(def_count == 2);
+
+    // Scratch declarations are shared — `_mc_i:` must appear exactly once.
+    try std.testing.expect(countOccurrences(out, "_mc_i:") == 1);
+    try std.testing.expect(countOccurrences(out, "_mc_n:") == 1);
+}
+
+test "memory.copy does not regress as __unsupported__" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const mod = try buildMemoryCopyOnceModule(a);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "__unsupported__: memory_copy") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "TODO unsupported: memory_copy") == null);
+}
+
+// ----------------------------------------------------------------
+// memory.fill lowering — forward byte-store loop. Unlike memory.copy
+// there is no overlap concern, so a single ascending loop suffices.
+// See docs/spec_linear_memory.md §"memory.fill lowering".
+// ----------------------------------------------------------------
+
+fn buildMemoryFillOnceModule(a: std.mem.Allocator) !wasm.Module {
+    const body = try a.alloc(Instruction, 5);
+    body[0] = .{ .local_get = 0 }; // dst
+    body[1] = .{ .local_get = 1 }; // val
+    body[2] = .{ .local_get = 2 }; // n
+    body[3] = .{ .memory_fill = .{ .mem = 0 } };
+    body[4] = .return_;
+    const params = [_]ValType{ .i32, .i32, .i32 };
+    const results = [_]ValType{};
+    return buildOneFuncMemModule(a, &params, &results, body);
+}
+
+test "memory.fill emits forward loop with byte store" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const mod = try buildMemoryFillOnceModule(a);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "__memfill_loop_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__memfill_end_") != null);
+    // The byte-store helper terminates with the canonical UInt32Array __Set
+    // signature after its shift/mask RMW.
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
+}
+
+test "memory.fill: zero-length is a no-op tail" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const mod = try buildMemoryFillOnceModule(a);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // The loop's `i < n` guard EXTERN must appear before any byte-store
+    // EXTERN — proves the guard precedes the body, so n=0 short-circuits.
+    const cmp_sig = "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean";
+    const set_sig = "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid";
+    const loop_lbl = "__memfill_loop_";
+    const loop_idx = std.mem.indexOf(u8, out, loop_lbl) orelse return error.TestExpectedEqual;
+    // Search for the cmp EXTERN and store EXTERN positions *after* the loop label.
+    const tail = out[loop_idx..];
+    const cmp_rel = std.mem.indexOf(u8, tail, cmp_sig) orelse return error.TestExpectedEqual;
+    const set_rel = std.mem.indexOf(u8, tail, set_sig) orelse return error.TestExpectedEqual;
+    try std.testing.expect(cmp_rel < set_rel);
+}
+
+test "memory.fill does not regress as __unsupported__" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const mod = try buildMemoryFillOnceModule(a);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "__unsupported__: memory_fill") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "TODO unsupported: memory_fill") == null);
+}
+
+test "memory.fill: scratch fields are declared in data section" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const mod = try buildMemoryFillOnceModule(a);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mf_n:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mf_val:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mf_dst:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mf_i:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mf_addr:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_mf_cmp:") != null);
 }
 
 test "bench: i32.store8 expands to shift/mask RMW sequence" {
@@ -4622,20 +5632,14 @@ test "bench: i32.store8 expands to shift/mask RMW sequence" {
     const out = try translateBench(std.testing.allocator);
     defer std.testing.allocator.free(out);
 
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32.__op_LeftShift__SystemUInt32_SystemInt32__SystemUInt32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32.__op_LogicalAnd__SystemUInt32_SystemUInt32__SystemUInt32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32.__op_LogicalOr__SystemUInt32_SystemUInt32__SystemUInt32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32.__op_LeftShift__SystemUInt32_SystemInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32.__op_LogicalAnd__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32.__op_LogicalOr__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
 
     // store8 の placeholder が残っていないこと
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "i32.store8 (simplified shift/mask placeholder)") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "i32.load8 (simplified shift/mask placeholder)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "i32.store8 (simplified shift/mask placeholder)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "i32.load8 (simplified shift/mask placeholder)") == null);
 }
 
 test "bench: no duplicate label definitions in rendered .code section" {
@@ -4696,8 +5700,393 @@ test "bench: i32.load8_u expands to shift + mask 0xFF" {
     const out = try translateBench(std.testing.allocator);
     defer std.testing.allocator.free(out);
 
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32.__op_LogicalAnd__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32.__op_LogicalAnd__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+}
+
+// ---- post-MVP: sign-extension opcodes (0xC0..0xC4) ----
+//
+// `i32.extend8_s`, `i32.extend16_s`, `i64.extend8_s`, `i64.extend16_s`,
+// `i64.extend32_s` lower as `(x << N) >> N` over the existing
+// `__op_LeftShift__` / `__op_RightShift__` EXTERNs. The shift count constant
+// `N` lives in a shared `__c_i32_<N>` data field (Int32 — both i32 and i64
+// shift EXTERNs take Int32 for the RHS, see lower_numeric.zig lines 85–86).
+// See docs/spec_numeric_instruction_lowering.md §4.
+
+test "i32.extend8_s lowers to LeftShift 24 / RightShift 24 on SystemInt32" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .i32_extend8_s;
+    body[2] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const ls_sig = "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32";
+    const rs_sig = "SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32";
+    const ls_idx = std.mem.indexOf(u8, out, ls_sig) orelse return error.TestExpectedEqual;
+    const rs_idx = std.mem.indexOf(u8, out, rs_sig) orelse return error.TestExpectedEqual;
+    try std.testing.expect(ls_idx < rs_idx);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_24") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "TODO unsupported") == null);
+}
+
+test "i32.extend16_s lowers to LeftShift 16 / RightShift 16 on SystemInt32" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .i32_extend16_s;
+    body[2] = .return_;
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const ls_sig = "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32";
+    const rs_sig = "SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32";
+    const ls_idx = std.mem.indexOf(u8, out, ls_sig) orelse return error.TestExpectedEqual;
+    const rs_idx = std.mem.indexOf(u8, out, rs_sig) orelse return error.TestExpectedEqual;
+    try std.testing.expect(ls_idx < rs_idx);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_16") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "TODO unsupported") == null);
+}
+
+test "i64.extend8_s lowers to LeftShift 56 / RightShift 56 on SystemInt64 with i32 count" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .i64_extend8_s;
+    body[2] = .return_;
+    const params = [_]ValType{.i64};
+    const results = [_]ValType{.i64};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const ls_sig = "SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64";
+    const rs_sig = "SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64";
+    const ls_idx = std.mem.indexOf(u8, out, ls_sig) orelse return error.TestExpectedEqual;
+    const rs_idx = std.mem.indexOf(u8, out, rs_sig) orelse return error.TestExpectedEqual;
+    try std.testing.expect(ls_idx < rs_idx);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_56") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "TODO unsupported") == null);
+}
+
+test "i64.extend16_s lowers to LeftShift 48 / RightShift 48 on SystemInt64" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .i64_extend16_s;
+    body[2] = .return_;
+    const params = [_]ValType{.i64};
+    const results = [_]ValType{.i64};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const ls_sig = "SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64";
+    const rs_sig = "SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64";
+    const ls_idx = std.mem.indexOf(u8, out, ls_sig) orelse return error.TestExpectedEqual;
+    const rs_idx = std.mem.indexOf(u8, out, rs_sig) orelse return error.TestExpectedEqual;
+    try std.testing.expect(ls_idx < rs_idx);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_48") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "TODO unsupported") == null);
+}
+
+test "i64.extend32_s lowers to LeftShift 32 / RightShift 32 on SystemInt64" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .i64_extend32_s;
+    body[2] = .return_;
+    const params = [_]ValType{.i64};
+    const results = [_]ValType{.i64};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const ls_sig = "SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64";
+    const rs_sig = "SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64";
+    const ls_idx = std.mem.indexOf(u8, out, ls_sig) orelse return error.TestExpectedEqual;
+    const rs_idx = std.mem.indexOf(u8, out, rs_sig) orelse return error.TestExpectedEqual;
+    try std.testing.expect(ls_idx < rs_idx);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "TODO unsupported") == null);
+}
+
+test "sign-extension does not regress as __unsupported__" {
+    // Build one function exercising all 5 sign-extension opcodes and make
+    // sure none of them fall through to the `__unsupported__` annotation
+    // emitted by `emitUnsupported`.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // fn(i32, i64) -> i64:
+    //   local.get 0; i32.extend8_s; drop;
+    //   local.get 0; i32.extend16_s; drop;
+    //   local.get 1; i64.extend8_s; drop;
+    //   local.get 1; i64.extend16_s; drop;
+    //   local.get 1; i64.extend32_s;
+    //   return
+    const body = try a.alloc(Instruction, 16);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .i32_extend8_s;
+    body[2] = .drop;
+    body[3] = .{ .local_get = 0 };
+    body[4] = .i32_extend16_s;
+    body[5] = .drop;
+    body[6] = .{ .local_get = 1 };
+    body[7] = .i64_extend8_s;
+    body[8] = .drop;
+    body[9] = .{ .local_get = 1 };
+    body[10] = .i64_extend16_s;
+    body[11] = .drop;
+    body[12] = .{ .local_get = 1 };
+    body[13] = .i64_extend32_s;
+    body[14] = .return_;
+    body[15] = .return_; // pad — ignored after the return above
+
+    const params = [_]ValType{ .i32, .i64 };
+    const results = [_]ValType{.i64};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body[0..15]);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // The translator unconditionally declares an `__unsupported__` data
+    // sink (see `emitCommonData`); we check for the *use* signals instead.
+    // `emitUnsupported` always emits a `# TODO unsupported: <opname>`
+    // comment plus an `ANNOTATION, __unsupported__` line, so absence of
+    // both tells us no opcode in this body fell through.
+    try std.testing.expect(std.mem.indexOf(u8, out, "TODO unsupported") == null);
+    var it = std.mem.splitSequence(u8, out, "\n");
+    var annotation_hits: usize = 0;
+    while (it.next()) |line| {
+        if (std.mem.indexOf(u8, line, "ANNOTATION") != null and
+            std.mem.indexOf(u8, line, "__unsupported__") != null)
+        {
+            annotation_hits += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), annotation_hits);
+}
+
+// ---- §5 nontrapping-fptoint (saturating truncation) ----
+//
+// The 8 `*.trunc_sat_*` opcodes lower through one of two shared helper
+// subroutines (one per output bit width: i32 and i64). The helper body
+// implements the WASM saturation semantics: NaN → 0, x ≤ low_clamp →
+// INT_MIN (or 0 for unsigned), x ≥ high_clamp → INT_MAX (or UINT_MAX),
+// otherwise plain `SystemConvert.__ToInt{32,64}__SystemDouble__*` truncation.
+// f32 inputs are promoted to f64 at each call site so both helpers
+// operate on a SystemDouble input slot. The helpers are reached via
+// the existing RAC + JUMP_INDIRECT machinery
+// (docs/spec_call_return_conversion.md).
+// See docs/spec_numeric_instruction_lowering.md §5.
+
+test "i32.trunc_sat_f32_s emits NaN guard, low/high clamp, then SystemConvert.ToInt32" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .i32_trunc_sat_f32_s;
+    body[2] = .return_;
+    const params = [_]ValType{.f32};
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const ne_sig = "SystemDouble.__op_Inequality__SystemDouble_SystemDouble__SystemBoolean";
+    const le_sig = "SystemDouble.__op_LessThanOrEqual__SystemDouble_SystemDouble__SystemBoolean";
+    const ge_sig = "SystemDouble.__op_GreaterThanOrEqual__SystemDouble_SystemDouble__SystemBoolean";
+    const cv_sig = "SystemConvert.__ToInt32__SystemDouble__SystemInt32";
+
+    const ne_idx = std.mem.indexOf(u8, out, ne_sig) orelse return error.TestExpectedEqual;
+    const le_idx = std.mem.indexOf(u8, out, le_sig) orelse return error.TestExpectedEqual;
+    const ge_idx = std.mem.indexOf(u8, out, ge_sig) orelse return error.TestExpectedEqual;
+    const cv_idx = std.mem.indexOf(u8, out, cv_sig) orelse return error.TestExpectedEqual;
+    try std.testing.expect(ne_idx < le_idx);
+    try std.testing.expect(le_idx < ge_idx);
+    try std.testing.expect(ge_idx < cv_idx);
+    try std.testing.expect(std.mem.indexOf(u8, out, "TODO unsupported") == null);
+}
+
+test "i64.trunc_sat_f64_u uses zero as low clamp and __c_f64_uint64_max as high clamp" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .i64_trunc_sat_f64_u;
+    body[2] = .return_;
+    const params = [_]ValType{.f64};
+    const results = [_]ValType{.i64};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // Low clamp is the f64 zero constant; high clamp is __c_f64_uint64_max.
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_f64_zero") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__c_f64_uint64_max") != null);
+    // Helper body uses the i64 SystemConvert variant.
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemConvert.__ToInt64__SystemDouble__SystemInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "TODO unsupported") == null);
+}
+
+test "f32 inputs route through f64.promote_f32 before saturation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const body = try a.alloc(Instruction, 3);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .i32_trunc_sat_f32_u;
+    body[2] = .return_;
+    const params = [_]ValType{.f32};
+    const results = [_]ValType{.i32};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    const promote_sig = "SystemConvert.__ToDouble__SystemSingle__SystemDouble";
+    // Helpers are emitted after all function bodies, so the helper-entry
+    // label's textual position is a stable upper bound on where the
+    // call-site's lowering ends. Promotion must fire before the helper
+    // body is laid out.
+    const helper_label = "__rt_trunc_sat_to_i32__:";
+
+    const promote_idx = std.mem.indexOf(u8, out, promote_sig) orelse return error.TestExpectedEqual;
+    const helper_idx = std.mem.indexOf(u8, out, helper_label) orelse return error.TestExpectedEqual;
+    try std.testing.expect(promote_idx < helper_idx);
+}
+
+test "trunc_sat helper subroutines emitted exactly once each" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // i32.trunc_sat_f32_s × 2 + i64.trunc_sat_f64_u × 1.
+    const body = try a.alloc(Instruction, 8);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .i32_trunc_sat_f32_s;
+    body[2] = .drop;
+    body[3] = .{ .local_get = 0 };
+    body[4] = .i32_trunc_sat_f32_s;
+    body[5] = .drop;
+    body[6] = .{ .local_get = 1 };
+    body[7] = .i64_trunc_sat_f64_u;
+    const params = [_]ValType{ .f32, .f64 };
+    const results = [_]ValType{.i64};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // Helper entry labels appear exactly once each (definition only).
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out, "__rt_trunc_sat_to_i32__:"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out, "__rt_trunc_sat_to_i64__:"));
+}
+
+test "trunc_sat does not regress as __unsupported__" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // All 8 trunc_sat opcodes in one function.
+    const body = try a.alloc(Instruction, 24);
+    body[0] = .{ .local_get = 0 };
+    body[1] = .i32_trunc_sat_f32_s;
+    body[2] = .drop;
+    body[3] = .{ .local_get = 0 };
+    body[4] = .i32_trunc_sat_f32_u;
+    body[5] = .drop;
+    body[6] = .{ .local_get = 1 };
+    body[7] = .i32_trunc_sat_f64_s;
+    body[8] = .drop;
+    body[9] = .{ .local_get = 1 };
+    body[10] = .i32_trunc_sat_f64_u;
+    body[11] = .drop;
+    body[12] = .{ .local_get = 0 };
+    body[13] = .i64_trunc_sat_f32_s;
+    body[14] = .drop;
+    body[15] = .{ .local_get = 0 };
+    body[16] = .i64_trunc_sat_f32_u;
+    body[17] = .drop;
+    body[18] = .{ .local_get = 1 };
+    body[19] = .i64_trunc_sat_f64_s;
+    body[20] = .drop;
+    body[21] = .{ .local_get = 1 };
+    body[22] = .i64_trunc_sat_f64_u;
+    body[23] = .drop;
+    const params = [_]ValType{ .f32, .f64 };
+    const results = [_]ValType{};
+    const mod = try buildOneFuncMemModule(a, &params, &results, body);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "TODO unsupported") == null);
+    var it = std.mem.splitSequence(u8, out, "\n");
+    while (it.next()) |line| {
+        if (std.mem.indexOf(u8, line, "ANNOTATION") != null and
+            std.mem.indexOf(u8, line, "__unsupported__") != null)
+        {
+            return error.TestExpectedEqual;
+        }
+    }
 }
 
 test "bench: i64 conversions dispatch via SystemConvert" {
@@ -4717,12 +6106,9 @@ test "bench: i64 conversions dispatch via SystemConvert" {
     defer std.testing.allocator.free(out);
 
     // i32.wrap_i64 は BitConverter 経由で emit される
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemBitConverter.__GetBytes__SystemInt64__SystemByteArray") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemConvert.__ToInt64__SystemUInt32__SystemInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemBitConverter.__GetBytes__SystemInt64__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemConvert.__ToInt64__SystemUInt32__SystemInt64") != null);
 }
 
 test "i64.extend_i32_u passes a UInt32 source, not a reused stack slot" {
@@ -4876,14 +6262,12 @@ test "synthesized self-recursive function spills frame when recursion=stack" {
     try translate(std.testing.allocator, mod, meta, &buf.writer, .{});
     const out = buf.written();
 
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid") != null);
     const cs_hits = std.mem.count(u8, out, "__call_stack__");
     try std.testing.expect(cs_hits >= 4);
     const top_hits = std.mem.count(u8, out, "__call_stack_top__");
     try std.testing.expect(top_hits >= 4);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
 }
 
 test "non-recursive function does not spill when recursion=stack" {
@@ -5070,9 +6454,147 @@ test "translate simple add module" {
     // an EXTERN for i32.add.
     try std.testing.expect(std.mem.indexOf(u8, out, "__add_P0__") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "__add_entry__") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "JUMP_INDIRECT, __add_RA__") != null);
+}
+
+// Post-MVP "mutable-globals" proposal: a module-defined mutable global must
+// be emitted as a normal Udon mutable data field, and `global.get` /
+// `global.set` against it must lower without any `__unsupported__`
+// annotation. The flag round-trips through the parser (verified in
+// `src/wasm/module.zig` parser test "parseImportSection accepts mutable
+// global import"); the translator does not filter on `mut`. This test
+// pins that contract end-to-end.
+test "mutable module-defined global emits as Udon mutable field" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Single mutable i32 global, init = i32.const 0, exported as "counter".
+    const ginit = try a.alloc(Instruction, 1);
+    ginit[0] = .{ .i32_const = 0 };
+    const globals = try a.alloc(wasm.module.Global, 1);
+    globals[0] = .{
+        .ty = .{ .valtype = .i32, .mut = .mutable },
+        .init = ginit,
+    };
+
+    // fn tick() -> i32 : global.get 0 ; i32.const 1 ; i32.add ; global.set 0 ; global.get 0
+    const results = try a.alloc(ValType, 1);
+    results[0] = .i32;
+    const types_ = try a.alloc(wasm.types.FuncType, 1);
+    types_[0] = .{ .params = &.{}, .results = results };
+
+    const funcs = try a.alloc(u32, 1);
+    funcs[0] = 0;
+
+    const body = try a.alloc(Instruction, 5);
+    body[0] = .{ .global_get = 0 };
+    body[1] = .{ .i32_const = 1 };
+    body[2] = .i32_add;
+    body[3] = .{ .global_set = 0 };
+    body[4] = .{ .global_get = 0 };
+    const codes = try a.alloc(wasm.module.Code, 1);
+    codes[0] = .{ .locals = &.{}, .body = body };
+
+    const exports = try a.alloc(wasm.module.Export, 2);
+    exports[0] = .{ .name = "counter", .desc = .{ .global = 0 } };
+    exports[1] = .{ .name = "tick", .desc = .{ .func = 0 } };
+
+    const mod: wasm.Module = .{
+        .types_ = types_,
+        .funcs = funcs,
+        .codes = codes,
+        .globals = globals,
+        .exports = exports,
+    };
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    const out = buf.written();
+
+    // The exported global picks up the `__G__` prefix per
+    // `docs/spec_variable_conversion.md`.
+    try std.testing.expect(std.mem.indexOf(u8, out, "__G__counter") != null);
+    // i32 → SystemInt32 mapping.
+    try std.testing.expect(std.mem.indexOf(u8, out, "__G__counter: %SystemInt32") != null);
+    // No `__unsupported__` ANNOTATION should remain — global.get/global.set
+    // are fully lowered for mutable globals.
+    var it = std.mem.splitSequence(u8, out, "\n");
+    var annotation_hits: usize = 0;
+    while (it.next()) |line| {
+        if (std.mem.indexOf(u8, line, "ANNOTATION") != null and
+            std.mem.indexOf(u8, line, "__unsupported__") != null)
+        {
+            annotation_hits += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), annotation_hits);
+}
+
+// Post-MVP mutable-globals: when an imported mutable global is paired with
+// a `__udon_meta` field whose `source.kind = "import"` matches the
+// `(module, name)` pair, the translator must use the meta-supplied
+// `udon_name` for the backing slot — exactly as it does for immutable
+// imports. This documents the host↔WASM boundary contract for shared
+// mutable state (host writes the Udon field, WASM observes it via
+// `global.get`).
+test "mutable global imported with __udon_meta override resolves the import name" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Imported mutable i32 global: env.host_counter
+    const imports = try a.alloc(wasm.module.Import, 1);
+    imports[0] = .{
+        .module = "env",
+        .name = "host_counter",
+        .desc = .{ .global = .{ .valtype = .i32, .mut = .mutable } },
+    };
+
+    // fn read() -> i32 : global.get 0
+    const results = try a.alloc(ValType, 1);
+    results[0] = .i32;
+    const types_ = try a.alloc(wasm.types.FuncType, 1);
+    types_[0] = .{ .params = &.{}, .results = results };
+    const funcs = try a.alloc(u32, 1);
+    funcs[0] = 0;
+    const body = try a.alloc(Instruction, 1);
+    body[0] = .{ .global_get = 0 };
+    const codes = try a.alloc(wasm.module.Code, 1);
+    codes[0] = .{ .locals = &.{}, .body = body };
+    const exports = try a.alloc(wasm.module.Export, 1);
+    exports[0] = .{ .name = "read", .desc = .{ .func = 0 } };
+
+    const mod: wasm.Module = .{
+        .types_ = types_,
+        .funcs = funcs,
+        .codes = codes,
+        .imports = imports,
+        .exports = exports,
+    };
+
+    const meta_fields = try a.alloc(wasm.udon_meta.Field, 1);
+    meta_fields[0] = .{
+        .key = "hostCounter",
+        .source = .{ .kind = .import, .module = "env", .name = "host_counter" },
+        .udon_name = "__G__host_counter",
+        .sync = .{ .enabled = true, .mode = .none },
+    };
+    const meta: wasm.UdonMeta = .{ .version = 1, .fields = meta_fields };
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    try translate(std.testing.allocator, mod, meta, &buf.writer, .{});
+    const out = buf.written();
+
+    // The chosen meta `udon_name` must be the backing data slot, with the
+    // i32 → SystemInt32 mapping preserved across the mutable boundary.
+    try std.testing.expect(std.mem.indexOf(u8, out, "__G__host_counter: %SystemInt32") != null);
+    // `read`'s `global.get 0` must reference that slot in the code section.
+    const entry = std.mem.indexOf(u8, out, "__read_entry__").?;
+    try std.testing.expect(std.mem.indexOf(u8, out[entry..], "__G__host_counter") != null);
 }
 
 // Runtime regression: WASM `select` (0x1B) must actually look at `cond`.
@@ -5130,8 +6652,7 @@ test "select: emits a conditional branch that picks between v1 and v2" {
     const out = buf.written();
 
     // The old "simplified pass-through of v1" placeholder must be gone.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "simplified: unconditional pass-through of v1") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "simplified: unconditional pass-through of v1") == null);
 
     // A conditional branch must be emitted — no branch means we're not
     // actually looking at `cond`.
@@ -5139,8 +6660,7 @@ test "select: emits a conditional branch that picks between v1 and v2" {
 
     // The `cond != 0` → bool conversion must appear. The helper goes
     // through SystemConvert.ToBoolean, mirroring br_if / if.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemConvert.__ToBoolean__SystemInt32__SystemBoolean") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemConvert.__ToBoolean__SystemInt32__SystemBoolean") != null);
 
     // The falsy path must COPY v2 over v1's slot. Locate the `select:`
     // comment and assert v2's slot (`S1_i32`) and v1's slot (`S0_i32`)
@@ -5159,8 +6679,7 @@ test "select: emits a conditional branch that picks between v1 and v2" {
 test "bench: select is not lowered as unconditional pass-through" {
     const out = try translateBench(std.testing.allocator);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "unconditional pass-through of v1") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "unconditional pass-through of v1") == null);
     // But bench does use `select` somewhere (the Zig stdlib pointer
     // select helpers), so the new lowering should produce select comments
     // and at least one JUMP_IF_FALSE that targets a `__*_sel_falsy_*`
@@ -5213,16 +6732,12 @@ test "i32.wrap_i64 uses BitConverter-based truncation, not SystemConvert.ToInt32
     const out = buf.written();
 
     // The checked conversion must be gone from the wrap emission.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemConvert.__ToInt32__SystemInt64__SystemInt32") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemConvert.__ToInt32__SystemInt64__SystemInt32") == null);
     // A BitConverter GetBytes(Int64) followed by ToInt32(byte[], 0) must appear.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemBitConverter.__GetBytes__SystemInt64__SystemByteArray") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemBitConverter.__GetBytes__SystemInt64__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
     // Sanity: our dedicated comment is emitted so the intent is clear in uasm.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "i32.wrap_i64 (bit truncation via BitConverter)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "i32.wrap_i64 (bit truncation via BitConverter)") != null);
 }
 
 // Bench-level guard: after this fix, bench.uasm must not emit
@@ -5232,8 +6747,7 @@ test "i32.wrap_i64 uses BitConverter-based truncation, not SystemConvert.ToInt32
 test "bench: no SystemConvert.ToInt32 from Int64 (checked conversion)" {
     const out = try translateBench(std.testing.allocator);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemConvert.__ToInt32__SystemInt64__SystemInt32") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemConvert.__ToInt32__SystemInt64__SystemInt32") == null);
 }
 
 // An `i64.const V` with V != 0 must not silently truncate to 0. Pre-fix,
@@ -5291,15 +6805,11 @@ test "i64.const non-zero is synthesized at _onEnable from two Int32 halves" {
     // The synthesis sequence must appear in _onEnable (the intro comment
     // is the canonical marker). This also guards against regressions that
     // leave `i64_const_inits` populated but never flush it.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "64-bit constant slot init") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "64-bit constant slot init") != null);
     // Spot-check that the key EXTERN in the synthesis is present.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt64.__op_LeftShift__SystemUInt64_SystemInt32__SystemUInt64") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt64.__op_LogicalOr__SystemUInt64_SystemUInt64__SystemUInt64") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemConvert.__ToUInt64__SystemUInt32__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt64.__op_LeftShift__SystemUInt64_SystemInt32__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt64.__op_LogicalOr__SystemUInt64_SystemUInt64__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemConvert.__ToUInt64__SystemUInt32__SystemUInt64") != null);
 }
 
 // `i64.const 0` is a happy case because Udon's `null` literal means
@@ -5351,8 +6861,7 @@ test "i64.const 0 uses shared __K64_zero slot with no runtime synthesis" {
     try std.testing.expect(std.mem.indexOf(u8, out, "__K64_zero") != null);
     // No synthesis sequence should be emitted for this test case (the
     // comment is only present when `i64_const_inits` is non-empty).
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "64-bit constant slot init") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "64-bit constant slot init") == null);
 }
 
 // f64.const has the same null-literal constraint as i64.const: Udon spec
@@ -5399,23 +6908,18 @@ test "f64.const non-zero is synthesized at _onEnable as SystemDouble" {
     // with Int64 constants in the dedup map, and the declared type must
     // be SystemDouble (not SystemInt64).
     try std.testing.expect(std.mem.indexOf(u8, out, "__K64f_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        ": %SystemDouble, null") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, ": %SystemDouble, null") != null);
     // Terminal conversion must be ToDouble, not ToInt64.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemBitConverter.__ToDouble__SystemByteArray_SystemInt32__SystemDouble") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemBitConverter.__ToDouble__SystemByteArray_SystemInt32__SystemDouble") != null);
     // Synthesis shares infrastructure with i64 — the setup comment is
     // still present because the list is non-empty.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "64-bit constant slot init") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "64-bit constant slot init") != null);
 
     // Verify the hi/lo halves match the bit pattern of 3.14.
     // @bitCast(3.14: f64) == 0x40091EB851EB851F,
     // hi = 0x40091EB8 = 1074339512, lo = 0x51EB851F = 1374389535.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "_hi: %SystemInt32, 1074339512") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "_lo: %SystemInt32, 1374389535") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_hi: %SystemInt32, 1074339512") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_lo: %SystemInt32, 1374389535") != null);
 }
 
 // `f64.const 0.0` (positive zero, all bits zero) takes the shared-slot
@@ -5463,10 +6967,8 @@ test "f64.const +0.0 uses __K64f_zero; -0.0 goes through synthesis" {
     // `0x80000000` (not the decimal `-2147483648`) because the Udon
     // Assembler's literal parser overflows on the decimal form — see
     // the test in `udon/asm.zig`.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "64-bit constant slot init") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "_hi: %SystemInt32, 0x80000000") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "64-bit constant slot init") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_hi: %SystemInt32, 0x80000000") != null);
     // And it must NOT just reuse the zero slot.
     try std.testing.expect(std.mem.indexOf(u8, out, "__K64f_zero") == null);
 }
@@ -5484,12 +6986,10 @@ test "bench: Writer.writeAll-critical i64 constants are fully synthesized" {
 
     // i64.const 32 — shift count used by `i64.shr_u` on the packed
     // Error!usize return. hi=0, lo=32.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "_lo: %SystemInt32, 32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_lo: %SystemInt32, 32") != null);
     // i64.const 0x200000000 = 8589934592 — `error.WriteFailed` tag in
     // the high 32 bits. hi=2, lo=0.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "_hi: %SystemInt32, 2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "_hi: %SystemInt32, 2") != null);
     // The init comment must be present exactly once at `_onEnable`.
     const marker = "# 64-bit constant slot init";
     const first = std.mem.indexOf(u8, out, marker) orelse unreachable;
@@ -5589,12 +7089,9 @@ test "memory init runs under _onEnable even when only _update is bound" {
 
     // Memory init externs must appear at least once — outer array ctor and
     // at least one inner chunk allocation.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemObjectArray.__SetValue__SystemObject_SystemInt32__SystemVoid") != null);
 }
 
 test "bench: every emitted EXTERN exists in Udon node list" {
@@ -5741,10 +7238,8 @@ test "bench: onEnable init writes rodata word into linear memory" {
     const body = onEnableBody(out);
     try std.testing.expect(body.len > 0);
     try std.testing.expect(std.mem.indexOf(u8, body, "PUSH, __ds_word_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body,
-        "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body,
-        "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
 }
 
 test "data segment at page 16 widens initial_pages to 17" {
@@ -5822,10 +7317,8 @@ test "data segment emits word-aligned stores into linear memory" {
 
     const body = onEnableBody(out);
     try std.testing.expect(body.len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, body,
-        "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body,
-        "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
     // At least one PUSH of a __ds_word_ constant must appear in the init.
     try std.testing.expect(std.mem.indexOf(u8, body, "PUSH, __ds_word_") != null);
 }
@@ -5850,13 +7343,10 @@ test "data segment with tail bytes emits byte RMW for the remainder" {
     try std.testing.expect(body.len > 0);
 
     // Word path: at least one UInt32Array.__Set.
-    try std.testing.expect(std.mem.indexOf(u8, body,
-        "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid") != null);
     // Byte-RMW path: mask-and-or over UInt32 (XOR is used to build ~mask).
-    try std.testing.expect(std.mem.indexOf(u8, body,
-        "SystemUInt32.__op_LogicalOr__SystemUInt32_SystemUInt32__SystemUInt32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body,
-        "SystemUInt32.__op_LogicalAnd__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "SystemUInt32.__op_LogicalOr__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "SystemUInt32.__op_LogicalAnd__SystemUInt32_SystemUInt32__SystemUInt32") != null);
 }
 
 test "data segment spanning two pages splits at page boundary" {
@@ -5878,8 +7368,7 @@ test "data segment spanning two pages splits at page boundary" {
 
     const body = onEnableBody(out);
     try std.testing.expect(body.len > 0);
-    const gets = countOccurrences(body,
-        "SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+    const gets = countOccurrences(body, "SystemObjectArray.__GetValue__SystemInt32__SystemObject");
     try std.testing.expect(gets >= 2);
 }
 
@@ -5976,12 +7465,9 @@ test "i32.load applies memarg.offset to effective address" {
 
     // There must be an Addition EXTERN that produces `_mem_eff_addr`
     // before page_idx is computed via the right-shift step.
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
     try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_eff_addr") != null);
-    try expectOrdered(body_out,
-        "_mem_eff_addr",
-        "SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
+    try expectOrdered(body_out, "_mem_eff_addr", "SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32");
 
     // A constant carrying the offset value `16` must be declared.
     try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_off_16:") != null);
@@ -6033,8 +7519,7 @@ test "i32.store applies memarg.offset to effective address" {
 
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
     try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_eff_addr") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "__c_i32_off_8:") != null);
 }
@@ -6090,8 +7575,7 @@ test "i32.load16_u synthesizes the half-word read (no __unsupported__ fallthroug
 
     // The unsupported sentinel must NOT appear — its presence at runtime
     // produces a stack-imbalance silent halt.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "TODO unsupported: i32_load16_u") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "TODO unsupported: i32_load16_u") == null);
     // The synthesis comment marks the new path.
     try std.testing.expect(std.mem.indexOf(u8, out, "i32.load16_u") != null);
     // The half-word mask 0xFFFF must be applied (vs the byte path's 0xFF).
@@ -6262,15 +7746,13 @@ test "i64.load emits runtime page-straddle dispatch (second outer GetValue)" {
     try std.testing.expect(body_out.len > 0);
     // Two outer GetValue calls — one for the lo chunk, one for the hi
     // chunk (straddle path). Without straddle support there is only one.
-    const gets = countOccurrences(body_out,
-        "SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+    const gets = countOccurrences(body_out, "SystemObjectArray.__GetValue__SystemInt32__SystemObject");
     try std.testing.expect(gets >= 2);
     // The straddle branch must advance the page index: a literal 1
     // Addition into `_mem_page_idx_hi` (or reuse of `_mem_word_in_page_hi`
     // for page+1) is acceptable — the shape we insist on is a `+ 1` that
     // feeds back into an outer `GetValue`.
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
 }
 
 test "i64.store emits runtime page-straddle dispatch (second outer GetValue)" {
@@ -6294,8 +7776,7 @@ test "i64.store emits runtime page-straddle dispatch (second outer GetValue)" {
 
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
-    const gets = countOccurrences(body_out,
-        "SystemObjectArray.__GetValue__SystemInt32__SystemObject");
+    const gets = countOccurrences(body_out, "SystemObjectArray.__GetValue__SystemInt32__SystemObject");
     try std.testing.expect(gets >= 2);
 }
 
@@ -6360,10 +7841,8 @@ test "i32.store converts Int32 value to UInt32 before SystemUInt32Array.__Set__"
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
     // BitConverter-based conversion must appear in the store sequence.
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
     // A UInt32 scratch buffer must be the value passed to __Set__.
     try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_val_u32_buf") != null);
     // Declarations must exist in the data section.
@@ -6392,8 +7871,7 @@ test "i32.store8 converts Int32 value before UInt32 mask" {
 
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
     try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_val_u32_buf") != null);
 }
 
@@ -6418,8 +7896,7 @@ test "i32.store16 converts Int32 value before UInt32 mask" {
 
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
     try std.testing.expect(std.mem.indexOf(u8, body_out, "_mem_val_u32_buf") != null);
 }
 
@@ -6445,13 +7922,11 @@ test "i64.store routes lo/hi via BitConverter instead of heterogeneous COPY" {
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
     // Two __GetBytes__SystemInt32__ calls (one per 32-bit half) must appear.
-    const get_bytes = countOccurrences(body_out,
-        "SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray");
+    const get_bytes = countOccurrences(body_out, "SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray");
     try std.testing.expect(get_bytes >= 2);
     // The two UInt32 result slots must still be written via BitConverter's
     // ToUInt32, not via `COPY, _mem_st_lo_i32, _mem_st_lo_u32`.
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
     // A heterogeneous COPY from *_i32 → *_u32 must not survive.
     // (COPY appears as two PUSHes followed by the `COPY` op; we spot-check
     // the lo pair which used to be the culprit.)
@@ -6481,10 +7956,8 @@ test "i32.load converts loaded UInt32 to Int32 before storing in Int32 stack slo
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
     // Load path must route UInt32 → Int32 via BitConverter.
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__GetBytes__SystemUInt32__SystemByteArray") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__GetBytes__SystemUInt32__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
 }
 
 test "i32.load8_u converts UInt32 mask result to Int32 before dst" {
@@ -6508,8 +7981,7 @@ test "i32.load8_u converts UInt32 mask result to Int32 before dst" {
 
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
 }
 
 test "i32.load8_s still sign-extends after UInt32→Int32 conversion" {
@@ -6533,14 +8005,11 @@ test "i32.load8_s still sign-extends after UInt32→Int32 conversion" {
 
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
     // Sign-extend must remain: `<< 24` then `>> 24` with SystemInt32 ops.
     try std.testing.expect(std.mem.indexOf(u8, body_out, "__c_i32_24") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32") != null);
 }
 
 test "bench: no heterogeneous COPY from *_i32 to *_u32 remains" {
@@ -6549,10 +8018,8 @@ test "bench: no heterogeneous COPY from *_i32 to *_u32 remains" {
 
     // The specific pattern from the old emitMemStoreI64 that broke on
     // Udon's strict heap typing. Must not appear in the regenerated output.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "PUSH, _mem_st_lo_i32\n        PUSH, _mem_st_lo_u32\n        COPY") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "PUSH, _mem_st_hi_i32\n        PUSH, _mem_st_hi_u32\n        COPY") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "PUSH, _mem_st_lo_i32\n        PUSH, _mem_st_lo_u32\n        COPY") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "PUSH, _mem_st_hi_i32\n        PUSH, _mem_st_hi_u32\n        COPY") == null);
 }
 
 test "bench: every SystemUInt32Array.__Set__ value arg is a UInt32 slot" {
@@ -6585,8 +8052,7 @@ test "bench: every SystemUInt32Array.__Set__ value arg is a UInt32 slot" {
     var i: usize = 3;
     while (i < lines_list.items.len) : (i += 1) {
         const ln = std.mem.trim(u8, lines_list.items[i], " \t\r");
-        if (std.mem.indexOf(u8, ln,
-            "EXTERN, \"SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid\"") == null)
+        if (std.mem.indexOf(u8, ln, "EXTERN, \"SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid\"") == null)
             continue;
         const val_line = std.mem.trim(u8, lines_list.items[i - 1], " \t\r");
         const prefix = "PUSH, ";
@@ -6633,11 +8099,9 @@ test "i32.gt_u converts Int32 operands to UInt32 via BitConverter" {
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
     // Both operands must be converted Int32 → UInt32 via BitConverter.
-    const get_bytes = countOccurrences(body_out,
-        "SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray");
+    const get_bytes = countOccurrences(body_out, "SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray");
     try std.testing.expect(get_bytes >= 2);
-    const to_uint32 = countOccurrences(body_out,
-        "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32");
+    const to_uint32 = countOccurrences(body_out, "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32");
     try std.testing.expect(to_uint32 >= 2);
     // The comparison's lhs/rhs push targets must be UInt32 scratch.
     try std.testing.expect(std.mem.indexOf(u8, body_out, "_num_lhs_u32") != null);
@@ -6666,13 +8130,10 @@ test "i32.div_u routes operands and result through BitConverter" {
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
     // Operand conversion (Int32 → UInt32).
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32") != null);
     // Result conversion (UInt32 → Int32).
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__GetBytes__SystemUInt32__SystemByteArray") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__GetBytes__SystemUInt32__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
     try std.testing.expect(std.mem.indexOf(u8, body_out, "_num_res_u32") != null);
 }
 
@@ -6698,8 +8159,7 @@ test "i32.shr_u converts only the UInt32 value operand, shift operand stays Int3
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
     // Exactly one Int32→UInt32 GetBytes (for the value, not the shift).
-    const get_bytes_i32 = countOccurrences(body_out,
-        "SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray");
+    const get_bytes_i32 = countOccurrences(body_out, "SystemBitConverter.__GetBytes__SystemInt32__SystemByteArray");
     try std.testing.expectEqual(@as(usize, 1), get_bytes_i32);
     // No `_num_rhs_u32` — shift operand remains Int32.
     try std.testing.expect(std.mem.indexOf(u8, body_out, "_num_rhs_u32") == null);
@@ -6727,11 +8187,9 @@ test "i64.gt_u converts Int64 operands to UInt64 via BitConverter" {
 
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
-    const get_bytes = countOccurrences(body_out,
-        "SystemBitConverter.__GetBytes__SystemInt64__SystemByteArray");
+    const get_bytes = countOccurrences(body_out, "SystemBitConverter.__GetBytes__SystemInt64__SystemByteArray");
     try std.testing.expect(get_bytes >= 2);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64") != null);
     try std.testing.expect(std.mem.indexOf(u8, body_out, "_num_lhs_u64") != null);
     try std.testing.expect(std.mem.indexOf(u8, body_out, "_num_rhs_u64") != null);
 }
@@ -6757,12 +8215,9 @@ test "i64.div_u routes both operands and result through Int64/UInt64 BitConverte
 
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__GetBytes__SystemUInt64__SystemByteArray") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__ToInt64__SystemByteArray_SystemInt32__SystemInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__GetBytes__SystemUInt64__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__ToInt64__SystemByteArray_SystemInt32__SystemInt64") != null);
     try std.testing.expect(std.mem.indexOf(u8, body_out, "_num_res_u64") != null);
 }
 
@@ -6788,17 +8243,14 @@ test "i64.shr_u converts only the UInt64 value; shift operand stays Int32" {
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
     // LHS must be converted Int64→UInt64 exactly once via BitConverter.
-    const to_u64 = countOccurrences(body_out,
-        "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64");
+    const to_u64 = countOccurrences(body_out, "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64");
     try std.testing.expectEqual(@as(usize, 1), to_u64);
     // The shift operand must stay in an Int32 slot — i.e. the narrowing path
     // is taken (ToInt32 via BitConverter) rather than UInt64 conversion.
-    const to_i32 = countOccurrences(body_out,
-        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32");
+    const to_i32 = countOccurrences(body_out, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32");
     try std.testing.expectEqual(@as(usize, 1), to_i32);
     // No additional UInt64 conversion for the shift count.
-    const to_u64_total = countOccurrences(body_out,
-        "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64");
+    const to_u64_total = countOccurrences(body_out, "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64");
     try std.testing.expectEqual(@as(usize, 1), to_u64_total);
 }
 
@@ -6824,17 +8276,12 @@ test "i64.rem_u expansion routes operands and result through BitConverter" {
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
     // Both operands converted to UInt64, final result converted back to Int64.
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter.__ToInt64__SystemByteArray_SystemInt32__SystemInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__ToUInt64__SystemByteArray_SystemInt32__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter.__ToInt64__SystemByteArray_SystemInt32__SystemInt64") != null);
     // All three UInt64 ops (Division, Multiplication, Subtraction) still emitted.
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemUInt64.__op_Division__SystemUInt64_SystemUInt64__SystemUInt64") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemUInt64.__op_Multiplication__SystemUInt64_SystemUInt64__SystemUInt64") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemUInt64.__op_Subtraction__SystemUInt64_SystemUInt64__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemUInt64.__op_Division__SystemUInt64_SystemUInt64__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemUInt64.__op_Multiplication__SystemUInt64_SystemUInt64__SystemUInt64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemUInt64.__op_Subtraction__SystemUInt64_SystemUInt64__SystemUInt64") != null);
 }
 
 // Gate test: every EXTERN signature emitted by the canonical bench module
@@ -6892,18 +8339,13 @@ test "i32.rem_u expansion uses Division/Multiplication/Subtraction (Udon has no 
 
     // The forbidden missing-node signature must NOT appear anywhere in the
     // output — emitting it makes UdonBehaviour silently halt at load time.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32.__op_Modulus__SystemUInt32_SystemUInt32__SystemUInt32") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32.__op_Modulus__SystemUInt32_SystemUInt32__SystemUInt32") == null);
     // The 3-EXTERN expansion must be present.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32.__op_Division__SystemUInt32_SystemUInt32__SystemUInt32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32.__op_Multiplication__SystemUInt32_SystemUInt32__SystemUInt32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemUInt32.__op_Subtraction__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32.__op_Division__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32.__op_Multiplication__SystemUInt32_SystemUInt32__SystemUInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemUInt32.__op_Subtraction__SystemUInt32_SystemUInt32__SystemUInt32") != null);
     // And the comment marker confirming the synthesis path was taken.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "i32.rem_u (synthesized: a - (a/b)*b)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "i32.rem_u (synthesized: a - (a/b)*b)") != null);
 }
 
 test "signed numeric ops do not emit BitConverter conversion" {
@@ -6931,11 +8373,9 @@ test "signed numeric ops do not emit BitConverter conversion" {
     const body_out = probeFnBody(out);
     try std.testing.expect(body_out.len > 0);
     // No BitConverter within this body — signed ops use SystemInt32 directly.
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemBitConverter") == null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemBitConverter") == null);
     // The Int32 Addition EXTERN must be present.
-    try std.testing.expect(std.mem.indexOf(u8, body_out,
-        "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body_out, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
 }
 
 test "bench: SystemUInt32/UInt64 op args never point to a raw Int32 stack slot" {
@@ -6980,11 +8420,9 @@ test "bench: SystemUInt32/UInt64 op args never point to a raw Int32 stack slot" 
     var i: usize = 3;
     while (i < lines_list.items.len) : (i += 1) {
         const ln = std.mem.trim(u8, lines_list.items[i], " \t\r");
-        const is_u32_op = std.mem.startsWith(u8, ln,
-            "EXTERN, \"SystemUInt32.__op_") and
+        const is_u32_op = std.mem.startsWith(u8, ln, "EXTERN, \"SystemUInt32.__op_") and
             std.mem.indexOf(u8, ln, "SystemUInt32_SystemUInt32") != null;
-        const is_u64_op = std.mem.startsWith(u8, ln,
-            "EXTERN, \"SystemUInt64.__op_") and
+        const is_u64_op = std.mem.startsWith(u8, ln, "EXTERN, \"SystemUInt64.__op_") and
             std.mem.indexOf(u8, ln, "SystemUInt64_SystemUInt64") != null;
         if (!is_u32_op and !is_u64_op) continue;
 
@@ -7331,8 +8769,7 @@ test "i32.eqz lowers as op_Equality with Boolean scratch and ToInt32 writeback" 
     const out = buf.written();
 
     // Regression guard: the old instance-method signature must be gone.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemInt32.__Equals__SystemInt32__SystemBoolean") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemInt32.__Equals__SystemInt32__SystemBoolean") == null);
 
     // A dedicated Boolean scratch must be declared, since `op_Equality`
     // returns Boolean and Udon rejects writing a Boolean into an
@@ -7447,10 +8884,8 @@ test "i64.shr_u converts the Int64 shift count to Int32 before the EXTERN" {
     // the OverflowException on out-of-range i64 values. Shift counts happen to
     // always fit in Int32 so either path would work runtime-wise, but the
     // BitConverter path is now consistent with `i32.wrap_i64`.
-    try std.testing.expect(std.mem.indexOf(u8, prefix,
-        "SystemBitConverter.__GetBytes__SystemInt64__SystemByteArray") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prefix,
-        "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefix, "SystemBitConverter.__GetBytes__SystemInt64__SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefix, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32") != null);
 }
 
 test "i32.lt_s routes its Boolean result through _cmp_bool" {
@@ -7495,8 +8930,7 @@ test "i32.lt_s routes its Boolean result through _cmp_bool" {
 
     // A ToInt32(Boolean) writeback must follow, so the stack slot holds 0/1.
     const tail = body_out[lt_at + lt_sig.len ..];
-    try std.testing.expect(std.mem.indexOf(u8, tail,
-        "EXTERN, \"SystemConvert.__ToInt32__SystemBoolean__SystemInt32\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tail, "EXTERN, \"SystemConvert.__ToInt32__SystemBoolean__SystemInt32\"") != null);
 }
 
 test "if: Int32 cond is narrowed to Boolean before JUMP_IF_FALSE" {
@@ -7548,8 +8982,7 @@ test "if: Int32 cond is narrowed to Boolean before JUMP_IF_FALSE" {
         }
     }
 
-    try std.testing.expect(std.mem.indexOf(u8, prefix,
-        "SystemConvert.__ToBoolean__SystemInt32__SystemBoolean") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefix, "SystemConvert.__ToBoolean__SystemInt32__SystemBoolean") != null);
 }
 
 test "bench: i32.eqz no longer emits the buggy instance-method Equals signature" {
@@ -7559,8 +8992,7 @@ test "bench: i32.eqz no longer emits the buggy instance-method Equals signature"
     // Regression guard for the PC 43048 crash. The bench's test_recursion
     // path contains `if (n == 0)` which lowers through i32.eqz, so the
     // old bug-signature would appear at least once if the fix regresses.
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemInt32.__Equals__SystemInt32__SystemBoolean") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemInt32.__Equals__SystemInt32__SystemBoolean") == null);
 }
 
 test "emitMemoryInit: all max_pages chunks are materialized at _onEnable" {
@@ -7637,11 +9069,9 @@ test "i32.store8 byte-access preamble runs through the bounds-checked helper" {
     const gv = "SystemObjectArray.__GetValue__SystemInt32__SystemObject";
     const gv_rel = std.mem.indexOf(u8, body_out, gv) orelse return error.TestExpectedEqual;
     const pre = body_out[0..gv_rel];
-    try std.testing.expect(std.mem.indexOf(u8, pre,
-        "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pre, "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean") != null);
     try std.testing.expect(std.mem.indexOf(u8, pre, "PUSH, __G__memory_max_pages") != null);
-    try std.testing.expect(std.mem.indexOf(u8, pre,
-        "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pre, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean") != null);
     try std.testing.expect(std.mem.indexOf(u8, pre, "JUMP_IF_FALSE") != null);
 
     // The trap block must exist so the JUMP_IF_FALSE has somewhere to
@@ -7675,8 +9105,7 @@ test "aligned i32.load emits bounds-checked outer-array fetch" {
     const gv = "SystemObjectArray.__GetValue__SystemInt32__SystemObject";
     const gv_rel = std.mem.indexOf(u8, body_out, gv) orelse return error.TestExpectedEqual;
     const pre = body_out[0..gv_rel];
-    try std.testing.expect(std.mem.indexOf(u8, pre,
-        "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pre, "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean") != null);
     try std.testing.expect(std.mem.indexOf(u8, pre, "PUSH, __G__memory_max_pages") != null);
 }
 
@@ -7709,17 +9138,14 @@ test "data segment init stays bounds-check-free (translator-time verified)" {
     // plenty for the push/push/push/extern GetValue that follows.
     const win_end = @min(on_enable.len, mkr_idx + 400);
     const win = on_enable[mkr_idx..win_end];
-    try std.testing.expect(std.mem.indexOf(u8, win,
-        "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
+    try std.testing.expect(std.mem.indexOf(u8, win, "SystemObjectArray.__GetValue__SystemInt32__SystemObject") != null);
     // Crucially: no LessThanOrEqual check right before the GetValue,
     // meaning the data segment path bypasses the runtime bounds check.
     // Look ~50 chars before the GetValue inside this window.
-    const gv_in_win = std.mem.indexOf(u8, win,
-        "SystemObjectArray.__GetValue__SystemInt32__SystemObject") orelse return error.TestExpectedEqual;
+    const gv_in_win = std.mem.indexOf(u8, win, "SystemObjectArray.__GetValue__SystemInt32__SystemObject") orelse return error.TestExpectedEqual;
     const lead_start = if (gv_in_win > 200) gv_in_win - 200 else 0;
     const lead = win[lead_start..gv_in_win];
-    try std.testing.expect(std.mem.indexOf(u8, lead,
-        "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean") == null);
+    try std.testing.expect(std.mem.indexOf(u8, lead, "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean") == null);
 }
 
 test "__mem_oob_trap__ builds a diagnostic message with page= and max=" {
@@ -7752,10 +9178,8 @@ test "__mem_oob_trap__ builds a diagnostic message with page= and max=" {
     const ts_first = std.mem.indexOf(u8, trap_tail, "SystemInt32.__ToString__SystemString") orelse return error.TestExpectedEqual;
     const ts_second = std.mem.indexOfPos(u8, trap_tail, ts_first + 1, "SystemInt32.__ToString__SystemString") orelse return error.TestExpectedEqual;
     _ = ts_second;
-    try std.testing.expect(std.mem.indexOf(u8, trap_tail,
-        "SystemString.__Concat__SystemString_SystemString_SystemString_SystemString__SystemString") != null);
-    try std.testing.expect(std.mem.indexOf(u8, trap_tail,
-        "UnityEngineDebug.__LogError__SystemObject__SystemVoid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, trap_tail, "SystemString.__Concat__SystemString_SystemString_SystemString_SystemString__SystemString") != null);
+    try std.testing.expect(std.mem.indexOf(u8, trap_tail, "UnityEngineDebug.__LogError__SystemObject__SystemVoid") != null);
 }
 
 // F3.1 — meta `type: object, default: "this"` on a global lowers the
@@ -7887,10 +9311,8 @@ test "f32.store / f32.load round-trip via SystemBitConverter bridge" {
     try translate(std.testing.allocator, mod, null, &buf.writer, .{});
     const out = buf.written();
 
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemBitConverter.__SingleToInt32Bits__SystemSingle__SystemInt32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "SystemBitConverter.__Int32BitsToSingle__SystemInt32__SystemSingle") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemBitConverter.__SingleToInt32Bits__SystemSingle__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemBitConverter.__Int32BitsToSingle__SystemInt32__SystemSingle") != null);
 
     // No `ANNOTATION, __unsupported__` should remain in the code section.
     const code_start = std.mem.indexOf(u8, out, ".code_start") orelse return error.TestExpectedEqual;

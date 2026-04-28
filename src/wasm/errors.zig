@@ -24,6 +24,7 @@ pub const ParseError = error{
 
     // Instructions
     UnknownOpcode,
+    UnknownPrefixedOpcode,
     MalformedReserved,
     UnexpectedEndOpcode,
     UnexpectedElseOpcode,

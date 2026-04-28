@@ -66,5 +66,6 @@ Rule of thumb: if a file appears only because of *your* tool / editor / OS, it's
 - `docs/udon_specs.md` — Udon Assembly syntax, type-name rules, instruction set, EXTERN semantics. The target language reference.
 - `docs/spec_variable_conversion.md` — naming scheme for flattening WASM locals/globals into Udon's flat field namespace.
 - `docs/spec_linear_memory.md` — strategy for representing WASM linear memory as a `SystemObjectArray`.
+- `docs/spec_numeric_instruction_lowering.md` — central reference for WASM numeric instruction lowering (MVP arithmetic/comparison via `lower_numeric.zig`, plus post-MVP sign-extension and saturating truncation handlers).
 - `docs/spec_udonmeta_conversion.md` — schema and resolution rules for the `__udon_meta` JSON blob (`version`, `behaviour`, `fields`, `functions`, `options`).
 - `docs/producer_guide.md` — end-to-end producer-side guide for writing WASM the translator accepts: MVP toolchain pinning (Zig + Rust `wasm32v1-none`), Cargo workspace layout, `no_std` skeleton, host-import declarations and the `udon.self` import-binding trick, mutable-state limitations, `__udon_meta` discovery contract, recursion opt-in, linear-memory sizing, build → translate pipeline, and a pre-PR checklist.

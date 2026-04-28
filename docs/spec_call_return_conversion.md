@@ -158,6 +158,8 @@ Since Udon has no runtime value stack, the WASM value stack is **resolved at com
 
 This way, step §4(a) at the call site is reduced to plain "copy caller's S slots into callee's P slots".
 
+> Numeric WASM opcodes that read/write `S{d}` slots (arithmetic, comparisons, conversions, sign extension, etc.) are catalogued in `docs/spec_numeric_instruction_lowering.md`, which lists each opcode's EXTERN signature(s) and any synthesised multi-EXTERN sequence.
+
 ---
 
 ## 7. Indirect Call (`call_indirect`)
