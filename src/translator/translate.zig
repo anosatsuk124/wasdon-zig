@@ -221,6 +221,30 @@ const Translator = struct {
     /// `SystemBitConverter.__ToDouble__SystemByteArray_SystemInt32__SystemDouble`.
     f64_const_inits: std.ArrayListUnmanaged(Const64Init) = .empty,
 
+    /// Names of `%SystemSingle` constant-pool slots whose source value is
+    /// non-finite (NaN, +Inf, -Inf), partitioned by kind. Udon spec §4.7
+    /// has no parseable literal form that round-trips to any of the three
+    /// — `float.Parse` accepts only number-shaped tokens (so the bare
+    /// `nan` / `inf` / `-inf` identifiers are out), and VRC's `LexNumber`
+    /// rejects `e`/`E` even with a leading `.` (so the `±1.0e39` overflow
+    /// trick is *also* out — it splits as `1.0` + orphan IDENTIFIER
+    /// `e39`, corrupting the next data declaration). All three lists are
+    /// therefore declared with `.null_literal` (default 0.0f) and
+    /// overwritten in `_onEnable` by `emitF32NonFiniteInits`, which
+    /// computes the canonical IEEE values via three division-by-zero
+    /// idioms (`1.0/0.0 = +Inf`, `-1.0/0.0 = -Inf`, `0.0/0.0 = NaN`) and
+    /// copies each canon into its registered slots.
+    f32_pos_inf_inits: std.ArrayListUnmanaged([]const u8) = .empty,
+    f32_neg_inf_inits: std.ArrayListUnmanaged([]const u8) = .empty,
+    f32_nan_inits: std.ArrayListUnmanaged([]const u8) = .empty,
+
+    /// Have we already declared the shared `_f32_zero` / `_f32_one` /
+    /// `_f32_neg_one` source slots and the three `_f32_*_canon` slots?
+    /// `emitF32NonFiniteInits` may be invoked from both the synthesized
+    /// and user-bound `_onEnable` branches in `emitEventEntries`, so the
+    /// declarations need a one-shot guard.
+    f32_non_finite_helpers_declared: bool = false,
+
     /// Per-translation-unit flags controlling the lazy emission of the two
     /// shared trunc_sat helper subroutines (see
     /// `docs/spec_numeric_instruction_lowering.md` §5). Set the first time
@@ -282,6 +306,9 @@ const Translator = struct {
         self.i64_const_inits.deinit(self.gpa);
         self.f64_consts.deinit(self.gpa);
         self.f64_const_inits.deinit(self.gpa);
+        self.f32_pos_inf_inits.deinit(self.gpa);
+        self.f32_neg_inf_inits.deinit(self.gpa);
+        self.f32_nan_inits.deinit(self.gpa);
         if (self.is_recursive.len > 0) self.gpa.free(self.is_recursive);
         if (self.fn_max_stack_depth.len > 0) self.gpa.free(self.fn_max_stack_depth);
         if (self.fn_slot_type_bits.len > 0) {
@@ -306,6 +333,9 @@ const Translator = struct {
             if (m.wasi) |w| {
                 if (w.stdout_extern) |s| cfg.stdout_extern = s;
                 if (w.stderr_extern) |s| cfg.stderr_extern = s;
+                if (w.clock_realtime_extern) |s| cfg.clock_realtime_extern = s;
+                if (w.clock_monotonic_extern) |s| cfg.clock_monotonic_extern = s;
+                if (w.random_extern) |s| cfg.random_extern = s;
             }
         }
         return cfg;
@@ -1149,6 +1179,7 @@ const Translator = struct {
             try self.asm_.exportLabel("_onEnable");
             try self.asm_.label("_onEnable");
             try self.emit64BitConstInits();
+            try self.emitF32NonFiniteInits();
             try self.emitMemoryInit();
             try self.emitCallStackInit();
             try self.asm_.jumpAddr(0xFFFFFFFC);
@@ -1160,6 +1191,7 @@ const Translator = struct {
             try self.asm_.label(ev.udon_label);
             if (std.mem.eql(u8, ev.udon_label, "_onEnable")) {
                 try self.emit64BitConstInits();
+                try self.emitF32NonFiniteInits();
                 try self.emitMemoryInit();
                 try self.emitCallStackInit();
             }
@@ -1834,6 +1866,12 @@ const Translator = struct {
     }
 
     fn emitFunctionReturn(self: *Translator, ctx: *FuncCtx) Error!void {
+        // Dead-code fall-through: if the body ended via `unreachable` or a
+        // branch out of the function, the value stack may not actually
+        // hold `results.len` entries. The fall-through result-copy is dead
+        // code in that case (the function trapped or returned from
+        // elsewhere) — skip it instead of underflowing the depth counter.
+        if (ctx.depth < ctx.results.len) return;
         for (ctx.results, 0..) |vt, i| {
             const src_depth = ctx.depth - @as(u32, @intCast(ctx.results.len)) + @as(u32, @intCast(i));
             const src = try names.stackSlot(self.aa(), ctx.fn_name, src_depth, vt);
@@ -2967,7 +3005,31 @@ const Translator = struct {
         const k = self.call_site_counter; // reuse counter for uniqueness
         self.call_site_counter += 1;
         const const_name = try std.fmt.allocPrint(self.aa(), "__K_{d}", .{k});
-        try self.asm_.addData(.{ .name = const_name, .ty = ty, .init = lit });
+        // `f32.const ±Inf|NaN` has no parseable literal form (see §4.7
+        // and the `f32_*_inits` field comment): the slot is declared as
+        // `null` (default 0.0f) and overwritten at `_onEnable` time.
+        // VRC's `LexNumber` rejects every literal shape — the bare
+        // `inf`/`nan` IDENTIFIER tokens go to the IDENTIFIER path, and
+        // the `±1.0e39` overflow trick splits as `1.0` plus orphan
+        // IDENTIFIER `e39` — so all three non-finite values route to
+        // runtime synthesis.
+        const init_lit: Literal = if (lit == .single) blk: {
+            const v = lit.single;
+            if (std.math.isNan(v)) {
+                try self.f32_nan_inits.append(self.gpa, const_name);
+                break :blk .null_literal;
+            }
+            if (std.math.isInf(v)) {
+                if (v > 0) {
+                    try self.f32_pos_inf_inits.append(self.gpa, const_name);
+                } else {
+                    try self.f32_neg_inf_inits.append(self.gpa, const_name);
+                }
+                break :blk .null_literal;
+            }
+            break :blk lit;
+        } else lit;
+        try self.asm_.addData(.{ .name = const_name, .ty = ty, .init = init_lit });
         try ctx.push(vt);
         const dst = try ctx.slotAt(self.aa(), ctx.depth - 1);
         try self.asm_.push(const_name);
@@ -3132,6 +3194,86 @@ const Translator = struct {
             try self.asm_.push("__c_i32_0");
             try self.asm_.push(entry.slot);
             try self.asm_.extern_("SystemBitConverter.__ToDouble__SystemByteArray_SystemInt32__SystemDouble");
+        }
+    }
+
+    /// Synthesize the three IEEE non-finite `SystemSingle` values
+    /// (+Inf, -Inf, NaN) into canonical slots in `_onEnable`, then COPY
+    /// each canon into every constant-pool slot registered by
+    /// `emitConst` for an `f32.const` of that kind. See the
+    /// `f32_*_inits` field comment for why this runtime pass is
+    /// necessary: Udon spec §4.7 has *no* parseable literal form that
+    /// round-trips to any of the three (the bare `inf`/`nan` tokens go
+    /// to the IDENTIFIER path, and any `e`/`E` form like `1.0e39`
+    /// splits as `1.0` plus orphan IDENTIFIER `e39`).
+    ///
+    /// Each canon is computed once via division by zero:
+    ///   `1.0 / 0.0 = +Inf`, `-1.0 / 0.0 = -Inf`, `0.0 / 0.0 = NaN`.
+    /// Helper source slots `_f32_zero` (`0.0`), `_f32_one` (`1.0`) and
+    /// `_f32_neg_one` (`-1.0`) carry the operands; the three canon slots
+    /// (`_f32_pos_inf_canon`, `_f32_neg_inf_canon`, `_f32_nan_canon`)
+    /// start as `null` (default 0.0f) and receive the division result.
+    fn emitF32NonFiniteInits(self: *Translator) Error!void {
+        const has_pos_inf = self.f32_pos_inf_inits.items.len > 0;
+        const has_neg_inf = self.f32_neg_inf_inits.items.len > 0;
+        const has_nan = self.f32_nan_inits.items.len > 0;
+        if (!has_pos_inf and !has_neg_inf and !has_nan) return;
+        try self.asm_.comment("SystemSingle non-finite slot init (Udon spec §4.7: ±Inf and NaN have no parseable literal form)");
+        const zero_slot = "_f32_zero";
+        const one_slot = "_f32_one";
+        const neg_one_slot = "_f32_neg_one";
+        const pos_inf_canon = "_f32_pos_inf_canon";
+        const neg_inf_canon = "_f32_neg_inf_canon";
+        const nan_canon = "_f32_nan_canon";
+        const div_extern = "SystemSingle.__op_Division__SystemSingle_SystemSingle__SystemSingle";
+        // Helper slots — declared lazily so modules without any f32
+        // non-finite constants pay no startup cost. Guarded so the
+        // user-bound `_onEnable` path (which calls this function again)
+        // does not re-declare them.
+        if (!self.f32_non_finite_helpers_declared) {
+            try self.asm_.addData(.{ .name = zero_slot, .ty = tn.single, .init = .{ .single = 0.0 } });
+            try self.asm_.addData(.{ .name = one_slot, .ty = tn.single, .init = .{ .single = 1.0 } });
+            try self.asm_.addData(.{ .name = neg_one_slot, .ty = tn.single, .init = .{ .single = -1.0 } });
+            try self.asm_.addData(.{ .name = pos_inf_canon, .ty = tn.single, .init = .null_literal });
+            try self.asm_.addData(.{ .name = neg_inf_canon, .ty = tn.single, .init = .null_literal });
+            try self.asm_.addData(.{ .name = nan_canon, .ty = tn.single, .init = .null_literal });
+            self.f32_non_finite_helpers_declared = true;
+        }
+        if (has_pos_inf) {
+            // pos_inf_canon := 1.0 / 0.0
+            try self.asm_.push(one_slot);
+            try self.asm_.push(zero_slot);
+            try self.asm_.push(pos_inf_canon);
+            try self.asm_.extern_(div_extern);
+            for (self.f32_pos_inf_inits.items) |slot| {
+                try self.asm_.push(pos_inf_canon);
+                try self.asm_.push(slot);
+                try self.asm_.copy();
+            }
+        }
+        if (has_neg_inf) {
+            // neg_inf_canon := -1.0 / 0.0
+            try self.asm_.push(neg_one_slot);
+            try self.asm_.push(zero_slot);
+            try self.asm_.push(neg_inf_canon);
+            try self.asm_.extern_(div_extern);
+            for (self.f32_neg_inf_inits.items) |slot| {
+                try self.asm_.push(neg_inf_canon);
+                try self.asm_.push(slot);
+                try self.asm_.copy();
+            }
+        }
+        if (has_nan) {
+            // nan_canon := 0.0 / 0.0
+            try self.asm_.push(zero_slot);
+            try self.asm_.push(zero_slot);
+            try self.asm_.push(nan_canon);
+            try self.asm_.extern_(div_extern);
+            for (self.f32_nan_inits.items) |slot| {
+                try self.asm_.push(nan_canon);
+                try self.asm_.push(slot);
+                try self.asm_.copy();
+            }
         }
     }
 
@@ -4534,6 +4676,32 @@ const Translator = struct {
         try self.asm_.extern_("SystemUInt32Array.__Set__SystemInt32_SystemUInt32__SystemVoid");
     }
 
+    /// Aligned i64 store at `*addr_slot`, sourced from `val_i64_slot` (a
+    /// SystemInt64 scratch). Used by the WASI `clock_time_get` lowering to
+    /// materialise its `u64` ns out-pointer; the encoding is the WASM
+    /// little-endian i64 store (low 32 bits at offset 0, high 32 bits at
+    /// offset 4). The implementation reuses the i32-store helper twice and
+    /// does not handle page-straddle (the within-chunk case is sufficient
+    /// for callers' stack-allocated time-out buffers).
+    pub fn emitWasiStoreI64(
+        self: *Translator,
+        addr_slot: []const u8,
+        val_i64_slot: []const u8,
+    ) Error!void {
+        // _mem_hi_i64 := val >> 32 (arithmetic; bit pattern for the high
+        // word is what we want — same trick `emitMemStoreI64` uses).
+        try self.asm_.push(val_i64_slot);
+        try self.asm_.push("__c_i32_32");
+        try self.asm_.push("_mem_hi_i64");
+        try self.asm_.extern_("SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64");
+        // _mem_st_lo_i32 := i32.wrap_i64(val) ; _mem_st_hi_i32 := i32.wrap_i64(val >> 32)
+        try self.emitI64TruncI32(val_i64_slot, "_mem_st_lo_i32");
+        try self.emitI64TruncI32("_mem_hi_i64", "_mem_st_hi_i32");
+        // Two i32 stores, low at offset 0, high at offset 4.
+        try self.emitWasiStoreI32(addr_slot, 0, "_mem_st_lo_i32");
+        try self.emitWasiStoreI32(addr_slot, 4, "_mem_st_hi_i32");
+    }
+
     /// Aligned i32 load at `*addr_slot + offset`, result in `out_slot`.
     pub fn emitWasiLoadI32(
         self: *Translator,
@@ -4723,7 +4891,7 @@ const Translator = struct {
     /// `val_slot` (an Int32 value — the masking to the low 8 bits is done
     /// inside this helper). Performs the read-modify-write into the
     /// corresponding chunk word; does not touch any FuncCtx state.
-    fn emitMemStoreByteAt(
+    pub fn emitMemStoreByteAt(
         self: *Translator,
         addr_slot: []const u8,
         val_slot: []const u8,
@@ -5498,6 +5666,8 @@ const HostBridge = struct {
         .loadI32 = loadI32Fn,
         .loadI32Offset = loadI32OffsetFn,
         .marshalSystemString = marshalSystemStringFn,
+        .storeI64 = storeI64Fn,
+        .storeByteToMemory = storeByteToMemoryFn,
     };
 
     fn self_(ctx: *anyopaque) *HostBridge {
@@ -5602,6 +5772,20 @@ const HostBridge = struct {
     }
     fn marshalSystemStringFn(ctx: *anyopaque, ptr_slot: []const u8, len_slot: []const u8) lower_import.Error!void {
         try lower_import.emitStringMarshalPub(self_(ctx).host(), ptr_slot, len_slot);
+    }
+    fn storeI64Fn(ctx: *anyopaque, addr_slot: []const u8, val_i64_slot: []const u8) lower_import.Error!void {
+        const hb = self_(ctx);
+        hb.t.emitWasiStoreI64(addr_slot, val_i64_slot) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.OutOfMemory,
+        };
+    }
+    fn storeByteToMemoryFn(ctx: *anyopaque, addr_slot: []const u8, val_i32_slot: []const u8) lower_import.Error!void {
+        const hb = self_(ctx);
+        hb.t.emitMemStoreByteAt(addr_slot, val_i32_slot, hb.ctx.fn_name, "wasi.store_byte") catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.OutOfMemory,
+        };
     }
 };
 

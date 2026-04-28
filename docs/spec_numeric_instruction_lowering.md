@@ -3,6 +3,8 @@
 ## §1 Overview
 WASM numeric instructions lower to Udon EXTERN calls on the corresponding .NET primitive types (`SystemInt32`, `SystemInt64`, `SystemSingle`, `SystemDouble`, …). Most ops route through the lookup table in `src/translator/lower_numeric.zig`. Some require synthesised multi-EXTERN sequences.
 
+**Constant emission shape.** When `i32.const` / `f32.const` materialises into a data-section literal (`Literal{ .int32 | .uint32 | .single }` in `src/udon/asm.zig`), the textual form must work around the Udon Assembler's `LexNumber` quirks. See `docs/udon_specs.md` §4.7 for the canonical rules — specifically: `Int32.MinValue` emits as `0x80000000`, `SystemUInt32` values above `Int32.MaxValue` emit as `0x...u`, and `SystemSingle` values must always carry a fractional point or exponent so the lexer takes the float-parse path. `Literal.write` enforces all three.
+
 ## §2 MVP arithmetic via `lower_numeric.zig`
 (Reference list. To be expanded.)
 

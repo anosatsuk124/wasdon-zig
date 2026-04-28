@@ -125,6 +125,17 @@ pub const Host = struct {
         /// `marshal_str_tmp_name`. Implemented as a thin reuse of the shared
         /// helper so WASI's iovec walker doesn't replicate its 30-line body.
         marshalSystemString: *const fn (ctx: *anyopaque, ptr_slot: []const u8, len_slot: []const u8) Error!void,
+
+        /// Emit code that stores an 8-byte SystemInt64 value to linear memory
+        /// at `*addr_slot`. Used by `clock_time_get` to write the WASI
+        /// `*time_out_ptr` (`u64` ns). Encoding is the WASM little-endian i64
+        /// store: low 32 bits at offset 0, high 32 bits at offset 4.
+        storeI64: *const fn (ctx: *anyopaque, addr_slot: []const u8, val_i64_slot: []const u8) Error!void,
+
+        /// Emit code that stores the low 8 bits of `val_i32_slot` to linear
+        /// memory at `*addr_slot`. Used by `random_get` to fill bytes one at
+        /// a time from an i32-typed RNG result.
+        storeByteToMemory: *const fn (ctx: *anyopaque, addr_slot: []const u8, val_i32_slot: []const u8) Error!void,
     };
 
     pub fn allocator(self: Host) std.mem.Allocator {
@@ -192,6 +203,12 @@ pub const Host = struct {
     }
     pub fn marshalSystemString(self: Host, ptr_slot: []const u8, len_slot: []const u8) Error!void {
         return self.vtable.marshalSystemString(self.ctx, ptr_slot, len_slot);
+    }
+    pub fn storeI64(self: Host, addr_slot: []const u8, val_i64_slot: []const u8) Error!void {
+        return self.vtable.storeI64(self.ctx, addr_slot, val_i64_slot);
+    }
+    pub fn storeByteToMemory(self: Host, addr_slot: []const u8, val_i32_slot: []const u8) Error!void {
+        return self.vtable.storeByteToMemory(self.ctx, addr_slot, val_i32_slot);
     }
 };
 
@@ -605,6 +622,8 @@ const MockHost = struct {
         .loadI32 = vt_load_i32,
         .loadI32Offset = vt_load_i32_off,
         .marshalSystemString = vt_marshal_string,
+        .storeI64 = vt_store_i64,
+        .storeByteToMemory = vt_store_byte,
     };
 
     fn self_(ctx: *anyopaque) *MockHost {
@@ -717,6 +736,14 @@ const MockHost = struct {
     fn vt_marshal_string(ctx: *anyopaque, ptr: []const u8, len: []const u8) Error!void {
         const s = self_(ctx);
         try s.buf.print(s.ally, "MARSHAL_STR ({s},{s})\n", .{ ptr, len });
+    }
+    fn vt_store_i64(ctx: *anyopaque, addr: []const u8, val: []const u8) Error!void {
+        const s = self_(ctx);
+        try s.buf.print(s.ally, "STORE_I64 {s} <- {s}\n", .{ addr, val });
+    }
+    fn vt_store_byte(ctx: *anyopaque, addr: []const u8, val: []const u8) Error!void {
+        const s = self_(ctx);
+        try s.buf.print(s.ally, "STORE_BYTE {s} <- {s}\n", .{ addr, val });
     }
 };
 

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "behaviour": { "name": "RhaiBench" },
+  "functions": {
+    "start": {
+      "source": { "kind": "export", "name": "_start" },
+      "label": "_start",
+      "export": true,
+      "event": "Start"
+    }
+  },
+  "options": {
+    "strict": false,
+    "recursion": "stack",
+    "memory": { "initialPages": 8, "maxPages": 64, "udonName": "_memory" }
+  }
+}

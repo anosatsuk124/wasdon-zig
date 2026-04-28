@@ -135,11 +135,19 @@ fn resolveMetaJson(
 }
 
 fn defaultMetaPath(arena: std.mem.Allocator, input_path: []const u8) ![]const u8 {
+    // Use forward-slash concatenation rather than `std.fs.path.join` so the
+    // emitted sidecar path is platform-stable: on Windows, `path.join`
+    // would produce `dir\stem.udon_meta.json`, but Windows file I/O
+    // accepts forward slashes too, and downstream code (logging, the
+    // tests below) prefers the POSIX-style spelling. `path.dirname` on
+    // Windows already accepts both `/` and `\` as separators, so the
+    // input may use either.
     const dir = std.fs.path.dirname(input_path) orelse "";
     const stem = std.fs.path.stem(input_path);
-    const filename = try std.fmt.allocPrint(arena, "{s}.udon_meta.json", .{stem});
-    if (dir.len == 0) return filename;
-    return try std.fs.path.join(arena, &.{ dir, filename });
+    if (dir.len == 0) {
+        return try std.fmt.allocPrint(arena, "{s}.udon_meta.json", .{stem});
+    }
+    return try std.fmt.allocPrint(arena, "{s}/{s}.udon_meta.json", .{ dir, stem });
 }
 
 test "main smoke" {

@@ -1,0 +1,3 @@
+# Local build artifacts and vendored mruby checkout.
+build/
+vendor/

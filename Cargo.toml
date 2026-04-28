@@ -4,6 +4,7 @@ members = [
     "examples/udon-orbit-rs",
     "examples/wasm-bench-rs",
     "examples/wasm-bench-alloc-rs",
+    "examples/rhai-bench",
 ]
 
 [workspace.package]

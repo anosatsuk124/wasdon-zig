@@ -1,0 +1,12 @@
+# Per-package override: this crate must build for wasm32-wasip1 (WASI),
+# not the workspace-wide wasm32v1-none default. Cargo picks the
+# closest .cargo/config.toml, so a `cargo build` invoked from this
+# directory uses this file. Stripping wasm post-MVP features that the
+# translator does not yet handle (multivalue, reference-types, simd128)
+# is done via [build] rustflags below.
+
+[build]
+target = "wasm32-wasip1"
+rustflags = [
+    "-C", "target-feature=-multivalue,-reference-types,-simd128",
+]

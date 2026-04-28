@@ -51,12 +51,21 @@ pub const default_stdout_extern =
     "UnityEngineDebug.__Log__SystemObject__SystemVoid";
 pub const default_stderr_extern =
     "UnityEngineDebug.__LogWarning__SystemObject__SystemVoid";
+pub const default_clock_realtime_extern =
+    "SystemDateTime.__get_UtcNow__SystemDateTime";
+pub const default_clock_monotonic_extern =
+    "UnityEngineTime.__get_realtimeSinceStartupAsDouble__SystemDouble";
+pub const default_random_extern =
+    "UnityEngineRandom.__Range__SystemInt32_SystemInt32__SystemInt32";
 
 /// Configuration for one WASI lowering call. The translator fills this from
 /// `__udon_meta.wasi` plus its own defaults; the unit tests build it inline.
 pub const Config = struct {
     stdout_extern: []const u8 = default_stdout_extern,
     stderr_extern: []const u8 = default_stderr_extern,
+    clock_realtime_extern: []const u8 = default_clock_realtime_extern,
+    clock_monotonic_extern: []const u8 = default_clock_monotonic_extern,
+    random_extern: []const u8 = default_random_extern,
     /// Strict mode — when true, an unknown `wasi_snapshot_preview1.<fn>`
     /// import is a translate-time error rather than a `nosys` stub.
     strict: bool = false,
@@ -87,6 +96,8 @@ const FuncSpec = struct {
         fd_close,
         fd_seek,
         fd_fdstat_get,
+        clock_time_get,
+        random_get,
         nosys,
     };
 };
@@ -96,6 +107,7 @@ const i32_2: [2]ValType = .{ .i32, .i32 };
 const i32_3: [3]ValType = .{ .i32, .i32, .i32 };
 const i32_4: [4]ValType = .{ .i32, .i32, .i32, .i32 };
 const i32_i64_i32_i32: [4]ValType = .{ .i32, .i64, .i32, .i32 };
+const i32_i64_i32: [3]ValType = .{ .i32, .i64, .i32 };
 const empty_vt: [0]ValType = .{};
 
 /// Static MVP table.
@@ -110,6 +122,8 @@ pub const mvp_specs = [_]FuncSpec{
     .{ .name = "fd_close", .params = &i32_1, .results = &i32_1, .kind = .fd_close },
     .{ .name = "fd_seek", .params = &i32_i64_i32_i32, .results = &i32_1, .kind = .fd_seek },
     .{ .name = "fd_fdstat_get", .params = &i32_2, .results = &i32_1, .kind = .fd_fdstat_get },
+    .{ .name = "clock_time_get", .params = &i32_i64_i32, .results = &i32_1, .kind = .clock_time_get },
+    .{ .name = "random_get", .params = &i32_2, .results = &i32_1, .kind = .random_get },
 };
 
 /// Recognised but stubbed deferred functions (`docs/spec_wasi_preview_1.md`
@@ -153,8 +167,6 @@ pub const deferred_names = [_][]const u8{
     "sock_send",
     "sock_shutdown",
     "clock_res_get",
-    "clock_time_get",
-    "random_get",
 };
 
 pub const errno_const_success = "__c_errno_success__";
@@ -272,6 +284,8 @@ fn emitMvp(
             .out_param_indices = &[_]u32{3}, // newoffset_ptr
         }),
         .fd_fdstat_get => try emitFdFdstatGet(host, imp_ty),
+        .clock_time_get => try emitClockTimeGet(host, imp_ty, cfg),
+        .random_get => try emitRandomGet(host, imp_ty, cfg),
         .nosys => try emitNosysStub(host, imp, imp_ty),
     }
 }
@@ -471,6 +485,290 @@ fn emitFdFdstatGet(host: lower_import.Host, imp_ty: wasm.types.FuncType) Error!v
     try host.label(pick_end);
 }
 
+// ---- clock_time_get ----
+
+/// Per `docs/spec_wasi_preview_1.md` §4.7: branch on `id` (clockid_t):
+///   0 (realtime)   → call `cfg.clock_realtime_extern` (default UtcNow), subtract
+///                    the unix epoch, multiply ticks by 100 → ns, store as
+///                    little-endian u64 at `*time_out_ptr`. `errno.success`.
+///   1 (monotonic)  → call `cfg.clock_monotonic_extern` (default
+///                    `realtimeSinceStartupAsDouble`), seconds → ns via
+///                    `* 1_000_000_000`, cast to Int64, store. `errno.success`.
+///   2 / 3          → return `errno.inval` without touching memory.
+///
+/// `precision` (param 1, i64) is intentionally ignored; WASI permits any
+/// precision the implementation can deliver.
+///
+/// All three branches share an end label; the errno selection mirrors the
+/// `fd_fdstat_get` pattern in §4.9 — re-test the clockid once and pick the
+/// errno literal accordingly.
+fn emitClockTimeGet(
+    host: lower_import.Host,
+    imp_ty: wasm.types.FuncType,
+    cfg: Config,
+) Error!void {
+    const alloc = host.allocator();
+    const fn_name = host.callerFnName();
+    std.debug.assert(imp_ty.params.len == 3);
+    const base_depth = host.callerDepth() - 3;
+
+    const id_slot = try names.stackSlot(alloc, fn_name, base_depth, .i32);
+    const time_out_ptr = try names.stackSlot(alloc, fn_name, base_depth + 2, .i32);
+
+    const tag = host.uniqueId();
+    const realtime_label = try std.fmt.allocPrint(alloc, "__wasi_clk_realtime_{x}__", .{tag});
+    const try_monotonic_label = try std.fmt.allocPrint(alloc, "__wasi_clk_try_mono_{x}__", .{tag});
+    const monotonic_label = try std.fmt.allocPrint(alloc, "__wasi_clk_monotonic_{x}__", .{tag});
+    const inval_label = try std.fmt.allocPrint(alloc, "__wasi_clk_inval_{x}__", .{tag});
+    const end_label = try std.fmt.allocPrint(alloc, "__wasi_clk_end_{x}__", .{tag});
+
+    // Shared scratch: a SystemInt64 ns slot fed into the i64 store helper.
+    try host.declareScratch("_wasi_clk_ns", tn.int64, .null_literal);
+    try host.declareScratch("_wasi_clk_cond", tn.boolean, .null_literal);
+
+    // Realtime-branch scratch.
+    //
+    // Udon's data section forbids typed literals for SystemInt64 /
+    // SystemDouble (`docs/udon_specs.md` §4.7) so the i64/double constants
+    // we need (1970/1/1 epoch, ×100 tick-to-ns multiplier, and 1000.0 used
+    // to scale seconds → ns on the monotonic path) are built at runtime
+    // from the i32 literals already in the data section. All three runtime
+    // constructions are idempotent — they overwrite the slot with the
+    // same value every call — so the per-call cost is a handful of
+    // externs, irrelevant compared to the actual clock read.
+    try host.declareScratch("_wasi_clk_dt_now", tn.date_time, .null_literal);
+    try host.declareScratch("_wasi_clk_dt_epoch", tn.date_time, .null_literal);
+    try host.declareScratch("_wasi_clk_ts", tn.time_span, .null_literal);
+    try host.declareScratch("_wasi_clk_ticks", tn.int64, .null_literal);
+    try host.declareScratch("_wasi_clk_100", tn.int64, .null_literal);
+    try host.declareScratch("__c_i32_100", tn.int32, .{ .int32 = 100 });
+    try host.declareScratch("__c_i32_1970", tn.int32, .{ .int32 = 1970 });
+    try host.declareScratch("__c_i32_1000", tn.int32, .{ .int32 = 1000 });
+
+    // Monotonic-branch scratch:
+    //   _wasi_clk_seconds   : SystemDouble — realtime since startup
+    //   _wasi_clk_1000_dbl  : SystemDouble — built from __c_i32_1000 once
+    //   _wasi_clk_ns_dbl    : SystemDouble — seconds * 1e9 (3 multiplies by 1000)
+    try host.declareScratch("_wasi_clk_seconds", tn.double, .null_literal);
+    try host.declareScratch("_wasi_clk_1000_dbl", tn.double, .null_literal);
+    try host.declareScratch("_wasi_clk_ns_dbl", tn.double, .null_literal);
+
+    // ---- one-time runtime construction of the typed constants ----
+    // _wasi_clk_100 := (Int64)__c_i32_100
+    try host.push("__c_i32_100");
+    try host.push("_wasi_clk_100");
+    try host.externCall("SystemConvert.__ToInt64__SystemInt32__SystemInt64");
+    // _wasi_clk_dt_epoch := new SystemDateTime(1970, 1, 1)
+    try host.push("__c_i32_1970");
+    try host.push("__c_i32_1");
+    try host.push("__c_i32_1");
+    try host.push("_wasi_clk_dt_epoch");
+    try host.externCall("SystemDateTime.__ctor__SystemInt32_SystemInt32_SystemInt32__SystemDateTime");
+    // _wasi_clk_1000_dbl := (Double)__c_i32_1000
+    try host.push("__c_i32_1000");
+    try host.push("_wasi_clk_1000_dbl");
+    try host.externCall("SystemConvert.__ToDouble__SystemInt32__SystemDouble");
+
+    // ---- branch on clockid ----
+    // if (id == 0) goto realtime
+    try host.push(id_slot);
+    try host.push("__c_i32_0");
+    try host.push("_wasi_clk_cond");
+    try host.externCall("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean");
+    try host.push("_wasi_clk_cond");
+    try host.jumpIfFalse(try_monotonic_label);
+    try host.jump(realtime_label);
+
+    try host.label(try_monotonic_label);
+    // if (id == 1) goto monotonic
+    try host.push(id_slot);
+    try host.push("__c_i32_1");
+    try host.push("_wasi_clk_cond");
+    try host.externCall("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean");
+    try host.push("_wasi_clk_cond");
+    try host.jumpIfFalse(inval_label);
+    try host.jump(monotonic_label);
+
+    // ---- realtime path ----
+    try host.label(realtime_label);
+    // _wasi_clk_dt_now := <realtime extern>()
+    try host.push("_wasi_clk_dt_now");
+    try host.externCall(cfg.clock_realtime_extern);
+    // _wasi_clk_ts := _wasi_clk_dt_now - _wasi_clk_dt_epoch
+    try host.push("_wasi_clk_dt_now");
+    try host.push("_wasi_clk_dt_epoch");
+    try host.push("_wasi_clk_ts");
+    try host.externCall("SystemDateTime.__op_Subtraction__SystemDateTime_SystemDateTime__SystemTimeSpan");
+    // _wasi_clk_ticks := _wasi_clk_ts.Ticks
+    try host.push("_wasi_clk_ts");
+    try host.push("_wasi_clk_ticks");
+    try host.externCall("SystemTimeSpan.__get_Ticks__SystemInt64");
+    // _wasi_clk_ns := _wasi_clk_ticks * 100  (1 tick = 100 ns)
+    try host.push("_wasi_clk_ticks");
+    try host.push("_wasi_clk_100");
+    try host.push("_wasi_clk_ns");
+    try host.externCall("SystemInt64.__op_Multiplication__SystemInt64_SystemInt64__SystemInt64");
+    try host.storeI64(time_out_ptr, "_wasi_clk_ns");
+    try host.jump(end_label);
+
+    // ---- monotonic path ----
+    try host.label(monotonic_label);
+    // _wasi_clk_seconds := <monotonic extern>()
+    try host.push("_wasi_clk_seconds");
+    try host.externCall(cfg.clock_monotonic_extern);
+    // _wasi_clk_ns_dbl := seconds * 1e9, computed as three ×1000 multiplies
+    // because Udon Assembly cannot declare a SystemDouble literal — see the
+    // top-of-body comment for why all double constants are runtime-built.
+    try host.push("_wasi_clk_seconds");
+    try host.push("_wasi_clk_1000_dbl");
+    try host.push("_wasi_clk_ns_dbl");
+    try host.externCall("SystemDouble.__op_Multiplication__SystemDouble_SystemDouble__SystemDouble");
+    try host.push("_wasi_clk_ns_dbl");
+    try host.push("_wasi_clk_1000_dbl");
+    try host.push("_wasi_clk_ns_dbl");
+    try host.externCall("SystemDouble.__op_Multiplication__SystemDouble_SystemDouble__SystemDouble");
+    try host.push("_wasi_clk_ns_dbl");
+    try host.push("_wasi_clk_1000_dbl");
+    try host.push("_wasi_clk_ns_dbl");
+    try host.externCall("SystemDouble.__op_Multiplication__SystemDouble_SystemDouble__SystemDouble");
+    // _wasi_clk_ns := (Int64)_wasi_clk_ns_dbl
+    try host.push("_wasi_clk_ns_dbl");
+    try host.push("_wasi_clk_ns");
+    try host.externCall("SystemConvert.__ToInt64__SystemDouble__SystemInt64");
+    try host.storeI64(time_out_ptr, "_wasi_clk_ns");
+    try host.jump(end_label);
+
+    // ---- inval path ---- (no memory write)
+    try host.label(inval_label);
+    // fall through
+
+    try host.label(end_label);
+    // Pop the 3 args.
+    host.consumeOne();
+    host.consumeOne();
+    host.consumeOne();
+    try host.produceOne(.i32);
+    const dst = try names.stackSlot(alloc, fn_name, host.callerDepth() - 1, .i32);
+
+    // Errno selection: success if id ∈ {0,1}, else inval. We re-test the
+    // clockid once to keep the body straight-line on each path.
+    const pick_inval = try std.fmt.allocPrint(alloc, "__wasi_clk_pick_inval_{x}__", .{tag});
+    const pick_check_mono = try std.fmt.allocPrint(alloc, "__wasi_clk_pick_check_mono_{x}__", .{tag});
+    const pick_end = try std.fmt.allocPrint(alloc, "__wasi_clk_pick_end_{x}__", .{tag});
+    try host.push(id_slot);
+    try host.push("__c_i32_0");
+    try host.push("_wasi_clk_cond");
+    try host.externCall("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean");
+    try host.push("_wasi_clk_cond");
+    try host.jumpIfFalse(pick_check_mono);
+    try host.push(errno_const_success);
+    try host.push(dst);
+    try host.copy();
+    try host.jump(pick_end);
+
+    try host.label(pick_check_mono);
+    try host.push(id_slot);
+    try host.push("__c_i32_1");
+    try host.push("_wasi_clk_cond");
+    try host.externCall("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean");
+    try host.push("_wasi_clk_cond");
+    try host.jumpIfFalse(pick_inval);
+    try host.push(errno_const_success);
+    try host.push(dst);
+    try host.copy();
+    try host.jump(pick_end);
+
+    try host.label(pick_inval);
+    try host.push(errno_const_inval);
+    try host.push(dst);
+    try host.copy();
+    try host.label(pick_end);
+}
+
+// ---- random_get ----
+
+/// Per `docs/spec_wasi_preview_1.md` §4.8: for `i in 0..buf_len`, write a
+/// random byte at `buf + i` via `cfg.random_extern`. The default extern is
+/// `UnityEngineRandom.Range(int, int) -> int` with the half-open range
+/// `[0, 256)` — we mask to `0xFF` defensively in case an override returns
+/// a wider value. `buf_len == 0` is a no-op falling straight through to the
+/// success epilogue.
+fn emitRandomGet(
+    host: lower_import.Host,
+    imp_ty: wasm.types.FuncType,
+    cfg: Config,
+) Error!void {
+    const alloc = host.allocator();
+    const fn_name = host.callerFnName();
+    std.debug.assert(imp_ty.params.len == 2);
+    const base_depth = host.callerDepth() - 2;
+
+    const buf_slot = try names.stackSlot(alloc, fn_name, base_depth, .i32);
+    const buf_len_slot = try names.stackSlot(alloc, fn_name, base_depth + 1, .i32);
+
+    const tag = host.uniqueId();
+    const head = try std.fmt.allocPrint(alloc, "__wasi_rg_loop_{x}__", .{tag});
+    const exit = try std.fmt.allocPrint(alloc, "__wasi_rg_loop_end_{x}__", .{tag});
+
+    try host.declareScratch("_wasi_rg_i", tn.int32, .{ .int32 = 0 });
+    try host.declareScratch("_wasi_rg_addr", tn.int32, .{ .int32 = 0 });
+    try host.declareScratch("_wasi_rg_byte", tn.int32, .{ .int32 = 0 });
+    try host.declareScratch("_wasi_rg_byte_masked", tn.int32, .{ .int32 = 0 });
+    try host.declareScratch("_wasi_rg_cond", tn.boolean, .null_literal);
+    try host.declareScratch("__c_i32_256", tn.int32, .{ .int32 = 256 });
+    try host.declareScratch("__c_i32_0xFF_signed", tn.int32, .{ .int32 = 0xFF });
+
+    // i := 0
+    try host.push("__c_i32_0");
+    try host.push("_wasi_rg_i");
+    try host.copy();
+
+    try host.label(head);
+    // cond := i < buf_len
+    try host.push("_wasi_rg_i");
+    try host.push(buf_len_slot);
+    try host.push("_wasi_rg_cond");
+    try host.externCall("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
+    try host.push("_wasi_rg_cond");
+    try host.jumpIfFalse(exit);
+
+    // _wasi_rg_addr := buf + i
+    try host.push(buf_slot);
+    try host.push("_wasi_rg_i");
+    try host.push("_wasi_rg_addr");
+    try host.externCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+
+    // _wasi_rg_byte := <random_extern>(0, 256)
+    try host.push("__c_i32_0");
+    try host.push("__c_i32_256");
+    try host.push("_wasi_rg_byte");
+    try host.externCall(cfg.random_extern);
+    // Defensive mask in case the override returns a wider int.
+    try host.push("_wasi_rg_byte");
+    try host.push("__c_i32_0xFF_signed");
+    try host.push("_wasi_rg_byte_masked");
+    try host.externCall("SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32");
+    // mem[_wasi_rg_addr] := _wasi_rg_byte_masked (low 8 bits)
+    try host.storeByteToMemory("_wasi_rg_addr", "_wasi_rg_byte_masked");
+
+    // i += 1
+    try host.push("_wasi_rg_i");
+    try host.push("__c_i32_1");
+    try host.push("_wasi_rg_i");
+    try host.externCall("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+    try host.jump(head);
+
+    try host.label(exit);
+    // Pop the 2 args, push errno.success.
+    host.consumeOne();
+    host.consumeOne();
+    try host.produceOne(.i32);
+    const dst = try names.stackSlot(alloc, fn_name, host.callerDepth() - 1, .i32);
+    try host.push(errno_const_success);
+    try host.push(dst);
+    try host.copy();
+}
+
 // ---- fd_write ----
 
 fn emitFdWrite(
@@ -525,11 +823,11 @@ fn emitFdWrite(
     try host.externCall("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean");
     try host.push("_wasi_fdw_cond");
     try host.jumpIfFalse(badf_label);
-    try emitFdWriteIovecLoop(host, iovs_ptr, iovs_len, cfg.stderr_extern, tag);
+    try emitFdWriteIovecLoop(host, iovs_ptr, iovs_len, cfg.stderr_extern);
     try host.jump(ok_label);
 
     try host.label(stdout_label);
-    try emitFdWriteIovecLoop(host, iovs_ptr, iovs_len, cfg.stdout_extern, tag);
+    try emitFdWriteIovecLoop(host, iovs_ptr, iovs_len, cfg.stdout_extern);
     try host.jump(ok_label);
 
     try host.label(badf_label);
@@ -586,9 +884,12 @@ fn emitFdWriteIovecLoop(
     iovs_ptr: []const u8,
     iovs_len: []const u8,
     sink_extern: []const u8,
-    tag: u32,
 ) Error!void {
     const alloc = host.allocator();
+    // Each invocation must mint its own label suffix: emitFdWrite calls this
+    // helper once per fd branch (stdout, stderr) and the assembler rejects
+    // duplicate labels.
+    const tag = host.uniqueId();
     const head = try std.fmt.allocPrint(alloc, "__wasi_fdw_loop_{x}__", .{tag});
     const exit = try std.fmt.allocPrint(alloc, "__wasi_fdw_loop_end_{x}__", .{tag});
     try host.declareScratch("__c_wasi_8", tn.int32, .{ .int32 = 8 });
@@ -708,6 +1009,8 @@ const TestHost = struct {
         .loadI32 = vt_load_i32,
         .loadI32Offset = vt_load_i32_off,
         .marshalSystemString = vt_marshal_string,
+        .storeI64 = vt_store_i64,
+        .storeByteToMemory = vt_store_byte,
     };
 
     fn s_(ctx: *anyopaque) *TestHost {
@@ -815,6 +1118,14 @@ const TestHost = struct {
         const s = s_(ctx);
         try s.buf.print(s.ally, "LOAD_I32 {s}+{d} -> {s}\n", .{ addr, off, out });
     }
+    fn vt_store_i64(ctx: *anyopaque, addr: []const u8, val: []const u8) lower_import.Error!void {
+        const s = s_(ctx);
+        try s.buf.print(s.ally, "STORE_I64 {s} <- {s}\n", .{ addr, val });
+    }
+    fn vt_store_byte(ctx: *anyopaque, addr: []const u8, val: []const u8) lower_import.Error!void {
+        const s = s_(ctx);
+        try s.buf.print(s.ally, "STORE_BYTE {s} <- {s}\n", .{ addr, val });
+    }
     fn vt_marshal_string(ctx: *anyopaque, ptr: []const u8, len: []const u8) lower_import.Error!void {
         const s = s_(ctx);
         try s.buf.print(s.ally, "MARSHAL_STR ({s},{s})\n", .{ ptr, len });
@@ -838,12 +1149,18 @@ test "findMvp covers the documented MVP set" {
     try expect(findMvp("fd_close") != null);
     try expect(findMvp("fd_seek") != null);
     try expect(findMvp("fd_fdstat_get") != null);
+    try expect(findMvp("clock_time_get") != null);
+    try expect(findMvp("random_get") != null);
     try expect(findMvp("path_open") == null);
 }
 
 test "isDeferred contains path_open" {
     try expect(isDeferred("path_open"));
     try expect(!isDeferred("proc_exit"));
+    // clock_time_get / random_get used to be in deferred_names; they
+    // moved to mvp_specs as part of completing spec_wasi_preview_1.md §11.
+    try expect(!isDeferred("clock_time_get"));
+    try expect(!isDeferred("random_get"));
 }
 
 // --- Step 1: Recognition.
@@ -1029,6 +1346,52 @@ test "step4: fd_write iterates iovecs and calls the stdout sink" {
     try expect(std.mem.indexOf(u8, th.buf.items, "STORE_I32 __caller_S3_i32__ <- _wasi_fdw_total") != null);
 }
 
+test "step4: fd_write emits no duplicate labels (regression: __wasi_fdw_loop_*__)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var th = TestHost.init(arena.allocator());
+    defer th.deinit();
+    th.depth = 4;
+
+    const params = [_]ValType{ .i32, .i32, .i32, .i32 };
+    const results = [_]ValType{.i32};
+    const imp: wasm.module.Import = .{
+        .module = wasi_module_name,
+        .name = "fd_write",
+        .desc = .{ .func = 0 },
+    };
+    try emit(th.host(), imp, makeFt(&params, &results), .{});
+
+    // Walk every "LABEL <name>\n" line and assert names are unique. UAssembly
+    // rejects duplicates at VisitLabelStmt; before this test was added the
+    // stdout/stderr branches both emitted __wasi_fdw_loop_{tag}__ with the
+    // same tag, tripping the assembler in production.
+    var seen: std.StringHashMap(void) = .init(std.testing.allocator);
+    defer seen.deinit();
+    var loop_head_count: u32 = 0;
+    var loop_end_count: u32 = 0;
+    var lines = std.mem.splitScalar(u8, th.buf.items, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "LABEL ")) continue;
+        const name = line["LABEL ".len..];
+        const gop = try seen.getOrPut(name);
+        if (gop.found_existing) {
+            std.debug.print("duplicate label emitted: '{s}'\n", .{name});
+            return error.DuplicateLabel;
+        }
+        if (std.mem.startsWith(u8, name, "__wasi_fdw_loop_end_")) {
+            loop_end_count += 1;
+        } else if (std.mem.startsWith(u8, name, "__wasi_fdw_loop_")) {
+            loop_head_count += 1;
+        }
+    }
+    // Sanity: the lowering really did emit two iovec-loop pairs (stderr +
+    // stdout branches), so the dedup above wasn't trivially passing because
+    // only one branch ran.
+    try std.testing.expectEqual(@as(u32, 2), loop_head_count);
+    try std.testing.expectEqual(@as(u32, 2), loop_end_count);
+}
+
 // --- Step 5: unsupported (deferred / unknown lenient) → nosys.
 test "step5: path_open lowers to a nosys (52) stub" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -1133,6 +1496,155 @@ test "step7: end-to-end translate wasi_hello.wasm" {
     // (3) `_start` is wired as the Udon entry-event export — the meta
     // declares `functions.start.label = "_start"`.
     try expect(std.mem.indexOf(u8, out, ".export _start") != null);
+}
+
+// --- Step 8: clock_time_get — branches on clockid; realtime / monotonic
+// each call their getter extern and write 8 bytes to *time_out_ptr.
+// Invalid clockids (process_cputime, thread_cputime) must not touch
+// memory and return errno.inval.
+test "step8: clock_time_get exercises both clock branches and the inval branch" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var th = TestHost.init(arena.allocator());
+    defer th.deinit();
+    th.depth = 3;
+
+    const params = [_]ValType{ .i32, .i64, .i32 };
+    const results = [_]ValType{.i32};
+    const imp: wasm.module.Import = .{
+        .module = wasi_module_name,
+        .name = "clock_time_get",
+        .desc = .{ .func = 0 },
+    };
+    try emit(th.host(), imp, makeFt(&params, &results), .{});
+
+    // Both clock externs are referenced (one per branch).
+    try expect(std.mem.indexOf(u8, th.buf.items, "EXTERN " ++ default_clock_realtime_extern) != null);
+    try expect(std.mem.indexOf(u8, th.buf.items, "EXTERN " ++ default_clock_monotonic_extern) != null);
+    // The inval errno is selected on the unsupported-clockid path.
+    try expect(std.mem.indexOf(u8, th.buf.items, "PUSH __c_errno_inval__") != null);
+    // The success errno is selected on the realtime/monotonic paths.
+    try expect(std.mem.indexOf(u8, th.buf.items, "PUSH __c_errno_success__") != null);
+    // The 8-byte result is written through the dedicated i64 store helper at
+    // the time-out pointer (which is param 2 → __caller_S2_i32__).
+    try expect(std.mem.indexOf(u8, th.buf.items, "STORE_I64 __caller_S2_i32__") != null);
+    // 3 args consumed, 1 result produced.
+    try std.testing.expectEqual(@as(u32, 1), th.depth);
+}
+
+test "step8: clock_time_get __udon_meta.wasi clock_*_extern overrides are honoured" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var th = TestHost.init(arena.allocator());
+    defer th.deinit();
+    th.depth = 3;
+
+    const params = [_]ValType{ .i32, .i64, .i32 };
+    const results = [_]ValType{.i32};
+    const imp: wasm.module.Import = .{
+        .module = wasi_module_name,
+        .name = "clock_time_get",
+        .desc = .{ .func = 0 },
+    };
+    const my_rt = "MyClock.__UtcNow__SystemDateTime";
+    const my_mono = "MyClock.__MonoSeconds__SystemDouble";
+    try emit(th.host(), imp, makeFt(&params, &results), .{
+        .clock_realtime_extern = my_rt,
+        .clock_monotonic_extern = my_mono,
+    });
+    try expect(std.mem.indexOf(u8, th.buf.items, "EXTERN " ++ my_rt) != null);
+    try expect(std.mem.indexOf(u8, th.buf.items, "EXTERN " ++ my_mono) != null);
+    // The defaults must NOT appear when overrides are supplied.
+    try expect(std.mem.indexOf(u8, th.buf.items, "EXTERN " ++ default_clock_realtime_extern) == null);
+    try expect(std.mem.indexOf(u8, th.buf.items, "EXTERN " ++ default_clock_monotonic_extern) == null);
+}
+
+test "step8: clock_time_get rejects WASM signature mismatch" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var th = TestHost.init(arena.allocator());
+    defer th.deinit();
+    th.depth = 0;
+    // Wrong arity: spec says (i32, i64, i32) -> i32; we pass (i32, i32) -> i32.
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{.i32};
+    const imp: wasm.module.Import = .{
+        .module = wasi_module_name,
+        .name = "clock_time_get",
+        .desc = .{ .func = 0 },
+    };
+    try std.testing.expectError(
+        error.WasiSignatureMismatch,
+        emit(th.host(), imp, makeFt(&params, &results), .{}),
+    );
+}
+
+// --- Step 9: random_get — fills [buf, buf+buf_len) with random bytes via
+// the configured RNG extern, returns errno.success regardless of buf_len.
+test "step9: random_get calls the rng extern and writes bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var th = TestHost.init(arena.allocator());
+    defer th.deinit();
+    th.depth = 2;
+
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{.i32};
+    const imp: wasm.module.Import = .{
+        .module = wasi_module_name,
+        .name = "random_get",
+        .desc = .{ .func = 0 },
+    };
+    try emit(th.host(), imp, makeFt(&params, &results), .{});
+
+    // Default RNG extern is referenced.
+    try expect(std.mem.indexOf(u8, th.buf.items, "EXTERN " ++ default_random_extern) != null);
+    // Per-byte store machinery fires inside the loop body.
+    try expect(std.mem.indexOf(u8, th.buf.items, "STORE_BYTE") != null);
+    // Always returns success.
+    try expect(std.mem.indexOf(u8, th.buf.items, "PUSH __c_errno_success__") != null);
+    // 2 args consumed, 1 result produced.
+    try std.testing.expectEqual(@as(u32, 1), th.depth);
+}
+
+test "step9: random_get __udon_meta.wasi.random_extern override is honoured" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var th = TestHost.init(arena.allocator());
+    defer th.deinit();
+    th.depth = 2;
+
+    const params = [_]ValType{ .i32, .i32 };
+    const results = [_]ValType{.i32};
+    const imp: wasm.module.Import = .{
+        .module = wasi_module_name,
+        .name = "random_get",
+        .desc = .{ .func = 0 },
+    };
+    const my_rng = "MyRng.__NextByte__SystemInt32_SystemInt32__SystemInt32";
+    try emit(th.host(), imp, makeFt(&params, &results), .{ .random_extern = my_rng });
+    try expect(std.mem.indexOf(u8, th.buf.items, "EXTERN " ++ my_rng) != null);
+    try expect(std.mem.indexOf(u8, th.buf.items, "EXTERN " ++ default_random_extern) == null);
+}
+
+test "step9: random_get rejects WASM signature mismatch" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var th = TestHost.init(arena.allocator());
+    defer th.deinit();
+    th.depth = 0;
+    // Wrong: spec says (i32, i32) -> i32; we pass (i32) -> i32.
+    const params = [_]ValType{.i32};
+    const results = [_]ValType{.i32};
+    const imp: wasm.module.Import = .{
+        .module = wasi_module_name,
+        .name = "random_get",
+        .desc = .{ .func = 0 },
+    };
+    try std.testing.expectError(
+        error.WasiSignatureMismatch,
+        emit(th.host(), imp, makeFt(&params, &results), .{}),
+    );
 }
 
 test "step6: wasi.stdout_extern override is honoured" {

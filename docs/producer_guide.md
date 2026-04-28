@@ -625,6 +625,119 @@ A worked example is `examples/wasi-hello/` (hand-rolled WAT plus a sidecar
 `wasi_hello.udon_meta.json`). See its README for the `wat2wasm` build
 incantation and the verified `wasm-objdump -x` output.
 
+### WASI Rust with std (`wasm32-wasip1`)
+
+`examples/wasi-hello/` is hand-written WAT and `examples/wasm-bench-rs/`
+uses `wasm32v1-none` (no WASI). For real Rust crates that need
+`std` — embedded scripting engines, parsers, anything that allocates —
+target **`wasm32-wasip1`** instead. `examples/rhai-bench/` is the
+canonical worked example.
+
+Practical notes:
+
+- **Per-package target override.** The workspace-wide
+  `.cargo/config.toml` pins `wasm32v1-none`, so a `wasm32-wasip1`
+  example must ship its own `.cargo/config.toml` to override the
+  default:
+
+  ```toml
+  # examples/<name>/.cargo/config.toml
+  [build]
+  target = "wasm32-wasip1"
+  rustflags = [
+      "-C", "target-feature=-multivalue,-reference-types,-simd128",
+  ]
+  ```
+
+  Cargo picks the closest config relative to the cwd, so a `cargo build`
+  invoked from inside the package directory uses this file. From the
+  workspace root, pass `--target wasm32-wasip1 -p <name>` explicitly.
+
+- **Strip post-MVP wasm features the translator does not yet handle.**
+  `wasm32-wasip1` enables `bulk-memory`, `mutable-globals`, `sign-ext`,
+  and `nontrapping-fptoint` by default — all already supported by the
+  translator. **`multivalue`, `reference-types` (beyond the funcref
+  decoder subset), and `simd128`** are not, so disable them via
+  `RUSTFLAGS` / per-package `rustflags` as above. Without that, the
+  parser will reject the binary with an `UnknownOpcode`-class error.
+
+- **Crate type is `bin`, not `cdylib`.** wasi-libc generates `_start`
+  for binary crates. A `cdylib` does not export `_start`, so
+  `__udon_meta.functions.start.source.export = "_start"` would not
+  resolve.
+
+  ```toml
+  # examples/<name>/Cargo.toml
+  [[bin]]
+  name = "<name>_underscored"
+  path = "src/main.rs"
+  ```
+
+- **Output path is the workspace target dir, not per-package.** Cargo
+  workspaces share `<workspace-root>/target/<triple>/release/<name>.wasm`
+  regardless of where you invoked `cargo build`. The committed
+  `<name>.udon_meta.json` lives in the example source directory; pass
+  it to the translator with `--meta`, since the auto-discovery path
+  next to the `.wasm` lands inside the gitignored `target/` tree.
+
+- **WASI calls a real Rust binary actually emits.** Beyond the obvious
+  `fd_write` / `proc_exit`, wasi-libc's `_start` glue references the
+  full preopen / fdstat / environ stub set during static
+  initialisation; the translator stubs every name in
+  `lower_wasi.zig`'s `deferred_names` table to `errno.nosys` so the
+  binary still links. If your code only uses `println!`, `Vec`, etc.,
+  you should not see anything beyond what `examples/rhai-bench/`'s
+  README's "Expected WASI imports" table lists.
+
+### WASI C with wasi-sdk (mruby and friends)
+
+`examples/mruby-bench/` is the worked example for cross-compiling a C
+project (mruby 3.3.0) to `wasm32-wasi` via the wasi-sdk clang
+toolchain. The recipe applies to anything that has a `Makefile` /
+`CMake` / autoconf build and ships a static library you can link
+against `wasi-libc`.
+
+Key points:
+
+- **Toolchain prerequisites are not Rust ones.** wasi-sdk is a
+  separate ~150 MB install (LLVM + wasi-libc + wasi-sysroot). Set
+  `WASI_SDK_PATH` to its install root. The build also needs whatever
+  the upstream project requires — for mruby that means Ruby + Rake on
+  the build machine to run `mrbc` and the gembox plumbing.
+
+- **Pin the embedded VM's version.** A pinned tag (e.g. `MRUBY_TAG :=
+  3.3.0` in the Makefile) plus `git clone --depth 1 --branch
+  $(MRUBY_TAG)` keeps the cross-build reproducible. Vendored sources
+  go under `vendor/<project>/` and are gitignored — the example only
+  commits the `Makefile`, the cross-build config, the driver, and the
+  sidecar JSON.
+
+- **Embed scripts as bytecode, never read from disk.** mruby's
+  preferred trick is `mrbc -B <symbol> -o build/script.c script.rb`,
+  which emits a C array that links into the final binary. Equivalent
+  patterns exist for other VMs (Lua's `luac` + `xxd -i`, Wren's
+  `wrenc`, …). Reading the script from a real path drags
+  `path_open` / `fd_filestat_get` into the import set, which the
+  translator stubs to `nosys`. The script then fails to load.
+
+- **Curate the gembox / feature flags so no IO gem leaks in.** mruby's
+  `default` gembox includes `mruby-io` and `mruby-bin-mruby` which
+  themselves call `path_open` / `fd_pread`. The mruby-bench
+  `build_config.rb` lists the safe gem set explicitly. For other
+  projects, audit the link-time symbol set with `wasm-ld --print-map`
+  or grep the produced `.wasm` for `path_` / `sock_` / `proc_raise`.
+
+- **Pin the mruby `MRuby::CrossBuild` toolchain to wasi-sdk's
+  `clang` and `llvm-ar`.** Default `gcc` will not produce wasm.
+  `cc.flags` should include `--target=wasm32-wasi
+  --sysroot=$(WASI_SDK_PATH)/share/wasi-sysroot`, plus whatever
+  size/perf knobs you want (`-O2`, `-DMRB_NO_PRESYM`, …).
+
+- **wasi-sdk version skew is the most common build failure.** Track
+  the wasi-sdk version that produced your last working build in the
+  README. Major versions occasionally rename `wasi-sysroot` paths or
+  retire predefined macros (e.g. `__wasi__` vs `__wasm32__`).
+
 ## Quick checklist before opening a PR
 
 - [ ] Toolchain pinned to MVP (`cpu_model = .mvp` for Zig,

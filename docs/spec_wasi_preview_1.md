@@ -539,9 +539,9 @@ RAC literals downstream.
 
 ---
 
-## 11. MVP implementation status (as of `lower_wasi.zig` landing)
+## 11. MVP implementation status
 
-The first translator pass implements:
+All §2.1 functions are now implemented end-to-end:
 
 - §4.1 `proc_exit` — `JUMP, 0xFFFFFFFC` halt.
 - §4.2 `fd_write` — full iovec walk + UTF-8 marshalling + per-iovec sink
@@ -550,22 +550,33 @@ The first translator pass implements:
 - §4.3 `fd_read` — `errno.badf` stub with `*nread_ptr = 0`.
 - §4.4 / §4.5 `environ_*` — zero-result `errno.success`.
 - §4.6 `args_*` — zero-result `errno.success`.
+- §4.7 `clock_time_get` — branches on `clockid`. `realtime` (id 0) calls
+  the configured realtime extern (default `SystemDateTime.UtcNow`),
+  subtracts a runtime-built `DateTime(1970,1,1)` epoch, takes
+  `SystemTimeSpan.Ticks`, and multiplies by 100 to get nanoseconds.
+  `monotonic` (id 1) calls the configured monotonic extern (default
+  `UnityEngine.Time.realtimeSinceStartupAsDouble`) and scales seconds →
+  nanoseconds via three `× 1000.0` multiplies (Udon Assembly cannot
+  declare `SystemDouble` literals — see §4.7 implementation comment for
+  the runtime-init pattern). Invalid clockids return `errno.inval`
+  without touching `*time_out_ptr`. The 8-byte `u64` result is written
+  through the new `Host.storeI64` helper as two little-endian i32
+  halves at offsets 0 and 4.
+- §4.8 `random_get` — per-byte loop calling the configured RNG extern
+  (default `UnityEngine.Random.Range(0, 256)`), masking the result to
+  `0xFF` defensively, and storing through the new
+  `Host.storeByteToMemory` helper. `buf_len == 0` falls through cleanly.
 - §4.9 `fd_close` / `fd_seek` / `fd_fdstat_get` — stubs as documented.
 - §4.10 `nosys` — every name in the deferred set, plus every unknown WASI
   import in lenient mode.
 
-Deferred (still emitted as `nosys` stubs in this pass; recognised but
-unimplemented):
+The translator's `lower_wasi.mvp_specs` table is now in 1-to-1
+correspondence with this section's "in scope (MVP)" list, and
+`deferred_names` matches the §2.2 deferred set with `clock_time_get` /
+`random_get` removed.
 
-- §4.7 `clock_time_get` — listed in the deferred-name table so it routes to
-  the nosys path. Wiring up the actual UtcNow / realtimeSinceStartupAsDouble
-  externs is left for the next pass; the corresponding `__udon_meta.wasi`
-  fields are already accepted by the decoder.
-- §4.8 `random_get` — same situation. The default extern wiring is scoped
-  but unimplemented.
-
-The §11 open issues below remain open; none of them blocked the MVP
-landing.
+The §12 open issues below remain open; none of them blocked the MVP
+completion.
 
 ## 12. Open Issues
 
