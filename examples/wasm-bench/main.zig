@@ -23,35 +23,8 @@ export var update_tick: i32 = 0;
 
 var scratch: [256]u32 = [_]u32{0} ** 256;
 
-const udon_meta_json =
-    \\{
-    \\  "version": 1,
-    \\  "behaviour": { "syncMode": "manual" },
-    \\  "functions": {
-    \\    "start":    { "source": {"kind":"export","name":"on_start"},    "label":"_start",    "export": true, "event":"Start"    },
-    \\    "update":   { "source": {"kind":"export","name":"on_update"},   "label":"_update",   "export": true, "event":"Update"   },
-    \\    "interact": { "source": {"kind":"export","name":"on_interact"}, "label":"_interact", "export": true, "event":"Interact" }
-    \\  },
-    \\  "fields": {
-    \\    "counter":     { "source": {"kind":"global","name":"counter"},     "udonName":"_counter",     "type":"int",  "export": true },
-    \\    "accum":       { "source": {"kind":"global","name":"accum"},       "udonName":"_accum",       "type":"int" },
-    \\    "update_tick": { "source": {"kind":"global","name":"update_tick"}, "udonName":"_updateTick",  "type":"int" }
-    \\  },
-    \\  "options": {
-    \\    "strict": false,
-    \\    "recursion": "stack",
-    \\    "memory": { "initialPages": 1, "maxPages": 24, "udonName": "_memory" }
-    \\  }
-    \\}
-;
-
-export fn __udon_meta_ptr() [*]const u8 {
-    return udon_meta_json.ptr;
-}
-
-export fn __udon_meta_len() u32 {
-    return @intCast(udon_meta_json.len);
-}
+// `__udon_meta` is supplied as a sidecar file (`bench.udon_meta.json`)
+// alongside the compiled `.wasm` — see docs/spec_udonmeta_conversion.md.
 
 fn test_arithmetic() void {
     log("== arithmetic ==");

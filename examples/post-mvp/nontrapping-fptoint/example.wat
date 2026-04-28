@@ -8,7 +8,4 @@
     local.get $x
     i64.trunc_sat_f64_u)
   (export "sat_u64_f64" (func $sat_u64_f64))
-  (data (i32.const 0) "{\"version\":1}")
-  (global $__udon_meta_ptr (export "__udon_meta_ptr") i32 (i32.const 0))
-  (global $__udon_meta_len (export "__udon_meta_len") i32 (i32.const 13))
 )

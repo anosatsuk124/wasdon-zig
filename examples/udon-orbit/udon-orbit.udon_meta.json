@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "behaviour": { "syncMode": "none" },
+  "functions": {
+    "start":    { "source": {"kind":"export","name":"on_start"},    "label":"_start",    "export": true, "event":"Start"    },
+    "update":   { "source": {"kind":"export","name":"on_update"},   "label":"_update",   "export": true, "event":"Update"   },
+    "interact": { "source": {"kind":"export","name":"on_interact"}, "label":"_interact", "export": true, "event":"Interact" }
+  },
+  "fields": {
+    "self":          { "source": {"kind":"import","module":"env","name":"udon.self"}, "udonName":"__G__self",     "type":"transform", "default":"this" },
+    "radius":        { "source": {"kind":"global","name":"radius"},        "udonName":"_radius",       "type":"float",  "export": true, "default": 1.5 },
+    "angular_speed": { "source": {"kind":"global","name":"angular_speed"}, "udonName":"_angularSpeed", "type":"float",  "export": true, "default": 2.0 },
+    "phase":         { "source": {"kind":"global","name":"phase"},         "udonName":"__G__phase",    "type":"float" },
+    "clone_count":   { "source": {"kind":"global","name":"clone_count"},   "udonName":"_cloneCount",   "type":"int",    "export": true }
+  },
+  "options": {
+    "strict": false,
+    "memory": { "initialPages": 1, "maxPages": 4, "udonName": "_memory" }
+  }
+}

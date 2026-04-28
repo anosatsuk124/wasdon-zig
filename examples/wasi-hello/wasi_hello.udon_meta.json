@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "behaviour": { "name": "WasiHello" },
+  "functions": {
+    "start": {
+      "source": { "kind": "export", "name": "_start" },
+      "label": "_start",
+      "export": true,
+      "event": "Start"
+    }
+  },
+  "options": {
+    "memory": { "initialPages": 1, "maxPages": 1, "udonName": "_memory" }
+  }
+}

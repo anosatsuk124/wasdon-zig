@@ -15,93 +15,58 @@ The metadata is mainly intended to express the following three kinds of informat
 ## Basic Policy
 
 * `__udon_meta` is a conceptual metadata body; its contents are UTF-8 JSON
-* Concretely, the body is placed as a static byte sequence inside a Wasm data segment
-* Its location is surfaced to the translator by exporting a pointer/length pair (`__udon_meta_ptr`, `__udon_meta_len`)
-* If the translator finds the metadata, it decodes the bytes as UTF-8 JSON and uses them
-* If it is not found, lowering proceeds with default behavior
+* Concretely, the body lives in a **sidecar JSON file** that ships alongside the `.wasm` input
+* The translator reads the sidecar at conversion time and decodes it as UTF-8 JSON
+* If the sidecar is not present, lowering proceeds with default behavior
 * It is not intended to be read by the Wasm side at runtime
 * It is treated strictly as conversion-time metadata
+* The Wasm binary itself contains **nothing** related to `__udon_meta` — no exports, no data segments, no globals are reserved for it
 
-Wasm export kinds are limited to `func`, `global`, `memory`, and `table`. Byte
-arrays themselves cannot be exported, so the canonical representation is:
-
-* The JSON lives in a `data` segment inside the module's linear memory
-* Two `global` exports (or two `func` exports returning the same values) describe where in memory the JSON lives:
-  * `__udon_meta_ptr` — the byte offset of the first byte of the JSON
-  * `__udon_meta_len` — the length in bytes of the JSON
-* The translator reads these two exports, slices the data segment, and decodes the slice as UTF-8
-
-This is the only supported form. Raw-symbol resolution (e.g. looking up a
-static symbol literally named `__udon_meta`) is not supported — producers must
-emit the `__udon_meta_ptr` / `__udon_meta_len` export pair.
+Sidecar JSON is the only supported form. Embedding the JSON inside the Wasm
+binary (via a data segment plus locator exports) is not supported — earlier
+revisions of this spec required that, but the contract has been simplified to
+a sidecar file because the in-binary discovery had brittle producer-side
+requirements (LTO + opt-level, hand-tracked WAT offsets) and the data was
+never actually read at runtime.
 
 ---
 
-## Placement in Wasm
+## Placement
 
-### WAT example
+### Sidecar file convention
 
-```wat
-(module
-  (memory (export "memory") 1)
+* Filename: `<wasm-stem>.udon_meta.json` next to the `.wasm` input.
+  * Example: `bench.wasm` → `bench.udon_meta.json`.
+* The CLI auto-discovers this filename when `--meta` is omitted; an explicit
+  `--meta <path>` override is also accepted (must point at an existing file).
+* The library entry point `wasdon_zig.translateBytes` takes the JSON bytes
+  directly as an `?[]const u8` parameter — pass `null` for "no meta".
 
-  ;; Metadata location surfaced to the translator
-  (global (export "__udon_meta_ptr") i32 (i32.const 1024))
-  (global (export "__udon_meta_len") i32 (i32.const 285))
+### Producer side
 
-  ;; Ordinary Wasm-side state referenced by the metadata
-  (global $player_name (mut i32) (i32.const 0))
-  (export "player_name" (global $player_name))
+There is nothing for the producer to do beyond writing the sidecar JSON file.
+None of the Wasm-side languages (Zig, Rust, hand-rolled WAT) need any extra
+exports or data segments.
 
-  (func $on_start nop)
-  (export "on_start" (func $on_start))
-
-  ;; The JSON body lives in a data segment at offset 1024
-  (data (i32.const 1024)
-    "{\22version\22:1,\22fields\22:{...},\22functions\22:{...}}")
-)
+```text
+examples/wasm-bench/
+├─ main.zig                 # the producer source
+└─ bench.udon_meta.json     # the sidecar — committed alongside the source
 ```
 
-### Zig example
+### CLI usage
 
-```zig
-const udon_meta_json =
-    \\{
-    \\  "version": 1,
-    \\  "fields": {
-    \\    "playerName": {
-    \\      "source": { "kind": "global", "name": "player_name" },
-    \\      "udonName": "_playerName",
-    \\      "type": "string",
-    \\      "export": true,
-    \\      "sync": { "enabled": true, "mode": "none" }
-    \\    }
-    \\  },
-    \\  "functions": {
-    \\    "start": {
-    \\      "source": { "kind": "export", "name": "on_start" },
-    \\      "label": "_start",
-    \\      "export": true,
-    \\      "event": "Start"
-    \\    }
-    \\  }
-    \\}
-;
+```sh
+# auto-discover bench.udon_meta.json next to bench.wasm
+wasdon_zig translate path/to/bench.wasm -o bench.uasm
 
-export fn __udon_meta_ptr() [*]const u8 {
-    return udon_meta_json.ptr;
-}
+# explicit
+wasdon_zig translate path/to/bench.wasm \
+    --meta /etc/udon/bench.udon_meta.json -o bench.uasm
 
-export fn __udon_meta_len() u32 {
-    return @intCast(udon_meta_json.len);
-}
-
-export var player_name: i32 = 0;
-export fn on_start() void {}
+# no sidecar — translation proceeds with translator defaults
+wasdon_zig translate path/to/no-meta.wasm -o no-meta.uasm
 ```
-
-Either form (exported `global` or exported `func` returning the same values) is
-acceptable; the translator must tolerate both.
 
 ---
 
@@ -426,14 +391,12 @@ All fields are optional.
 
 ## Conversion Rules
 
-### 1. Find `__udon_meta`
+### 1. Locate `__udon_meta`
 
-* Look for the exports `__udon_meta_ptr` and `__udon_meta_len` (either as globals or as zero-argument functions returning `i32`)
-* Read their values to obtain the byte offset and length inside linear memory
-* Resolve that byte range against the module's `data` segments and extract the raw bytes
-* Decode the bytes as UTF-8 JSON
-* If the `__udon_meta_ptr` / `__udon_meta_len` pair is absent, lowering proceeds with default behavior
-* Treat decode failure (invalid UTF-8 or malformed JSON) as an error or warning per `options.strict`
+* The CLI uses the path provided via `--meta`; if absent, it tries `<wasm-stem>.udon_meta.json` next to the `.wasm` input.
+* The library entry point receives the bytes directly through the `udon_meta_json: ?[]const u8` parameter on `translateBytes`.
+* If no sidecar bytes are supplied, lowering proceeds with default behavior.
+* Decode the bytes as UTF-8 JSON; treat decode failure (invalid UTF-8 or malformed JSON) as an error or warning per `options.strict`.
 
 ### 2. Check `version`
 

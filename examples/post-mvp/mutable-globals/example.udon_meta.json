@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "fields": {
+    "local": {
+      "source": { "kind": "global", "name": "local" },
+      "udonName": "__G__local"
+    }
+  },
+  "functions": {
+    "tick": {
+      "source": { "kind": "export", "name": "tick" },
+      "label": "_update",
+      "event": "Update"
+    }
+  }
+}

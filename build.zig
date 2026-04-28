@@ -228,6 +228,16 @@ pub fn build(b: *std.Build) void {
     const copy_bench = b.addUpdateSourceFiles();
     copy_bench.addCopyFileToSource(wasm_exe.getEmittedBin(), "src/wasm/testdata/bench.wasm");
     copy_bench.addCopyFileToSource(wasm_exe.getEmittedBin(), "src/translator/testdata/bench.wasm");
+    // The `__udon_meta` sidecar lives next to the producer source; mirror it
+    // into the testdata trees so end-to-end tests can `@embedFile` it.
+    copy_bench.addCopyFileToSource(
+        b.path("examples/wasm-bench/bench.udon_meta.json"),
+        "src/wasm/testdata/bench.udon_meta.json",
+    );
+    copy_bench.addCopyFileToSource(
+        b.path("examples/wasm-bench/bench.udon_meta.json"),
+        "src/translator/testdata/bench.udon_meta.json",
+    );
     const wasm_step = b.step("wasm-example", "Build the example WASM test bench");
     wasm_step.dependOn(&wasm_install.step);
     wasm_step.dependOn(&copy_bench.step);
@@ -264,6 +274,10 @@ pub fn build(b: *std.Build) void {
     copy_wasi_hello.addCopyFileToSource(
         b.path("examples/wasi-hello/wasi_hello.wasm"),
         "src/translator/testdata/wasi_hello.wasm",
+    );
+    copy_wasi_hello.addCopyFileToSource(
+        b.path("examples/wasi-hello/wasi_hello.udon_meta.json"),
+        "src/translator/testdata/wasi_hello.udon_meta.json",
     );
     const wasi_hello_step = b.step("wasi-hello-example", "Mirror the wasi-hello .wasm fixture into translator testdata");
     wasi_hello_step.dependOn(&copy_wasi_hello.step);

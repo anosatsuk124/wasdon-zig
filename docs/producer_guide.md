@@ -134,11 +134,12 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 ```
 
-The release profile is **load-bearing**:
+The release profile is shaped to match the translator's MVP-only input:
 
-- `opt-level = "z"` + `lto = true` + `codegen-units = 1` is what makes
-  `__udon_meta_ptr`/`_len` collapse to a single `i32.const` (see
-  [§6](#6-__udon_meta-discovery-contract)).
+- `opt-level = "z"` and `lto = true` keep the binary small and let the
+  Rust optimizer collapse trivial helpers, but they are no longer
+  load-bearing for `__udon_meta` discovery — the metadata is supplied
+  as a sidecar JSON file (see [§6](#6-__udon_meta-sidecar-json)).
 - `panic = "abort"` prevents pulling in unwinding support that
   freestanding WASM cannot link.
 - `strip = "symbols"` keeps the binary small and removes debug-info
@@ -354,81 +355,76 @@ example in Zig (or use a hand-rolled WAT shim).
 
 ---
 
-## 6. `__udon_meta` discovery contract
+## 6. `__udon_meta` sidecar JSON
 
-The translator finds the JSON blob through two exports:
+`__udon_meta` is supplied as a **sidecar JSON file** that lives next to the
+`.wasm` input. The Wasm binary itself contains nothing related to the
+metadata — no exports, no data segments, no globals are reserved for it.
 
-| Export name        | Meaning                                  | WASM type                       |
-|--------------------|------------------------------------------|---------------------------------|
-| `__udon_meta_ptr`  | Linear-memory byte offset of the JSON    | `i32` (or func returning `i32`) |
-| `__udon_meta_len`  | Byte length of the JSON                  | `i32` (or func returning `i32`) |
+| Path convention                          | Where it lives                                |
+|------------------------------------------|-----------------------------------------------|
+| `<wasm-stem>.udon_meta.json`             | Same directory as the `.wasm`, auto-discovered |
+| `--meta <path>`                          | Anywhere; takes precedence over auto-discovery |
 
-Both are required; if either is missing, the translator silently
-treats the module as having no metadata and falls back to defaults.
+If neither is present, the translator silently treats the module as having
+no metadata and falls back to defaults.
 
-### What "constant" means
+### CLI
 
-Both locators are evaluated by `src/wasm/const_eval.zig`'s
-`evalExportedI32`, which is a deliberately tiny constant evaluator.
-The translator never executes WASM. It accepts only:
+```sh
+# auto-discover bench.udon_meta.json next to bench.wasm
+wasdon_zig translate path/to/bench.wasm -o bench.uasm
 
-1. An **exported global** whose init expression is a single `i32.const N`.
-2. An **exported nullary function** whose body is exactly one of:
-   - `i32.const N`
-   - `global.get G`, where `G` is *not* an imported global and `G`'s
-     init expression is itself a single `i32.const N` (one hop only).
+# explicit path
+wasdon_zig translate path/to/bench.wasm \
+    --meta path/elsewhere/bench.udon_meta.json -o bench.uasm
+```
 
-Everything else returns `error.NonConstMetaLocator`:
-multi-instruction bodies, arithmetic, `local.get`, computed addresses,
-chained `global.get`, `global.get` of an imported global.
+### Library
+
+```zig
+const wasdon_zig = @import("wasdon_zig");
+
+pub fn translate_wasm(
+    gpa: std.mem.Allocator,
+    wasm_bytes: []const u8,
+    udon_meta_json: ?[]const u8, // pass `null` for "no meta"
+    writer: *std.Io.Writer,
+) !void {
+    try wasdon_zig.translateBytes(gpa, wasm_bytes, udon_meta_json, writer, .{});
+}
+```
 
 ### Producer recipes
 
-Both languages emit a function whose body collapses to a single
-`i32.const` after optimization:
+Producers do not need to do anything beyond writing the sidecar JSON file.
+Earlier revisions of this guide required an `__udon_meta_ptr` /
+`__udon_meta_len` export pair plus an in-binary data segment; that contract
+has been retired because it had brittle producer-side requirements (LTO +
+`opt-level=z` + hand-tracked WAT offsets) and the data was never actually
+read at runtime.
 
-```zig
-// Zig (ReleaseSmall)
-const udon_meta_json = \\{ "version": 1, ... };
+Recommended layout (Rust crate):
 
-export fn __udon_meta_ptr() [*]const u8 { return udon_meta_json.ptr; }
-export fn __udon_meta_len() u32 { return @intCast(udon_meta_json.len); }
+```text
+examples/wasm-bench-rs/
+├─ Cargo.toml
+├─ wasm_bench_rs.udon_meta.json   # commit this
+└─ src/lib.rs
 ```
 
-```rust
-// Rust (release profile from §2)
-const UDON_META_JSON: &[u8] = br#"{ "version": 1, ... }"#;
+Recommended layout (Zig source):
 
-#[unsafe(no_mangle)]
-pub extern "C" fn __udon_meta_ptr() -> *const u8 { UDON_META_JSON.as_ptr() }
-
-#[unsafe(no_mangle)]
-pub extern "C" fn __udon_meta_len() -> u32 { UDON_META_JSON.len() as u32 }
+```text
+examples/wasm-bench/
+├─ main.zig
+└─ bench.udon_meta.json           # commit this
 ```
 
-For raw WAT, two exported immutable globals are simpler:
-
-```wat
-(global (export "__udon_meta_ptr") i32 (i32.const 1024))
-(global (export "__udon_meta_len") i32 (i32.const 187))
-(data  (i32.const 1024) "{ \"version\": 1, ... }")
-```
-
-### Data segment placement
-
-Once `(ptr, len)` is known, the byte range must lie **fully inside one
-data segment** whose offset itself constant-folds. Splitting the JSON
-across segments returns `error.MetaSpansMultipleSegments`. A single
-`static`/`const` byte literal is the safe choice.
-
-### Common errors
-
-| Error                          | Cause                                                                                                |
-|--------------------------------|------------------------------------------------------------------------------------------------------|
-| `NonConstMetaLocator`          | Locator function body is more than one instruction, or uses an unsupported op. Disassemble with `wasm-tools print` and confirm. |
-| `MetaSpansMultipleSegments`    | The JSON blob landed across a data-segment boundary. Move into a single literal.                     |
-| `MetaRangeOutOfData`           | `__udon_meta_ptr` resolved to an address no data segment covers. Often the slice was eliminated as dead code — make sure the meta exports are reachable. |
-| Translator silently uses defaults | One of `__udon_meta_ptr` / `_len` is missing from the exports. Discovery is all-or-nothing.       |
+The `__udon_meta.functions` keys still drive event-label mapping
+(`_start` / `_update` / `_interact` / custom) and the `__udon_meta.fields`
+keys still drive Udon data-section field naming — only the *delivery
+mechanism* has moved out of the binary.
 
 ---
 
@@ -564,16 +560,17 @@ Producer-side pitfalls specific to WASI:
   program. The translator emits the documented stubs for all of these,
   so they link cleanly without a producer-side workaround.
 
-A worked example is `examples/wasi-hello/` (hand-rolled WAT + a tiny
-`__udon_meta` blob). See its README for the `wat2wasm` build incantation
-and the verified `wasm-objdump -x` output.
+A worked example is `examples/wasi-hello/` (hand-rolled WAT plus a sidecar
+`wasi_hello.udon_meta.json`). See its README for the `wat2wasm` build
+incantation and the verified `wasm-objdump -x` output.
 
 ## Quick checklist before opening a PR
 
 - [ ] Toolchain pinned to MVP (`cpu_model = .mvp` for Zig,
       `wasm32v1-none` for Rust).
-- [ ] Release profile gives `__udon_meta_ptr/_len` single-instruction
-      bodies (`opt-level=z`, `lto=true`, `codegen-units=1`).
+- [ ] `<wasm-stem>.udon_meta.json` sidecar committed alongside the
+      producer source (or `--meta` path documented in your
+      tooling).
 - [ ] Every Udon EXTERN is declared with the verbatim signature name
       from `docs/udon_nodes.txt`.
 - [ ] Mutable state matches the field-source rules in §5 (Zig: WASM
@@ -584,6 +581,7 @@ and the verified `wasm-objdump -x` output.
       need; underestimates are silently floored up but
       overestimates cost almost nothing.
 - [ ] Translator round-trip checked: `cargo build --release` →
-      `wasdon_zig translate ... -o foo.uasm` succeeds, and the
-      expected `.export _start`/`_update`/`_interact` labels appear
-      in the output.
+      `wasdon_zig translate ... -o foo.uasm` succeeds (sidecar JSON
+      auto-discovered or passed via `--meta`), and the expected
+      `.export _start`/`_update`/`_interact` labels appear in the
+      output.

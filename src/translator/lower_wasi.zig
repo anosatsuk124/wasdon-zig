@@ -1117,7 +1117,8 @@ test "step7: end-to-end translate wasi_hello.wasm" {
     const aa = arena.allocator();
 
     const mod = try wasm.parseModule(aa, wasi_hello_bytes);
-    const meta = try wasm.parseUdonMetaFromModule(aa, mod);
+    const meta_json = @embedFile("testdata/wasi_hello.udon_meta.json");
+    const meta: ?wasm.UdonMeta = try wasm.parseUdonMeta(aa, meta_json);
 
     var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer buf.deinit();

@@ -6,9 +6,9 @@ This example demonstrates the post-MVP `mutable-globals` proposal end-to-end:
   module reads it through `global.get`).
 - A module-defined mutable global `$local` that the WASM module both reads and
   writes via `global.get` / `global.set`.
-- A `__udon_meta` blob locating itself with the exported `(ptr, len)` pair,
-  giving `$local` an explicit Udon variable name and binding `tick` to the
-  `_update` event label.
+- A sidecar `example.udon_meta.json` (read by the translator at conversion
+  time, never embedded in the binary) that gives `$local` an explicit
+  Udon variable name and binds `tick` to the `_update` event label.
 
 ## Build
 
@@ -23,7 +23,8 @@ command line.
 ## Translate
 
 ```sh
-zig build run -- examples/post-mvp/mutable-globals/example.wasm
+# Auto-discovers example.udon_meta.json next to the .wasm
+zig build run -- translate examples/post-mvp/mutable-globals/example.wasm
 ```
 
 The emitted Udon Assembly should contain `__G__host_counter: %SystemInt32`

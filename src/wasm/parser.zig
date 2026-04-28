@@ -240,27 +240,28 @@ test "parseModule integration: parses the bench.wasm fixture end-to-end" {
     defer arena.deinit();
     const mod = try parseModule(arena.allocator(), bench_wasm);
 
-    // The bench exposes __udon_meta_ptr / __udon_meta_len plus the Udon
-    // event-handler functions.
-    var saw_meta_ptr = false;
-    var saw_meta_len = false;
+    // The bench exposes the Udon event-handler functions; meta is supplied
+    // as a sidecar JSON, never embedded in the module.
     var saw_on_start = false;
+    var saw_on_update = false;
+    var saw_on_interact = false;
     for (mod.exports) |exp| {
-        if (std.mem.eql(u8, exp.name, "__udon_meta_ptr")) saw_meta_ptr = true;
-        if (std.mem.eql(u8, exp.name, "__udon_meta_len")) saw_meta_len = true;
         if (std.mem.eql(u8, exp.name, "on_start")) saw_on_start = true;
+        if (std.mem.eql(u8, exp.name, "on_update")) saw_on_update = true;
+        if (std.mem.eql(u8, exp.name, "on_interact")) saw_on_interact = true;
     }
-    try std.testing.expect(saw_meta_ptr);
-    try std.testing.expect(saw_meta_len);
     try std.testing.expect(saw_on_start);
+    try std.testing.expect(saw_on_update);
+    try std.testing.expect(saw_on_interact);
 
-    // Meta discovery + JSON decode should round-trip.
+    // The sidecar JSON for the bench fixture is mirrored into testdata by
+    // `build.zig`'s `wasm-example` step; parse it through the public
+    // `udon_meta.parse` entry point to make sure the schema decodes.
     const udon_meta = @import("udon_meta.zig");
-    const meta_opt = try udon_meta.parseFromModule(arena.allocator(), mod);
-    try std.testing.expect(meta_opt != null);
-    const meta = meta_opt.?;
+    const meta_json = @embedFile("testdata/bench.udon_meta.json");
+    const meta = try udon_meta.parse(arena.allocator(), meta_json);
     try std.testing.expectEqual(@as(u32, 1), meta.version);
-    // `behaviour.syncMode == "manual"` per examples/wasm-bench/main.zig.
+    // `behaviour.syncMode == "manual"` per examples/wasm-bench/bench.udon_meta.json.
     try std.testing.expect(meta.behaviour != null);
     try std.testing.expectEqual(udon_meta.SyncMode.manual, meta.behaviour.?.sync_mode.?);
     // At least one of the documented functions must be present.

@@ -1,7 +1,7 @@
 //! WASM Core 1 / MVP binary parser — sub-library root.
 //!
 //! Scope: purely binary-format decoding per docs/w3c_wasm_binary_format_note.md
-//! plus `__udon_meta` JSON discovery per docs/spec_udonmeta_conversion.md.
+//! plus `__udon_meta` sidecar-JSON decoding per docs/spec_udonmeta_conversion.md.
 //! Validation, runtime semantics, and Udon lowering live elsewhere.
 
 const std = @import("std");
@@ -22,8 +22,6 @@ pub const Module = module.Module;
 pub const parseModule = parser.parseModule;
 pub const UdonMeta = udon_meta.UdonMeta;
 pub const parseUdonMeta = udon_meta.parse;
-pub const findUdonMetaBytes = udon_meta.findMetaBytes;
-pub const parseUdonMetaFromModule = udon_meta.parseFromModule;
 
 pub const ParseError = errors.ParseError;
 pub const Reader = reader.Reader;

@@ -447,8 +447,9 @@ SHOULD follow the rules below.
 ### 8.1 Rust (`wasm32-wasip1`)
 
 - `Cargo.toml`: `[profile.release] opt-level = "z"`, `lto = true`,
-  `codegen-units = 1`, `panic = "abort"`. (Same constraints
-  `__udon_meta_ptr` discovery already requires; see `CLAUDE.md`.)
+  `panic = "abort"`. These keep the binary small and freestanding; they
+  are no longer load-bearing for `__udon_meta` discovery, which now uses
+  a sidecar JSON file (see `docs/spec_udonmeta_conversion.md`).
 - Avoid `std::fs`, `std::net`, `std::thread`, `std::process::Command`. The
   translator will reject any of those at translate time once the linker pulls
   in their imports — they cannot be compiled out at the LLVM layer.

@@ -46,10 +46,12 @@ pub const ParseError = error{
     BadMagic,
     BadVersion,
 
-    // __udon_meta discovery & JSON decode
-    NonConstMetaLocator,
-    MetaRangeOutOfData,
-    MetaSpansMultipleSegments,
+    // Const-expression evaluation (data/element segment offsets, immutable
+    // global inits). Anything outside the strict MVP-const subset (a single
+    // `i32.const` or a `global.get` that hops to one) returns this.
+    NonConstInitExpr,
+
+    // __udon_meta JSON decode
     InvalidUtf8MetaPayload,
     UnsupportedUdonMetaVersion,
     MalformedMeta,

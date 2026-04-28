@@ -1,9 +1,10 @@
-//! `__udon_meta` JSON discovery and decoding.
+//! `__udon_meta` JSON decoding.
 //!
-//! Surface: `parse` decodes a raw JSON payload; `findMetaBytes` locates the
-//! payload inside a Module via the `__udon_meta_ptr` / `__udon_meta_len`
-//! export convention documented in `docs/spec_udonmeta_conversion.md`;
-//! `parseFromModule` glues them together.
+//! `__udon_meta` is supplied to the translator as a sidecar JSON file
+//! (`<wasm-stem>.udon_meta.json`) that lives next to the `.wasm` input —
+//! see `docs/spec_udonmeta_conversion.md`. It is **never** read out of the
+//! WASM module itself. The CLI / library entry point reads the bytes and
+//! hands them to `parse` below.
 //!
 //! All allocations live in the caller-supplied allocator — use an arena so
 //! `deinit()` frees everything, including the underlying std.json.Value tree.
@@ -11,7 +12,6 @@
 const std = @import("std");
 const errors = @import("errors.zig");
 const module_mod = @import("module.zig");
-const const_eval = @import("const_eval.zig");
 
 pub const Module = module_mod.Module;
 
@@ -369,47 +369,6 @@ fn parseWasi(obj: std.json.ObjectMap) errors.ParseError!Wasi {
     return w;
 }
 
-// ---------------- module-side discovery ----------------
-
-pub fn findMetaBytes(mod: Module) errors.ParseError!?[]const u8 {
-    const ptr_opt = try const_eval.evalExportedI32(mod, "__udon_meta_ptr");
-    const len_opt = try const_eval.evalExportedI32(mod, "__udon_meta_len");
-    if (ptr_opt == null or len_opt == null) return null;
-    const ptr = ptr_opt.?;
-    const len = len_opt.?;
-    if (ptr < 0 or len < 0) return error.NonConstMetaLocator;
-
-    const uptr: u32 = @intCast(ptr);
-    const ulen: u32 = @intCast(len);
-    return try resolveDataRange(mod, uptr, ulen);
-}
-
-fn resolveDataRange(mod: Module, ptr: u32, len: u32) errors.ParseError![]const u8 {
-    var saw_partial = false;
-    for (mod.datas) |d| {
-        const off_i32 = try const_eval.evalConstI32(mod, d.offset);
-        if (off_i32 < 0) continue;
-        const off: u32 = @intCast(off_i32);
-        const seg_end = off +% @as(u32, @intCast(d.init.len));
-        // Fully inside this segment?
-        if (ptr >= off and ptr + len >= ptr and ptr + len <= seg_end) {
-            return d.init[ptr - off .. ptr - off + len];
-        }
-        // Partial overlap detection.
-        const req_end = ptr + len;
-        const overlaps = ptr < seg_end and req_end > off;
-        if (overlaps) saw_partial = true;
-    }
-    if (saw_partial) return error.MetaSpansMultipleSegments;
-    return error.MetaRangeOutOfData;
-}
-
-pub fn parseFromModule(allocator: std.mem.Allocator, mod: Module) errors.ParseError!?UdonMeta {
-    const bytes_opt = try findMetaBytes(mod);
-    if (bytes_opt == null) return null;
-    return try parse(allocator, bytes_opt.?);
-}
-
 // ---------------- tests ----------------
 
 const minimal_json =
@@ -576,134 +535,3 @@ test "parse rejects invalid UTF-8" {
     try std.testing.expectError(error.InvalidUtf8MetaPayload, parse(arena.allocator(), bad));
 }
 
-// ---- module-side discovery tests ----
-
-fn makeBenchLikeModule(allocator: std.mem.Allocator, json: []const u8) !Module {
-    const Instruction = @import("instruction.zig").Instruction;
-    const instrs_ptr = try allocator.alloc(Instruction, 1);
-    instrs_ptr[0] = .{ .i32_const = 1024 };
-    const instrs_len = try allocator.alloc(Instruction, 1);
-    instrs_len[0] = .{ .i32_const = @intCast(json.len) };
-
-    const codes = try allocator.alloc(module_mod.Code, 2);
-    codes[0] = .{ .locals = &.{}, .body = instrs_ptr };
-    codes[1] = .{ .locals = &.{}, .body = instrs_len };
-
-    const exports = try allocator.alloc(module_mod.Export, 2);
-    exports[0] = .{ .name = "__udon_meta_ptr", .desc = .{ .func = 0 } };
-    exports[1] = .{ .name = "__udon_meta_len", .desc = .{ .func = 1 } };
-
-    const offset_expr = try allocator.alloc(Instruction, 1);
-    offset_expr[0] = .{ .i32_const = 1024 };
-    const datas = try allocator.alloc(module_mod.Data, 1);
-    datas[0] = .{ .memory_index = 0, .offset = offset_expr, .init = json };
-
-    return .{ .exports = exports, .codes = codes, .datas = datas };
-}
-
-test "findMetaBytes locates payload via func exports" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const mod = try makeBenchLikeModule(arena.allocator(), minimal_json);
-    const bytes = try findMetaBytes(mod);
-    try std.testing.expect(bytes != null);
-    try std.testing.expectEqualStrings(minimal_json, bytes.?);
-}
-
-test "findMetaBytes locates payload via global exports" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-    const Instruction = @import("instruction.zig").Instruction;
-
-    const init0 = try alloc.alloc(Instruction, 1);
-    init0[0] = .{ .i32_const = 2048 };
-    const init1 = try alloc.alloc(Instruction, 1);
-    init1[0] = .{ .i32_const = @intCast(minimal_json.len) };
-
-    const globals = try alloc.alloc(module_mod.Global, 2);
-    globals[0] = .{ .ty = .{ .valtype = .i32, .mut = .immutable }, .init = init0 };
-    globals[1] = .{ .ty = .{ .valtype = .i32, .mut = .immutable }, .init = init1 };
-
-    const exports = try alloc.alloc(module_mod.Export, 2);
-    exports[0] = .{ .name = "__udon_meta_ptr", .desc = .{ .global = 0 } };
-    exports[1] = .{ .name = "__udon_meta_len", .desc = .{ .global = 1 } };
-
-    const offset_expr = try alloc.alloc(Instruction, 1);
-    offset_expr[0] = .{ .i32_const = 2048 };
-    const datas = try alloc.alloc(module_mod.Data, 1);
-    datas[0] = .{ .memory_index = 0, .offset = offset_expr, .init = minimal_json };
-
-    const mod: Module = .{ .globals = globals, .exports = exports, .datas = datas };
-    const bytes = try findMetaBytes(mod);
-    try std.testing.expect(bytes != null);
-    try std.testing.expectEqualStrings(minimal_json, bytes.?);
-}
-
-test "findMetaBytes returns null when exports are absent" {
-    const mod: Module = .{};
-    try std.testing.expect(try findMetaBytes(mod) == null);
-}
-
-test "findMetaBytes returns null if only one of ptr/len is present" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const Instruction = @import("instruction.zig").Instruction;
-    const init0 = try arena.allocator().alloc(Instruction, 1);
-    init0[0] = .{ .i32_const = 0 };
-    const globals = try arena.allocator().alloc(module_mod.Global, 1);
-    globals[0] = .{ .ty = .{ .valtype = .i32, .mut = .immutable }, .init = init0 };
-    const exports = try arena.allocator().alloc(module_mod.Export, 1);
-    exports[0] = .{ .name = "__udon_meta_ptr", .desc = .{ .global = 0 } };
-
-    const mod: Module = .{ .globals = globals, .exports = exports };
-    try std.testing.expect(try findMetaBytes(mod) == null);
-}
-
-test "findMetaBytes rejects range outside any data segment" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const Instruction = @import("instruction.zig").Instruction;
-    const alloc = arena.allocator();
-
-    const init_ptr = try alloc.alloc(Instruction, 1);
-    init_ptr[0] = .{ .i32_const = 5000 };
-    const init_len = try alloc.alloc(Instruction, 1);
-    init_len[0] = .{ .i32_const = 10 };
-    const globals = try alloc.alloc(module_mod.Global, 2);
-    globals[0] = .{ .ty = .{ .valtype = .i32, .mut = .immutable }, .init = init_ptr };
-    globals[1] = .{ .ty = .{ .valtype = .i32, .mut = .immutable }, .init = init_len };
-    const exports = try alloc.alloc(module_mod.Export, 2);
-    exports[0] = .{ .name = "__udon_meta_ptr", .desc = .{ .global = 0 } };
-    exports[1] = .{ .name = "__udon_meta_len", .desc = .{ .global = 1 } };
-
-    // Single data segment at offset 0 with 16 bytes — doesn't cover 5000..5010.
-    const offset_expr = try alloc.alloc(Instruction, 1);
-    offset_expr[0] = .{ .i32_const = 0 };
-    const seg = try alloc.alloc(u8, 16);
-    @memset(seg, 0);
-    const datas = try alloc.alloc(module_mod.Data, 1);
-    datas[0] = .{ .memory_index = 0, .offset = offset_expr, .init = seg };
-
-    const mod: Module = .{ .globals = globals, .exports = exports, .datas = datas };
-    try std.testing.expectError(error.MetaRangeOutOfData, findMetaBytes(mod));
-}
-
-test "parseFromModule end-to-end with func exports" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const mod = try makeBenchLikeModule(arena.allocator(), minimal_json);
-    const meta_opt = try parseFromModule(arena.allocator(), mod);
-    try std.testing.expect(meta_opt != null);
-    const meta = meta_opt.?;
-    try std.testing.expectEqual(@as(u32, 1), meta.version);
-    try std.testing.expectEqualStrings("playerName", meta.fields[0].key);
-}
-
-test "parseFromModule returns null when meta is absent" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const mod: Module = .{};
-    const meta_opt = try parseFromModule(arena.allocator(), mod);
-    try std.testing.expect(meta_opt == null);
-}

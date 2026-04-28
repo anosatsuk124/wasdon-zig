@@ -60,9 +60,7 @@ pub const Error = error{
     InvalidBehaviourSyncMode,
     InvalidEventKind,
     InvalidMemoryPageBounds,
-    NonConstMetaLocator,
-    MetaRangeOutOfData,
-    MetaSpansMultipleSegments,
+    NonConstInitExpr,
 } || std.mem.Allocator.Error || std.Io.Writer.Error;
 
 /// Options the translator takes. For the MVP we pass through the defaults
@@ -5340,7 +5338,8 @@ test "translate bench.wasm end-to-end (structural)" {
     defer arena.deinit();
     const aa = arena.allocator();
     const mod = try wasm.parseModule(aa, bench);
-    const meta = try wasm.parseUdonMetaFromModule(aa, mod);
+    const meta_json = @embedFile("testdata/bench.udon_meta.json");
+    const meta: ?wasm.UdonMeta = try wasm.parseUdonMeta(aa, meta_json);
 
     var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer buf.deinit();
@@ -5482,7 +5481,8 @@ fn translateBench(gpa: std.mem.Allocator) ![]u8 {
     defer arena.deinit();
     const aa = arena.allocator();
     const mod = try wasm.parseModule(aa, bench);
-    const meta = try wasm.parseUdonMetaFromModule(aa, mod);
+    const meta_json = @embedFile("testdata/bench.udon_meta.json");
+    const meta: ?wasm.UdonMeta = try wasm.parseUdonMeta(aa, meta_json);
 
     var buf: std.Io.Writer.Allocating = .init(gpa);
     errdefer buf.deinit();
@@ -8730,7 +8730,8 @@ test "pcToLine: bench.wasm puts __Set__ and the 65528 straddle probe near each o
     defer arena.deinit();
     const aa = arena.allocator();
     const mod = try wasm.parseModule(aa, bench);
-    const meta = try wasm.parseUdonMetaFromModule(aa, mod);
+    const meta_json = @embedFile("testdata/bench.udon_meta.json");
+    const meta: ?wasm.UdonMeta = try wasm.parseUdonMeta(aa, meta_json);
 
     var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer buf.deinit();
