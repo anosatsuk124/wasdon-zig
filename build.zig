@@ -282,6 +282,42 @@ pub fn build(b: *std.Build) void {
     const wasi_hello_step = b.step("wasi-hello-example", "Mirror the wasi-hello .wasm fixture into translator testdata");
     wasi_hello_step.dependOn(&copy_wasi_hello.step);
 
+    // === post-MVP example fixture mirror ===
+    // Each post-mvp/<dir>/example.wasm is built by the contributor with
+    // `wat2wasm --enable-bulk-memory` (or `--enable-reference-types`) per
+    // that dir's README. This step copies each compiled .wasm into the
+    // translator test-data tree so the integration tests in
+    // `src/translator/translate.zig` can pick them up via `@embedFile`.
+    // The source .wasm files are checked in (they are tiny, hand-built
+    // fixtures); this mirror keeps the testdata copies in sync without
+    // requiring developers to remember the cp by hand.
+    const PostMvpFixture = struct {
+        src_dir: []const u8,
+        dst_name: []const u8,
+    };
+    const post_mvp_fixtures = [_]PostMvpFixture{
+        .{ .src_dir = "examples/post-mvp/bulk-memory-passive", .dst_name = "src/translator/testdata/bulk_memory_passive.wasm" },
+        .{ .src_dir = "examples/post-mvp/memory-init", .dst_name = "src/translator/testdata/memory_init.wasm" },
+        .{ .src_dir = "examples/post-mvp/data-drop", .dst_name = "src/translator/testdata/data_drop.wasm" },
+        .{ .src_dir = "examples/post-mvp/reference-types-funcref", .dst_name = "src/translator/testdata/reference_types_funcref.wasm" },
+    };
+    const copy_post_mvp = b.addUpdateSourceFiles();
+    for (post_mvp_fixtures) |fx| {
+        const src_path = b.fmt("{s}/example.wasm", .{fx.src_dir});
+        copy_post_mvp.addCopyFileToSource(b.path(src_path), fx.dst_name);
+    }
+    const post_mvp_step = b.step("post-mvp-examples", "Mirror post-mvp .wasm fixtures into translator testdata");
+    post_mvp_step.dependOn(&copy_post_mvp.step);
+
+    // Wire the post-MVP fixture mirror into `zig build test` so the
+    // integration tests in `src/translator/translate.zig` always see the
+    // current `examples/post-mvp/<dir>/example.wasm` content via
+    // `@embedFile`, without contributors having to remember a separate
+    // mirror invocation. The wasi-hello mirror is intentionally left as a
+    // manual step (its source .wasm is not always present locally), but
+    // the post-MVP fixtures are committed alongside their WAT producers.
+    test_step.dependOn(&copy_post_mvp.step);
+
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
     // The Zig build system is entirely implemented in userland, which means

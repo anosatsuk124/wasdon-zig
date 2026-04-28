@@ -29,6 +29,13 @@ pub const Immediate = enum {
     memory_op, // memory.size / memory.grow — consumes a reserved 0x00 byte
     memory_copy_args, // memory.copy — two reserved 0x00 bytes (src/dst memidx)
     memory_fill_args, // memory.fill — one reserved 0x00 byte (memidx)
+    /// memory.init — `data_idx:uleb128` followed by a reserved byte. The
+    /// reserved byte is generalised to `memidx` by the post-MVP
+    /// reference-types proposal but the translator only supports
+    /// `memidx == 0` (single-memory assumption).
+    memory_init_args,
+    /// data.drop — `data_idx:uleb128` only.
+    data_drop_arg,
 };
 
 pub const OpSpec = struct {
@@ -262,6 +269,8 @@ pub const prefix_fc_spec = [_]OpSpec{
     .{ .opcode = 0x05, .tag = "i64_trunc_sat_f32_u", .mnemonic = "i64.trunc_sat_f32_u", .imm = .none },
     .{ .opcode = 0x06, .tag = "i64_trunc_sat_f64_s", .mnemonic = "i64.trunc_sat_f64_s", .imm = .none },
     .{ .opcode = 0x07, .tag = "i64_trunc_sat_f64_u", .mnemonic = "i64.trunc_sat_f64_u", .imm = .none },
+    .{ .opcode = 0x08, .tag = "memory_init", .mnemonic = "memory.init", .imm = .memory_init_args },
+    .{ .opcode = 0x09, .tag = "data_drop", .mnemonic = "data.drop", .imm = .data_drop_arg },
     .{ .opcode = 0x0A, .tag = "memory_copy", .mnemonic = "memory.copy", .imm = .memory_copy_args },
     .{ .opcode = 0x0B, .tag = "memory_fill", .mnemonic = "memory.fill", .imm = .memory_fill_args },
 };
@@ -339,7 +348,7 @@ test "0xC0..0xC4 sign-extension are present in spec" {
 }
 
 test "prefix_fc_spec coverage" {
-    try std.testing.expectEqual(@as(usize, 10), prefix_fc_spec.len);
+    try std.testing.expectEqual(@as(usize, 12), prefix_fc_spec.len);
     try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x00).?.tag, "i32_trunc_sat_f32_s"));
     try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x01).?.tag, "i32_trunc_sat_f32_u"));
     try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x02).?.tag, "i32_trunc_sat_f64_s"));
@@ -348,6 +357,10 @@ test "prefix_fc_spec coverage" {
     try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x05).?.tag, "i64_trunc_sat_f32_u"));
     try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x06).?.tag, "i64_trunc_sat_f64_s"));
     try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x07).?.tag, "i64_trunc_sat_f64_u"));
+    try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x08).?.tag, "memory_init"));
+    try std.testing.expect(findPrefixFc(0x08).?.imm == .memory_init_args);
+    try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x09).?.tag, "data_drop"));
+    try std.testing.expect(findPrefixFc(0x09).?.imm == .data_drop_arg);
     try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x0A).?.tag, "memory_copy"));
     try std.testing.expect(findPrefixFc(0x0A).?.imm == .memory_copy_args);
     try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x0B).?.tag, "memory_fill"));
@@ -356,7 +369,7 @@ test "prefix_fc_spec coverage" {
 
 test "findPrefixFc returns null for unknown sub-opcode" {
     try std.testing.expect(findPrefixFc(0x7F) == null);
-    try std.testing.expect(findPrefixFc(0x08) == null);
+    try std.testing.expect(findPrefixFc(0x0C) == null);
 }
 
 test "mnemonicFor returns canonical mnemonic" {

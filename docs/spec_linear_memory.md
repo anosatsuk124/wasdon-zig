@@ -681,6 +681,265 @@ __memfill_end_<id>__:
   any special-case branching. The lowering still pays one comparison
   and one `JUMP_IF_FALSE` for the zero-length case.
 
+## Passive data segments
+
+The bulk-memory proposal generalises the Data section so each segment
+carries a mode byte (see `docs/w3c_wasm_binary_format_note.md`
+"Data segment modes"). The translator distinguishes two storage
+strategies based on that mode.
+
+### Active segments (mode `0x00`, mode `0x02` with `memidx == 0`)
+
+Active segments are applied to linear memory **at translator-time** as
+part of the existing `setupDataSegments` initialization pass: the
+init bytes are written into the initial linear-memory page chunk(s)
+exactly the way Core 1 segments already are. They need **no** runtime
+field. The WASM 2.0 specification states that an active segment is
+implicitly "dropped" immediately after the initial copy completes;
+because the translator never materialises a backing field for an
+active segment, that drop is a no-op (see "data.drop lowering" below).
+
+### Passive segments (mode `0x01`)
+
+Per passive segment (segment index `<idx>`, in declaration order from
+the Data section), the translator declares two Udon fields in the data
+section, named per the `__G__` namespace defined in
+`docs/spec_variable_conversion.md`:
+
+| Field | Type | Initial value | Role |
+|---|---|---|---|
+| `__G__data_seg_<idx>__bytes`   | `SystemByteArray` | translator-time literal containing the segment's `init` bytes | the segment payload that `memory.init` reads from |
+| `__G__data_seg_<idx>__dropped` | `SystemBoolean`   | `false`                                                       | set to `true` by `data.drop`; checked at the head of every `memory.init` to honour WASM trap semantics |
+
+Active segments do **not** receive these fields. The
+`__dropped` flag therefore exists only for segments that the WASM
+program can address through `memory.init` / `data.drop`.
+
+### `SystemByteArray` materialisation
+
+The `__G__data_seg_<idx>__bytes` array is sized to the exact length of
+`segment.init` and populated at translator-time by emitting one
+typed-array setter per byte (analogous to how the function table is
+populated in `docs/spec_call_return_conversion.md` §7). The
+implementer must verify against `docs/udon_nodes.txt` that
+`SystemByteArray.__ctor__SystemInt32__SystemByteArray` and the
+indexer-setter `SystemByteArray.__Set__SystemInt32_SystemByte__SystemVoid`
+exist in the node table. **If `SystemByteArray` is not exposed**, the
+documented fallback is to store the segment as a `SystemUInt32Array`
+packed four bytes per word (little-endian, identical to how the linear
+memory chunks are packed) and unpack each byte at `memory.init` time
+with the same shift/mask sequence used by the byte load helper. The
+choice between these two storage forms is a runtime decision; the
+emitter should commit to one form per build and document which one it
+chose in the generated header comment.
+
+## memory.init lowering
+
+`memory.init` consumes `(dst, src_off, n)` from the operand stack and
+copies `n` bytes from the data segment identified by the immediate
+`data_idx` into linear memory starting at `dst`. The data segment
+must be a passive segment that has not yet been dropped; otherwise the
+WASM specification requires a trap.
+
+### Preconditions
+
+- The segment must already have been declared by the data-section
+  pass (i.e. `__G__data_seg_<data_idx>__bytes` and
+  `__G__data_seg_<data_idx>__dropped` must exist in the emitted data
+  section). The translator validates this at lowering time —
+  `memory.init` against an unknown `data_idx`, or against an active
+  segment that does not own a `__dropped` field, is a translation
+  error.
+- `data_idx` is a static immediate; the dispatch on which segment to
+  read from is resolved entirely at translator-time, so the lowering
+  inlines the segment field name directly into the generated EXTERN
+  argument list — there is no runtime indirection through a "segment
+  table".
+
+### Scratch slots
+
+Like `memory.copy` and `memory.fill`, the lowering allocates a single
+shared `_mi_*` family in the data section and reuses it across **every**
+`memory.init` site in the program. Reuse is sound for the same reason:
+each call body fully writes each scratch before reading it, and
+`memory.init` cannot be nested inside another `memory.init` (each site
+is one straight-line instruction sequence with no calls).
+
+| Field | Type | Role |
+|---|---|---|
+| `_mi_dst`  | `SystemInt32`   | snapshot of the popped `dst` operand |
+| `_mi_src`  | `SystemInt32`   | snapshot of the popped `src_off` operand (offset within the segment) |
+| `_mi_n`    | `SystemInt32`   | snapshot of the popped `n` operand |
+| `_mi_i`    | `SystemInt32`   | loop induction variable |
+| `_mi_addr` | `SystemInt32`   | `dst + i` for the current iteration (also reused as `src_off + i` for segment indexing) |
+| `_mi_byte` | `SystemInt32`   | byte value loaded from the segment, forwarded into `emitMemStoreByteAt` |
+| `_mi_cmp`  | `SystemBoolean` | per-iteration `i < n` guard, plus reused for the bounds-check and dropped-check booleans |
+
+The `_mi_*` family is intentionally distinct from `_mc_*` and `_mf_*`
+so `memory.init` never aliases `memory.copy` / `memory.fill` even if a
+future optimisation pass interleaves them; per-site uniqueness is
+provided by the loop labels.
+
+### Per-call labels via `block_counter`
+
+Three labels are emitted per call, uniqued by
+`Translator.block_counter` (incremented at the start of the call):
+
+- `__meminit_loop_<id>__` — head of the byte-copy loop
+- `__meminit_end_<id>__`  — fall-through join after the loop
+- `__meminit_trap_<id>__` — branch target for the dropped-check and
+  bounds-check failures
+
+Two `memory.init` ops in the same function therefore produce two
+disjoint label families even though they share the underlying scratch
+fields.
+
+### Order of operations (per call)
+
+1. **Snapshot operands** — pop `n`, `src_off`, `dst` off the WASM
+   stack and `COPY` them into `_mi_n`, `_mi_src`, `_mi_dst`.
+2. **Dropped check** — load `__G__data_seg_<idx>__dropped` and
+   `JUMP_IF_FALSE` over the trap (so falling through means "not yet
+   dropped, proceed"); on `true`, `JUMP, __meminit_trap_<id>__`.
+3. **Bounds check (segment side)** — compute `_mi_src + _mi_n` and
+   compare against the literal length of the segment (known at
+   translator-time, emitted as a `__c_i32_<seg_len>__` constant).
+   On overflow, `JUMP, __meminit_trap_<id>__`.
+4. **Bounds check (memory side)** — compute `_mi_dst + _mi_n` and
+   compare against `__G__memory_size_pages * 65536`. On overflow,
+   `JUMP, __meminit_trap_<id>__`.
+5. **Loop init** — `_mi_i := 0`.
+6. **Loop body** at `__meminit_loop_<id>__`:
+   - `_mi_cmp := _mi_i < _mi_n`; `JUMP_IF_FALSE __meminit_end_<id>__`.
+   - `_mi_byte := __G__data_seg_<idx>__bytes[_mi_src + _mi_i]` via the
+     `SystemByteArray` getter (or the packed-`SystemUInt32Array`
+     fallback described above).
+   - `_mi_addr := _mi_dst + _mi_i`.
+   - Equivalent of `emitMemStoreByteAt(_mi_addr, _mi_byte)` — reuse
+     the existing byte-store helper so chunk addressing and RMW
+     semantics stay consistent.
+   - `_mi_i := _mi_i + 1`.
+   - `JUMP, __meminit_loop_<id>__`.
+7. **Trap label** at `__meminit_trap_<id>__` — emit a host-trap call
+   (when one is wired up) or, in the meantime, fall straight into
+   `__meminit_end_<id>__` while leaving a translator comment marking
+   the spec-mandated trap site. The choice is left to the emitter so
+   long as it is documented in the generated assembly.
+8. **Join label** at `__meminit_end_<id>__`.
+
+### Skeleton (per call)
+
+```uasm
+    # snapshot operands
+    PUSH, <wasm_stack_dst>;     PUSH, _mi_dst; COPY
+    PUSH, <wasm_stack_src_off>; PUSH, _mi_src; COPY
+    PUSH, <wasm_stack_n>;       PUSH, _mi_n;   COPY
+
+    # dropped check: if __G__data_seg_<idx>__dropped == true → trap
+    PUSH, __G__data_seg_<idx>__dropped
+    JUMP_IF_FALSE, __meminit_dropped_ok_<id>__
+    JUMP, __meminit_trap_<id>__
+__meminit_dropped_ok_<id>__:
+
+    # bounds checks (segment side, memory side) ... → trap on failure
+
+    # i := 0
+    PUSH, __c_i32_0; PUSH, _mi_i; COPY
+
+__meminit_loop_<id>__:
+    PUSH, _mi_i; PUSH, _mi_n; PUSH, _mi_cmp
+    EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+    PUSH, _mi_cmp
+    JUMP_IF_FALSE, __meminit_end_<id>__
+
+    # _mi_addr := src_off + i  (segment index)
+    PUSH, _mi_src; PUSH, _mi_i; PUSH, _mi_addr
+    EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+    # _mi_byte := __G__data_seg_<idx>__bytes[_mi_addr]
+    PUSH, __G__data_seg_<idx>__bytes; PUSH, _mi_addr; PUSH, _mi_byte
+    EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+
+    # _mi_addr := dst + i  (memory address)
+    PUSH, _mi_dst; PUSH, _mi_i; PUSH, _mi_addr
+    EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+    # ... emitMemStoreByteAt(_mi_addr, _mi_byte) ...
+
+    PUSH, _mi_i; PUSH, __c_i32_1; PUSH, _mi_i
+    EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+    JUMP, __meminit_loop_<id>__
+
+__meminit_trap_<id>__:
+    # host-trap call (if wired) — otherwise fall through with a
+    # translator comment marking the spec-mandated trap site.
+
+__meminit_end_<id>__:
+```
+
+### Known limitations / future work
+
+- **Pure byte loop, no bulk fast path.** Even when `dst`, `src_off`,
+  and `n` are word-aligned, the lowering still walks one byte at a
+  time. A future optimiser could detect alignment and emit a
+  `SystemUInt32Array.__Set__` per word once the underlying segment
+  storage matches.
+- **`data_idx` must resolve at translator-time.** The bulk-memory
+  spec already requires `data_idx` to be a static immediate, so this
+  is not a translator-imposed restriction — it is just worth noting
+  that the dispatch on which segment to read from is fully resolved
+  at compile time.
+- **Trap implementation is open.** The `__meminit_trap_<id>__` label
+  is reserved by this lowering, but the actual trap mechanism (a
+  host extern call vs. a no-op vs. setting a global error flag) is
+  deferred to the implementer; the spec only requires that the
+  observable behaviour for an in-bounds, not-yet-dropped segment is
+  the byte copy described above.
+
+## data.drop lowering
+
+`data.drop` has no operand-stack effect. Its single immediate is the
+`data_idx` of the segment to mark as dropped.
+
+### Lowering
+
+- **Passive segments** (mode `0x01`): emit one `COPY` that sets
+  `__G__data_seg_<idx>__dropped := true`. Concretely, the constant
+  `__c_bool_true__` (already provided by the shared common-data
+  block when boolean constants are needed; otherwise materialise a
+  one-shot `SystemBoolean` literal via the standard initial-value
+  rules in `docs/udon_specs.md` §4.7) is copied into the dropped
+  flag. No labels and no scratch are required.
+- **Active segments** (mode `0x00` or mode `0x02` with `memidx == 0`):
+  WASM 2.0 defines `data.drop` on an active segment as a no-op,
+  because active segments are conceptually already dropped after
+  their instantiation-time copy. The translator emits a single
+  comment of the form `# data.drop on active segment <idx>: no-op`
+  and nothing else; in particular, no field is read or written.
+
+### Skeleton (passive segment)
+
+```uasm
+    # __G__data_seg_<idx>__dropped := true
+    PUSH, __c_bool_true__
+    PUSH, __G__data_seg_<idx>__dropped
+    COPY
+```
+
+### Skeleton (active segment)
+
+```uasm
+    # data.drop on active segment <idx>: no-op
+```
+
+### Interaction with `memory.init`
+
+A passive segment whose `__dropped` flag is `true` causes any
+subsequent `memory.init` against it to take the trap branch defined
+in the lowering above. There is no Udon-level "free the storage"
+operation — the `SystemByteArray` field remains live in the data
+section even after a `data.drop`, because Udon has no way to release
+a typed-array field at runtime. The flag is therefore the sole
+mechanism that distinguishes "dropped" from "not yet dropped".
+
 ## Open Questions and Constraints
 
 - Shared memory and the threads proposal are not supported; loads and stores emit no fence/atomic semantics.

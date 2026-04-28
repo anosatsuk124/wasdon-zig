@@ -40,6 +40,19 @@ pub const ParseError = error{
     MalformedExportDesc,
     MalformedElementSegment,
     MalformedDataSegment,
+    /// Data segment mode 0x02 with a non-zero memidx: parser sees a
+    /// well-formed segment but the translator's single-memory assumption
+    /// (see `docs/spec_linear_memory.md`) cannot represent it. Rejected at
+    /// parse time so the rest of the pipeline doesn't have to plumb
+    /// memidx > 0 through.
+    MultiMemoryNotYetSupported,
+    /// `funcref` (`0x70`) appears in a position that would require
+    /// materializing a first-class function reference (param / result /
+    /// local / global). The decoder accepts `funcref` so reference-types
+    /// modules round-trip, but the translator has no Udon-side
+    /// representation yet — see `docs/w3c_wasm_binary_format_note.md`
+    /// "Reference-types `funcref` value type (post-MVP)".
+    FuncrefValueTypeNotYetSupported,
     FuncCodeCountMismatch,
 
     // Module header

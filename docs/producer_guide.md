@@ -41,6 +41,34 @@ end-to-end):
 - **`memory.fill`** (bulk-memory, opcode `0xFC 0x0B`) — forward
   byte-store loop, see `docs/spec_linear_memory.md`
   §"memory.fill lowering" and `examples/post-mvp/memory-fill/`.
+- **Passive data segments + DataCount section** (bulk-memory) — Data
+  section mode `0x01` (passive) and the dedicated `DataCount` binary
+  section (id `12`, ordered between Element and Code per spec); each
+  passive segment is materialised as a `__G__data_seg_<idx>__bytes`
+  / `__G__data_seg_<idx>__dropped` field pair. See
+  `docs/spec_linear_memory.md` §"Passive data segments",
+  `docs/w3c_wasm_binary_format_note.md` §"DataCount ordering
+  exception" and `examples/post-mvp/bulk-memory-passive/`.
+- **`memory.init`** (bulk-memory, opcode `0xFC 0x08`) — per-byte copy
+  loop from a passive segment into linear memory, with dropped-flag
+  and bounds checks. See `docs/spec_linear_memory.md`
+  §"memory.init lowering" and `examples/post-mvp/memory-init/`.
+- **`data.drop`** (bulk-memory, opcode `0xFC 0x09`) — flips the
+  passive segment's `__dropped` flag (no-op for active segments per
+  WASM 2.0). See `docs/spec_linear_memory.md` §"data.drop lowering"
+  and `examples/post-mvp/data-drop/`.
+- **`reference-types` (decoder subset)** — `funcref` value-type byte
+  (`0x70`) is accepted by the value-type decoder, **but** any
+  appearance in a function param/result, local, or global type
+  position is rejected with `FuncrefValueTypeNotYetSupported`. Today
+  the only practical use is enabling toolchains that emit the
+  generalised `call_indirect` encoding below.
+- **`call_indirect` with explicit `table_idx`** — the trailing byte
+  is decoded as a `uleb128` table index instead of a reserved zero;
+  the lowering still requires `table_idx == 0`. Other values are
+  rejected with `MultiTableNotYetSupported`. See
+  `docs/spec_call_return_conversion.md` §7.5 and
+  `examples/post-mvp/reference-types-funcref/`.
 - **`nontrapping-fptoint`** — saturating float-to-int family
   (`i32.trunc_sat_f32_s/u`, `i32.trunc_sat_f64_s/u`,
   `i64.trunc_sat_f32_s/u`, `i64.trunc_sat_f64_s/u`, opcodes
@@ -53,9 +81,42 @@ You **must** pin your toolchain to MVP-only output:
 
 | Toolchain | What to do                                                          |
 |-----------|---------------------------------------------------------------------|
-| Zig       | `cpu_model = .{ .explicit = &std.Target.wasm.cpu.mvp }` on a `wasm32-freestanding` target. The default `generic` model enables `multivalue` / `reference-types` (the parser still refuses these), in addition to the proposals listed above as accepted post-MVP extensions (`mutable-globals`, `sign-ext`, the `bulk-memory` ops `memory.copy` / `memory.fill`, and `nontrapping-fptoint` — those flow through end-to-end). See `build.zig` in this repo for the canonical setup. |
+| Zig       | `cpu_model = .{ .explicit = &std.Target.wasm.cpu.mvp }` on a `wasm32-freestanding` target. The default `generic` model enables `multivalue` (the parser still refuses this), in addition to the proposals listed above as accepted post-MVP extensions (`mutable-globals`, `sign-ext`, the full `bulk-memory` op set — `memory.copy` / `memory.fill` / `memory.init` / `data.drop` plus passive-segment / DataCount handling, `nontrapping-fptoint`, and the `reference-types` decoder subset described above) flow through end-to-end. See `build.zig` in this repo for the canonical setup. |
 | Rust      | Use the `wasm32v1-none` target — it is the official "WASM 1.0 / MVP only" target and disables every post-MVP feature by default. `wasm32-unknown-unknown` will *not* work without aggressive `-C target-feature=-…` flags, and even then is a moving target. |
-| WAT/wasm-tools | Hand-author or process with `wasm-tools` and avoid the proposal extensions. |
+| WAT/wasm-tools | Hand-author or process with `wasm-tools` / `wabt`. The bulk-memory and reference-types proposals are off by default; opt them in as described in "wat2wasm flags for post-MVP examples" below. |
+
+### wat2wasm flags for post-MVP examples
+
+Hand-authored WAT examples that exercise the post-MVP extensions
+above must opt the relevant proposals in at the `wat2wasm` (WABT)
+command line, because WABT defaults to a strict MVP encoder. The
+flags the translator's example fixtures rely on:
+
+```sh
+# Bulk-memory: passive data segments, DataCount, memory.init, data.drop
+# (memory.copy / memory.fill also live under this flag)
+wat2wasm --enable-bulk-memory example.wat -o example.wasm
+
+# reference-types: funcref value byte and call_indirect with explicit
+# table index (varuint table_idx instead of the reserved 0x00)
+wat2wasm --enable-reference-types example.wat -o example.wasm
+
+# Combined — most post-MVP examples enable both because reference-types
+# implies funcref tables, which in turn pair naturally with bulk-memory
+# segment management.
+wat2wasm --enable-bulk-memory --enable-reference-types example.wat -o example.wasm
+```
+
+Without `--enable-bulk-memory`, WABT will refuse the `(data passive
+...)` syntax and the `memory.init` / `data.drop` instructions; without
+`--enable-reference-types`, it will reject the explicit-table form of
+`(call_indirect (type ...) <tableidx>)` and treat `funcref` value
+types as unknown. The flags only affect the encoder — they do **not**
+add unsupported features behind your back, so passing them while
+writing strict MVP WAT is harmless.
+
+The `examples/post-mvp/` fixtures the translator ships have their
+exact `wat2wasm` invocation written in their per-example `README.md`.
 
 ### Mutable globals across the boundary
 

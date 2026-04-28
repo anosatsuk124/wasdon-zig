@@ -61,6 +61,17 @@ pub const Error = error{
     InvalidEventKind,
     InvalidMemoryPageBounds,
     NonConstInitExpr,
+    /// `call_indirect` with a non-zero `table_idx` (post-MVP
+    /// reference-types). The decoder accepts the explicit `table_idx`
+    /// varuint, but the translator still assumes a single function
+    /// table — see docs/spec_call_return_conversion.md §7.5.
+    MultiTableNotYetSupported,
+    /// `funcref` (`0x70`) reached a materialization site — i.e. it is
+    /// being asked to back a local, parameter, result, global, or
+    /// stack slot. The translator has no Udon-side representation
+    /// for first-class function references; see
+    /// docs/w3c_wasm_binary_format_note.md "Reference-types `funcref`".
+    FuncrefValueTypeNotYetSupported,
 } || std.mem.Allocator.Error || std.Io.Writer.Error;
 
 /// Options the translator takes. For the MVP we pass through the defaults
@@ -555,12 +566,20 @@ const Translator = struct {
 
     /// Default Udon type for a WASM `ValType`. Used by both the
     /// imported-globals and module-globals slot emitters.
-    fn udonTypeForValType(vt: wasm.types.ValType) tn.TypeName {
+    fn udonTypeForValType(vt: wasm.types.ValType) Error!tn.TypeName {
         return switch (vt) {
             .i32 => tn.int32,
             .i64 => tn.int64,
             .f32 => tn.single,
             .f64 => tn.double,
+            // The decoder accepts `funcref` so reference-types modules
+            // round-trip, but the translator has no Udon-side
+            // representation for first-class function references. Per
+            // docs/spec_call_return_conversion.md §7.5 the only
+            // reference-types support today is `call_indirect` with
+            // `table_idx == 0`; any funcref value (param / result /
+            // local / global / stack) is rejected here.
+            .funcref => return error.FuncrefValueTypeNotYetSupported,
         };
     }
 
@@ -626,7 +645,7 @@ const Translator = struct {
             .global => |gt| {
                 defer imp_idx += 1;
                 const name = self.global_udon_names[imp_idx];
-                var ud_ty: tn.TypeName = udonTypeForValType(gt.valtype);
+                var ud_ty: tn.TypeName = try udonTypeForValType(gt.valtype);
                 var lit: Literal = .null_literal;
                 var is_export = false;
                 var sync: ?udon.asm_.SyncMode = null;
@@ -688,7 +707,7 @@ const Translator = struct {
             const gidx: u32 = self.num_imported_globals + @as(u32, @intCast(i));
             const g = self.mod.globals[i];
             const name = self.global_udon_names[gidx];
-            var ud_ty: tn.TypeName = udonTypeForValType(g.ty.valtype);
+            var ud_ty: tn.TypeName = try udonTypeForValType(g.ty.valtype);
             // Per docs/udon_specs.md §4.7, only SystemInt32/UInt32/Single/String
             // accept non-null/non-this numeric literals. i64/f64 must be null.
             var lit: Literal = if (g.init.len == 1) switch (g.init[0]) {
@@ -728,7 +747,14 @@ const Translator = struct {
     fn requiredPagesForData(self: *const Translator) u32 {
         var max_end: u32 = 0;
         for (self.mod.datas) |d| {
-            const offset = wasm.const_eval.evalConstI32(self.mod, d.offset) catch continue;
+            // Passive segments (post-MVP `bulk-memory`) hold their bytes for
+            // later `memory.init` and never determine a static page floor.
+            // Phase 3 will revisit this when memory.init lowering lands.
+            const active = switch (d.mode) {
+                .active => |a| a,
+                .passive => continue,
+            };
+            const offset = wasm.const_eval.evalConstI32(self.mod, active.offset) catch continue;
             if (offset < 0) continue;
             const end = @as(u32, @intCast(offset)) + @as(u32, @intCast(d.init.len));
             if (end > max_end) max_end = end;
@@ -844,6 +870,22 @@ const Translator = struct {
         try self.asm_.addData(.{ .name = "_mf_i", .ty = tn.int32, .init = .{ .int32 = 0 } });
         try self.asm_.addData(.{ .name = "_mf_addr", .ty = tn.int32, .init = .{ .int32 = 0 } });
         try self.asm_.addData(.{ .name = "_mf_cmp", .ty = tn.boolean, .init = .null_literal });
+        // Scratch slots for memory.init (passive-segment byte loop). Distinct
+        // from `_mc_*` / `_mf_*` so memory.init never aliases the other bulk
+        // ops. Per docs/spec_linear_memory.md "memory.init lowering".
+        try self.asm_.addData(.{ .name = "_mi_dst", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mi_src", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mi_n", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mi_i", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mi_addr", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mi_byte", .ty = tn.int32, .init = .{ .int32 = 0 } });
+        try self.asm_.addData(.{ .name = "_mi_byte_b", .ty = tn.byte, .init = .null_literal });
+        try self.asm_.addData(.{ .name = "_mi_cmp", .ty = tn.boolean, .init = .null_literal });
+        // Shared "true" boolean used by data.drop (and any future op that
+        // needs to assign a Boolean literal). SystemBoolean cannot be
+        // initialised to a non-null value (docs/udon_specs.md §4.7), so
+        // the constant is materialised at startup via SystemConvert.
+        try self.asm_.addData(.{ .name = "__c_bool_true__", .ty = tn.boolean, .init = .null_literal });
         // Scratch slots for memory.grow.
         try self.asm_.addData(.{ .name = "_mg_old", .ty = tn.int32, .init = .{ .int32 = 0 } });
         try self.asm_.addData(.{ .name = "_mg_new", .ty = tn.int32, .init = .{ .int32 = 0 } });
@@ -985,19 +1027,19 @@ const Translator = struct {
 
             for (ty.params, 0..) |p, i| {
                 const n = try names.param(self.aa(), fn_name, @intCast(i));
-                try self.asm_.addData(.{ .name = n, .ty = udonTypeOf(p), .init = zeroLit(p) });
+                try self.asm_.addData(.{ .name = n, .ty = try udonTypeOf(p), .init = try zeroLit(p) });
             }
             var li: u32 = 0;
             for (code.locals) |lg| {
                 for (0..lg.count) |_| {
                     const n = try names.local(self.aa(), fn_name, li);
-                    try self.asm_.addData(.{ .name = n, .ty = udonTypeOf(lg.ty), .init = zeroLit(lg.ty) });
+                    try self.asm_.addData(.{ .name = n, .ty = try udonTypeOf(lg.ty), .init = try zeroLit(lg.ty) });
                     li += 1;
                 }
             }
             for (ty.results, 0..) |r, i| {
                 const n = try names.returnSlot(self.aa(), fn_name, @intCast(i));
-                try self.asm_.addData(.{ .name = n, .ty = udonTypeOf(r), .init = zeroLit(r) });
+                try self.asm_.addData(.{ .name = n, .ty = try udonTypeOf(r), .init = try zeroLit(r) });
             }
             // S-slot decls are deferred until after codegen; see
             // `emitFunctionStackSlots`.
@@ -1024,12 +1066,15 @@ const Translator = struct {
             for (bits, 0..) |mask, depth_usz| {
                 const d: u32 = @intCast(depth_usz);
                 for (all_val_types) |vt| {
-                    if ((mask & slotTypeBit(vt)) == 0) continue;
+                    // `all_val_types` excludes `.funcref`, so these calls
+                    // never see the funcref arm; the `try` here is just
+                    // signature plumbing for the new error union.
+                    if ((mask & try slotTypeBit(vt)) == 0) continue;
                     const n = try names.stackSlot(self.aa(), fn_name, d, vt);
                     try self.asm_.addData(.{
                         .name = n,
-                        .ty = udonTypeOf(vt),
-                        .init = zeroLit(vt),
+                        .ty = try udonTypeOf(vt),
+                        .init = try zeroLit(vt),
                     });
                 }
             }
@@ -1345,6 +1390,13 @@ const Translator = struct {
         try self.asm_.push(self.memory_initial_pages_name);
         try self.asm_.push(self.memory_size_pages_name);
         try self.asm_.copy();
+        // Materialise the shared "true" SystemBoolean used by data.drop
+        // and any future op that needs a literal `true` (SystemBoolean
+        // fields cannot carry a non-null literal initializer per
+        // docs/udon_specs.md §4.7).
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("__c_bool_true__");
+        try self.asm_.extern_("SystemConvert.__ToBoolean__SystemInt32__SystemBoolean");
         // Write every declared data segment into linear memory. Aligned
         // full-word writes go through SystemUInt32Array.__Set directly;
         // unaligned head / tail bytes fall back to shift/mask RMW. Each
@@ -1444,7 +1496,81 @@ const Translator = struct {
     }
 
     fn emitDataSegmentInit(self: *Translator, d: wasm.module.Data, seg_id: u32) Error!void {
-        const offset_i = wasm.const_eval.evalConstI32(self.mod, d.offset) catch return;
+        // Passive segments (mode 0x01) are not applied at instantiation;
+        // `memory.init` materialises them on demand. Per
+        // docs/spec_linear_memory.md "Passive data segments" we declare
+        // two backing fields per passive segment:
+        //   __G__data_seg_<idx>__bytes   : SystemByteArray (init bytes)
+        //   __G__data_seg_<idx>__dropped : SystemBoolean   (init=false)
+        // SystemByteArray is on the Udon node table
+        // (SystemByteArray.__ctor / __Set / __Get checked against
+        // docs/udon_nodes.txt) so we use it directly rather than the
+        // packed-SystemUInt32Array fallback. The byte array is allocated
+        // and populated at startup time via the per-segment loop below;
+        // SystemBoolean cannot carry a non-null literal initializer
+        // (docs/udon_specs.md §4.7) so the `__dropped` flag is set to
+        // `false` at startup using SystemConvert.__ToBoolean of __c_i32_0.
+        const active = switch (d.mode) {
+            .active => |a| a,
+            .passive => {
+                const bytes_name = try std.fmt.allocPrint(self.aa(), "__G__data_seg_{d}__bytes", .{seg_id});
+                const dropped_name = try std.fmt.allocPrint(self.aa(), "__G__data_seg_{d}__dropped", .{seg_id});
+                try self.asm_.addData(.{
+                    .name = bytes_name,
+                    .ty = tn.byte_array,
+                    .init = .null_literal,
+                });
+                try self.asm_.addData(.{
+                    .name = dropped_name,
+                    .ty = tn.boolean,
+                    .init = .null_literal,
+                });
+                try self.asm_.comment(try std.fmt.allocPrint(
+                    self.aa(),
+                    "passive data segment {d}: allocate {d}-byte SystemByteArray and seed bytes",
+                    .{ seg_id, d.init.len },
+                ));
+                // bytes_name := new SystemByteArray(d.init.len)
+                const len_const_name = try std.fmt.allocPrint(self.aa(), "__ds_len_{d}", .{seg_id});
+                try self.asm_.addData(.{
+                    .name = len_const_name,
+                    .ty = tn.int32,
+                    .init = .{ .int32 = @intCast(d.init.len) },
+                });
+                try self.asm_.push(len_const_name);
+                try self.asm_.push(bytes_name);
+                try self.asm_.extern_("SystemByteArray.__ctor__SystemInt32__SystemByteArray");
+                // Populate every non-zero byte. SystemByteArray defaults
+                // to all-zero; emit a setter only for non-zero bytes to
+                // keep the init payload small for sparse segments.
+                for (d.init, 0..) |b, i| {
+                    if (b == 0) continue;
+                    const idx_name = try std.fmt.allocPrint(self.aa(), "__ds_seg{d}_idx_{d}", .{ seg_id, i });
+                    const val_name = try std.fmt.allocPrint(self.aa(), "__ds_seg{d}_b_{d}", .{ seg_id, i });
+                    try self.asm_.addData(.{ .name = idx_name, .ty = tn.int32, .init = .{ .int32 = @intCast(i) } });
+                    // SystemByte fields can only be initialised to null
+                    // (docs/udon_specs.md §4.7); we materialise the byte
+                    // value at startup via SystemConvert from an Int32
+                    // constant.
+                    const i32val_name = try std.fmt.allocPrint(self.aa(), "__ds_seg{d}_bi_{d}", .{ seg_id, i });
+                    try self.asm_.addData(.{ .name = i32val_name, .ty = tn.int32, .init = .{ .int32 = @intCast(b) } });
+                    try self.asm_.addData(.{ .name = val_name, .ty = tn.byte, .init = .null_literal });
+                    try self.asm_.push(i32val_name);
+                    try self.asm_.push(val_name);
+                    try self.asm_.extern_("SystemConvert.__ToByte__SystemInt32__SystemByte");
+                    try self.asm_.push(bytes_name);
+                    try self.asm_.push(idx_name);
+                    try self.asm_.push(val_name);
+                    try self.asm_.extern_("SystemByteArray.__Set__SystemInt32_SystemByte__SystemVoid");
+                }
+                // dropped_name := false
+                try self.asm_.push("__c_i32_0");
+                try self.asm_.push(dropped_name);
+                try self.asm_.extern_("SystemConvert.__ToBoolean__SystemInt32__SystemBoolean");
+                return;
+            },
+        };
+        const offset_i = wasm.const_eval.evalConstI32(self.mod, active.offset) catch return;
         if (offset_i < 0) return;
         if (d.init.len == 0) return;
 
@@ -1793,7 +1919,7 @@ const Translator = struct {
         const def_idx = fn_idx - self.num_imported_funcs;
         var bits = &self.fn_slot_type_bits[def_idx];
         while (bits.items.len <= depth) try bits.append(self.gpa, 0);
-        bits.items[depth] |= slotTypeBit(vt);
+        bits.items[depth] |= try slotTypeBit(vt);
     }
 
     fn emitInstrs(self: *Translator, ctx: *FuncCtx, body: []const Instruction) Error!void {
@@ -1935,12 +2061,22 @@ const Translator = struct {
             .br_table => |bt| try self.emitBrTable(ctx, bt),
 
             .call => |fn_idx| try self.emitCall(ctx, fn_idx),
-            .call_indirect => |tidx| try self.emitCallIndirect(ctx, tidx),
+            // Reference-types post-MVP `call_indirect` carries
+            // `CallIndirectArgs { typeidx, table_idx }`. The translator
+            // still only models a single function table; reject any
+            // `table_idx != 0` with `MultiTableNotYetSupported` per
+            // docs/spec_call_return_conversion.md §7.5.
+            .call_indirect => |args| {
+                if (args.table_idx != 0) return error.MultiTableNotYetSupported;
+                try self.emitCallIndirect(ctx, args.typeidx);
+            },
 
             .memory_size => try self.emitMemorySize(ctx),
             .memory_grow => try self.emitMemoryGrow(ctx),
             .memory_copy => try self.emitMemoryCopy(ctx),
             .memory_fill => |args| try self.emitMemoryFill(ctx, args),
+            .memory_init => |args| try self.emitMemoryInitOp(ctx, args),
+            .data_drop => |idx| try self.emitDataDrop(ctx, idx),
             .i32_load => try self.emitMemLoadWord(ctx, ins),
             .i32_store => try self.emitMemStoreWord(ctx, ins),
             .f32_load => try self.emitMemLoadF32(ctx, ins),
@@ -4844,6 +4980,203 @@ const Translator = struct {
         try self.asm_.label(end_lbl);
     }
 
+    /// `memory.init data_idx, mem` — copy `n` bytes from passive data
+    /// segment `data_idx` (offset `src_off` within the segment) into
+    /// linear memory at `dst`. Stack: `(dst, src_off, n)` (top). Per
+    /// docs/spec_linear_memory.md "memory.init lowering". The `mem`
+    /// immediate must be 0 (single-memory assumption); the decoder
+    /// already enforces this on parse so we do not re-check it here.
+    ///
+    /// Trap behaviour: when the segment has been dropped, when
+    /// `src_off + n > segment_length`, or when
+    /// `dst + n > memory_size_pages * 65536`, the lowering branches to
+    /// `__meminit_trap_<id>__`. The current implementation parks the
+    /// trap label as a fall-through into `__meminit_end_<id>__` with a
+    /// comment marking it as the spec-mandated trap site — host-trap
+    /// wiring is deferred (matching how memory.copy / memory.fill
+    /// currently handle out-of-bounds inputs). See
+    /// docs/spec_linear_memory.md "memory.init lowering" §"Known
+    /// limitations / future work".
+    fn emitMemoryInitOp(self: *Translator, ctx: *FuncCtx, args: anytype) Error!void {
+        const data_idx: u32 = args.data_idx;
+        if (data_idx >= self.mod.datas.len) return error.UnsupportedFeature;
+        // memory.init only makes sense on a passive segment — active
+        // segments have no `__dropped` flag and are already applied at
+        // instantiation. The decoder accepts both modes; we reject the
+        // active-segment case here with a translator error.
+        switch (self.mod.datas[data_idx].mode) {
+            .passive => {},
+            .active => return error.UnsupportedFeature,
+        }
+        const seg_len: u32 = @intCast(self.mod.datas[data_idx].init.len);
+
+        try self.asm_.comment(try std.fmt.allocPrint(
+            self.aa(),
+            "memory.init data_seg={d} (passive, byte loop)",
+            .{data_idx},
+        ));
+
+        // Pop (n, src_off, dst).
+        const n_slot = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        ctx.pop();
+        const src_slot = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        ctx.pop();
+        const dst_slot = try ctx.slotAt(self.aa(), ctx.depth - 1);
+        ctx.pop();
+
+        // _mi_dst := dst ; _mi_src := src_off ; _mi_n := n
+        try self.asm_.push(dst_slot);
+        try self.asm_.push("_mi_dst");
+        try self.asm_.copy();
+        try self.asm_.push(src_slot);
+        try self.asm_.push("_mi_src");
+        try self.asm_.copy();
+        try self.asm_.push(n_slot);
+        try self.asm_.push("_mi_n");
+        try self.asm_.copy();
+
+        const id = self.block_counter;
+        self.block_counter += 1;
+        const loop_lbl = try std.fmt.allocPrint(self.aa(), "__meminit_loop_{d}__", .{id});
+        const end_lbl = try std.fmt.allocPrint(self.aa(), "__meminit_end_{d}__", .{id});
+        const trap_lbl = try std.fmt.allocPrint(self.aa(), "__meminit_trap_{d}__", .{id});
+        const dropped_ok_lbl = try std.fmt.allocPrint(self.aa(), "__meminit_dropped_ok_{d}__", .{id});
+        const site_tag = try std.fmt.allocPrint(self.aa(), "memory.init_{d}", .{id});
+
+        const bytes_name = try std.fmt.allocPrint(self.aa(), "__G__data_seg_{d}__bytes", .{data_idx});
+        const dropped_name = try std.fmt.allocPrint(self.aa(), "__G__data_seg_{d}__dropped", .{data_idx});
+        const seg_len_name = try std.fmt.allocPrint(self.aa(), "__c_seg_len_{d}", .{data_idx});
+        try self.declareScratchIfAbsent(seg_len_name, tn.int32, .{ .int32 = @intCast(seg_len) });
+
+        // Dropped check: if __G__data_seg_<idx>__dropped == false, fall
+        // through; otherwise jump to trap.
+        try self.asm_.push(dropped_name);
+        try self.asm_.jumpIfFalse(dropped_ok_lbl);
+        try self.asm_.jump(trap_lbl);
+        try self.asm_.label(dropped_ok_lbl);
+
+        // Bounds check (segment side): if (src + n) > seg_len → trap.
+        try self.asm_.push("_mi_src");
+        try self.asm_.push("_mi_n");
+        try self.asm_.push("_mi_addr");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push("_mi_addr");
+        try self.asm_.push(seg_len_name);
+        try self.asm_.push("_mi_cmp");
+        try self.asm_.extern_("SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean");
+        try self.asm_.push("_mi_cmp");
+        const seg_ok_lbl = try std.fmt.allocPrint(self.aa(), "__meminit_seg_ok_{d}__", .{id});
+        try self.asm_.jumpIfFalse(seg_ok_lbl);
+        try self.asm_.jump(trap_lbl);
+        try self.asm_.label(seg_ok_lbl);
+
+        // Bounds check (memory side): if (dst + n) > size_pages*65536 → trap.
+        try self.asm_.push("_mi_dst");
+        try self.asm_.push("_mi_n");
+        try self.asm_.push("_mi_addr");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        // _mi_byte (reused as scratch) := size_pages * 65536
+        // 65536 = (1 << 16). We don't have a 65536 constant in common-
+        // data; multiplying by `__c_i32_16384 << 2` would need extra
+        // ops. Materialise the constant as a per-call helper.
+        const page_bytes_name = "__c_i32_65536";
+        try self.declareScratchIfAbsent(page_bytes_name, tn.int32, .{ .int32 = 65536 });
+        try self.asm_.push(self.memory_size_pages_name);
+        try self.asm_.push(page_bytes_name);
+        try self.asm_.push("_mi_byte");
+        try self.asm_.extern_("SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.push("_mi_addr");
+        try self.asm_.push("_mi_byte");
+        try self.asm_.push("_mi_cmp");
+        try self.asm_.extern_("SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean");
+        try self.asm_.push("_mi_cmp");
+        const mem_ok_lbl = try std.fmt.allocPrint(self.aa(), "__meminit_mem_ok_{d}__", .{id});
+        try self.asm_.jumpIfFalse(mem_ok_lbl);
+        try self.asm_.jump(trap_lbl);
+        try self.asm_.label(mem_ok_lbl);
+
+        // _mi_i := 0
+        try self.asm_.push("__c_i32_0");
+        try self.asm_.push("_mi_i");
+        try self.asm_.copy();
+
+        try self.asm_.label(loop_lbl);
+        // _mi_cmp := i < n; if false → end
+        try self.asm_.push("_mi_i");
+        try self.asm_.push("_mi_n");
+        try self.asm_.push("_mi_cmp");
+        try self.asm_.extern_("SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean");
+        try self.asm_.push("_mi_cmp");
+        try self.asm_.jumpIfFalse(end_lbl);
+
+        // _mi_addr := src + i  (segment index)
+        try self.asm_.push("_mi_src");
+        try self.asm_.push("_mi_i");
+        try self.asm_.push("_mi_addr");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        // _mi_byte_b := bytes[_mi_addr] ; _mi_byte := (Int32) _mi_byte_b
+        try self.asm_.push(bytes_name);
+        try self.asm_.push("_mi_addr");
+        try self.asm_.push("_mi_byte_b");
+        try self.asm_.extern_("SystemByteArray.__Get__SystemInt32__SystemByte");
+        try self.asm_.push("_mi_byte_b");
+        try self.asm_.push("_mi_byte");
+        try self.asm_.extern_("SystemConvert.__ToInt32__SystemByte__SystemInt32");
+
+        // _mi_addr := dst + i
+        try self.asm_.push("_mi_dst");
+        try self.asm_.push("_mi_i");
+        try self.asm_.push("_mi_addr");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        // mem[_mi_addr] := _mi_byte (helper masks to low 8 bits)
+        try self.emitMemStoreByteAt("_mi_addr", "_mi_byte", ctx.fn_name, site_tag);
+
+        // i += 1
+        try self.asm_.push("_mi_i");
+        try self.asm_.push("__c_i32_1");
+        try self.asm_.push("_mi_i");
+        try self.asm_.extern_("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32");
+        try self.asm_.jump(loop_lbl);
+
+        // Trap label: spec-mandated trap site. The translator currently
+        // falls through to the join label without raising a host trap;
+        // see docs/spec_linear_memory.md "memory.init lowering"
+        // §"Known limitations / future work" for the deferred host-trap
+        // wiring.
+        try self.asm_.label(trap_lbl);
+        try self.asm_.comment("memory.init trap site (dropped or out-of-bounds): falls through, host trap deferred");
+        try self.asm_.label(end_lbl);
+    }
+
+    /// `data.drop data_idx` — mark the passive data segment as
+    /// dropped so subsequent `memory.init` against it traps. For
+    /// active segments this is a no-op (WASM 2.0 spec). See
+    /// docs/spec_linear_memory.md "data.drop lowering".
+    fn emitDataDrop(self: *Translator, ctx: *FuncCtx, idx: u32) Error!void {
+        _ = ctx;
+        if (idx >= self.mod.datas.len) return error.UnsupportedFeature;
+        switch (self.mod.datas[idx].mode) {
+            .active => {
+                try self.asm_.comment(try std.fmt.allocPrint(
+                    self.aa(),
+                    "data.drop on active segment {d}: no-op (WASM 2.0)",
+                    .{idx},
+                ));
+                return;
+            },
+            .passive => {},
+        }
+        const dropped_name = try std.fmt.allocPrint(self.aa(), "__G__data_seg_{d}__dropped", .{idx});
+        try self.asm_.comment(try std.fmt.allocPrint(
+            self.aa(),
+            "data.drop data_seg={d}: __G__data_seg_{d}__dropped := true",
+            .{ idx, idx },
+        ));
+        try self.asm_.push("__c_bool_true__");
+        try self.asm_.push(dropped_name);
+        try self.asm_.copy();
+    }
+
     fn emitMemStore16(self: *Translator, ctx: *FuncCtx, ins: Instruction) Error!void {
         try self.asm_.comment("i32.store16");
         const memarg = ins.i32_store16;
@@ -5274,32 +5607,41 @@ const HostBridge = struct {
 
 // --------------------- helpers ---------------------
 
-fn udonTypeOf(vt: ValType) tn.TypeName {
+fn udonTypeOf(vt: ValType) Error!tn.TypeName {
     return switch (vt) {
         .i32 => tn.int32,
         .i64 => tn.int64,
         .f32 => tn.single,
         .f64 => tn.double,
+        // See `udonTypeForValType` above — funcref values are rejected
+        // at every materialization site. The decoder accepts
+        // funcref-typed locals/params/globals so a reference-types
+        // binary parses, but the translator stops here with a clear
+        // error before any Udon Assembly is emitted for the offending
+        // function/global.
+        .funcref => return error.FuncrefValueTypeNotYetSupported,
     };
 }
 
-fn slotTypeBit(vt: ValType) u8 {
+fn slotTypeBit(vt: ValType) Error!u8 {
     return switch (vt) {
         .i32 => 1,
         .i64 => 2,
         .f32 => 4,
         .f64 => 8,
+        .funcref => return error.FuncrefValueTypeNotYetSupported,
     };
 }
 
 const all_val_types = [_]ValType{ .i32, .i64, .f32, .f64 };
 
-fn zeroLit(vt: ValType) Literal {
+fn zeroLit(vt: ValType) Error!Literal {
     return switch (vt) {
         .i32 => .{ .int32 = 0 },
         .i64 => .null_literal, // §4.7: cannot init non-null
         .f32 => .{ .single = 0.0 },
         .f64 => .null_literal,
+        .funcref => return error.FuncrefValueTypeNotYetSupported,
     };
 }
 
@@ -7339,7 +7681,10 @@ fn buildSingleDataModule(
     offset_expr[0] = .{ .i32_const = offset_const };
 
     const datas = try a.alloc(wasm.module.Data, 1);
-    datas[0] = .{ .memory_index = 0, .offset = offset_expr, .init = data_bytes };
+    datas[0] = .{
+        .mode = .{ .active = .{ .memory_index = 0, .offset = offset_expr } },
+        .init = data_bytes,
+    };
 
     return .{
         .memories = memories,
@@ -9484,4 +9829,154 @@ test "f32.store / f32.load round-trip via SystemBitConverter bridge" {
     const code_start = std.mem.indexOf(u8, out, ".code_start") orelse return error.TestExpectedEqual;
     const code_tail = out[code_start..];
     try std.testing.expect(std.mem.indexOf(u8, code_tail, "ANNOTATION, __unsupported__") == null);
+}
+
+// ---- Phase 3: bulk-memory passive-segment + reference-types tests ----
+
+fn translateWasmBytes(gpa: std.mem.Allocator, bytes: []const u8) ![]u8 {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    const mod = try wasm.parseModule(aa, bytes);
+    var buf: std.Io.Writer.Allocating = .init(gpa);
+    errdefer buf.deinit();
+    try translate(gpa, mod, null, &buf.writer, .{});
+    return try buf.toOwnedSlice();
+}
+
+test "bulk-memory passive: emits __G__data_seg_0__bytes/dropped fields and seeds 'Hello' bytes" {
+    const wasm_bytes = @embedFile("testdata/bulk_memory_passive.wasm");
+    const out = try translateWasmBytes(std.testing.allocator, wasm_bytes);
+    defer std.testing.allocator.free(out);
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "__G__data_seg_0__bytes: %SystemByteArray") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__G__data_seg_0__dropped: %SystemBoolean") != null);
+    // Each non-zero byte of "Hello\0" surfaces as an Int32 source constant
+    // ('H'=72, 'e'=101, 'l'=108, 'l'=108, 'o'=111). Spot-check a few.
+    try std.testing.expect(std.mem.indexOf(u8, out, ", 72\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, ", 101\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, ", 111\n") != null);
+}
+
+test "memory.init: emits dropped-check, byte loop, and SystemByteArray Get" {
+    const wasm_bytes = @embedFile("testdata/memory_init.wasm");
+    const out = try translateWasmBytes(std.testing.allocator, wasm_bytes);
+    defer std.testing.allocator.free(out);
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "__meminit_loop_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__meminit_trap_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__meminit_end_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "PUSH, __G__data_seg_0__bytes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "SystemByteArray.__Get__SystemInt32__SystemByte") != null);
+    // The dropped-check is consulted before the loop body.
+    const dropped_idx = std.mem.indexOf(u8, out, "PUSH, __G__data_seg_0__dropped") orelse return error.TestExpectedEqual;
+    const loop_idx = std.mem.indexOf(u8, out, "__meminit_loop_0__:") orelse return error.TestExpectedEqual;
+    try std.testing.expect(dropped_idx < loop_idx);
+    // After the byte fetch we must convert the SystemByte to SystemInt32
+    // and then store via the existing byte-store helper. The helper writes
+    // `_mem_byte_shifted` (one of its scratch slots), so its presence
+    // strictly after the SystemByteArray Get proves the byte traveled
+    // from segment → memory in this lowering.
+    const get_idx = std.mem.indexOf(u8, out, "SystemByteArray.__Get__SystemInt32__SystemByte") orelse return error.TestExpectedEqual;
+    const tail_after_get = out[get_idx..];
+    try std.testing.expect(std.mem.indexOf(u8, tail_after_get, "SystemConvert.__ToInt32__SystemByte__SystemInt32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tail_after_get, "PUSH, _mem_byte_shifted") != null);
+    // The trap label must precede the end label (fall-through layout).
+    const trap_idx = std.mem.indexOf(u8, out, "__meminit_trap_0__:") orelse return error.TestExpectedEqual;
+    const end_idx = std.mem.indexOf(u8, out, "__meminit_end_0__:") orelse return error.TestExpectedEqual;
+    try std.testing.expect(trap_idx < end_idx);
+}
+
+test "data.drop: emits __c_bool_true__ COPY into __G__data_seg_0__dropped after memory.init" {
+    const wasm_bytes = @embedFile("testdata/data_drop.wasm");
+    const out = try translateWasmBytes(std.testing.allocator, wasm_bytes);
+    defer std.testing.allocator.free(out);
+
+    // The data.drop comment marker must appear.
+    try std.testing.expect(std.mem.indexOf(u8, out, "data.drop data_seg=0") != null);
+    // The COPY pair `__c_bool_true__` → `__G__data_seg_0__dropped` must
+    // appear in that exact order somewhere after the memory.init.
+    const meminit_idx = std.mem.indexOf(u8, out, "memory.init data_seg=0") orelse return error.TestExpectedEqual;
+    const tail = out[meminit_idx..];
+    const true_push = std.mem.indexOf(u8, tail, "PUSH, __c_bool_true__") orelse return error.TestExpectedEqual;
+    const dropped_push = std.mem.indexOf(u8, tail[true_push..], "PUSH, __G__data_seg_0__dropped") orelse return error.TestExpectedEqual;
+    _ = dropped_push;
+}
+
+test "call_indirect with reference-types table_idx=0 lowers like MVP" {
+    const wasm_bytes = @embedFile("testdata/reference_types_funcref.wasm");
+    const out = try translateWasmBytes(std.testing.allocator, wasm_bytes);
+    defer std.testing.allocator.free(out);
+
+    // Reaches the indirect-dispatch path (shared __indirect_target__).
+    try std.testing.expect(std.mem.indexOf(u8, out, "__indirect_target__") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "JUMP_INDIRECT") != null);
+    // The translator must not have rejected the explicit `table_idx=0`
+    // encoding of reference-types call_indirect — translation succeeded.
+    // As a structural sanity check the standard call-stack scaffolding
+    // must also be present (indirect call relies on the synthesized
+    // __call_stack__/__indirect_RA__ ABI).
+    try std.testing.expect(std.mem.indexOf(u8, out, "__indirect_RA__") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "__call_stack__") != null);
+}
+
+test "call_indirect with table_idx != 0 returns MultiTableNotYetSupported" {
+    // Hand-rolled minimal binary with a `call_indirect typeidx=0
+    // table_idx=1`. The decoder accepts any uleb128 table_idx; the
+    // translator must reject non-zero values.
+    const bytes = [_]u8{
+        0x00, 0x61, 0x73, 0x6d, // magic
+        0x01, 0x00, 0x00, 0x00, // version
+        // Type section: one type `() -> ()`
+        0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+        // Function section: one function of type 0
+        0x03, 0x02, 0x01, 0x00,
+        // Table section: 2 tables, both funcref, min=1
+        0x04, 0x07, 0x02,
+        0x70, 0x00, 0x01,
+        0x70, 0x00, 0x01,
+        // Code section: one body  call_indirect typeidx=0 table_idx=1; end
+        0x0a, 0x07, 0x01,
+        0x05, 0x00,
+        0x11, 0x00, 0x01,
+        0x0b,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    const mod = try wasm.parseModule(aa, &bytes);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    const result = translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    try std.testing.expectError(error.MultiTableNotYetSupported, result);
+}
+
+test "funcref param triggers FuncrefValueTypeNotYetSupported at materialization" {
+    // Hand-rolled minimal binary: one func with a single funcref param,
+    // empty body. The decoder accepts the type; the translator's
+    // materializer must reject the funcref slot up-front.
+    const bytes = [_]u8{
+        0x00, 0x61, 0x73, 0x6d,
+        0x01, 0x00, 0x00, 0x00,
+        // Type section: one type `(funcref) -> ()`
+        0x01, 0x05, 0x01, 0x60, 0x01, 0x70, 0x00,
+        // Function section: one function of type 0
+        0x03, 0x02, 0x01, 0x00,
+        // Code section: one empty body
+        0x0a, 0x04, 0x01,
+        0x02, 0x00,
+        0x0b,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    const mod = try wasm.parseModule(aa, &bytes);
+
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    const result = translate(std.testing.allocator, mod, null, &buf.writer, .{});
+    try std.testing.expectError(error.FuncrefValueTypeNotYetSupported, result);
 }

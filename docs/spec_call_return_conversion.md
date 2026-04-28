@@ -209,6 +209,65 @@ A function reachable through `call_indirect` must read its return address from a
 
 WASM's `call_indirect` validates the signature at runtime. Reproducing this faithfully in Udon is expensive, so it is **omitted by default**: the translator classifies entries in the table by signature at translation time and rejects mismatches as a translation error. Future activation may be exposed via `__udon_meta.options`.
 
+### 7.5 `call_indirect` with explicit table index (reference-types)
+
+The post-MVP `reference-types` proposal generalises the trailing
+reserved byte of `call_indirect` into a varuint **table index**:
+
+```text
+call_indirect typeidx:uleb128 table_idx:uleb128
+```
+
+See `docs/w3c_wasm_binary_format_note.md` §"`call_indirect` under the
+`reference-types` proposal" for the binary-format change. This
+subsection covers what the translator does with the parsed value.
+
+#### Decoder
+
+The instruction's payload is no longer a single `u32` (the type index)
+plus an asserted-zero byte; it is the pair
+`CallIndirectArgs { typeidx: u32, table_idx: u32 }`, both decoded as
+ULEB128 `u32`s.
+
+#### Backwards compatibility
+
+MVP fixtures where the table index is implicitly `0` parse identically
+under the new decoder, because `uleb128(0)` is exactly the single byte
+`0x00`. Every Core 1 `call_indirect` therefore round-trips through the
+generalised decoder without any producer-side change.
+
+#### Lowering — only `table_idx == 0` is supported
+
+The translator's lowering pass requires `args.table_idx == 0`. Any
+other value returns `error.MultiTableNotYetSupported` with a clear
+diagnostic identifying the offending function and call site.
+
+Rationale: with a single function table, the existing
+`__fn_table__` global (see §7.1) suffices, and the per-call lowering
+in §7.2 is unchanged. Multi-table support would require:
+
+1. Per-table fields (e.g. `__fn_table_<n>__: %SystemUInt32Array`),
+   each populated at startup from its corresponding WASM `element`
+   segment.
+2. A per-call dispatch that selects the correct `__fn_table_<n>__`
+   based on `args.table_idx` — straightforward but mechanical.
+3. Recursion-checker / signature-checker tweaks so that table
+   classification (§7.4) is per-table.
+
+None of these are conceptually difficult, but they were deferred
+because the producers the translator supports today
+(`wasm32v1-none` Rust, MVP-pinned Zig, hand-rolled WAT) only ever
+emit a single function table. The opt-in `reference-types`
+fixtures in `examples/post-mvp/reference-types-funcref/` therefore
+all use `table_idx == 0`.
+
+#### Producer-side note
+
+Producers that opt into the `reference-types` proposal (typically by
+passing `--enable-reference-types` to `wat2wasm`) must keep the
+target table index at `0` until multi-table support lands. See
+`docs/producer_guide.md` for the toolchain incantations.
+
 ---
 
 ## 8. Recursion

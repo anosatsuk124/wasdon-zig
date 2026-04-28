@@ -45,6 +45,25 @@ pub const MemoryFillArgs = struct {
     mem: u32,
 };
 
+/// memory.init immediate (post-MVP `bulk-memory`). `data_idx` selects the
+/// passive data segment to copy from; `mem` is the destination memidx
+/// (translator only supports 0).
+pub const MemoryInitArgs = struct {
+    data_idx: u32,
+    mem: u32,
+};
+
+/// call_indirect immediate. Under Core 1 the trailing reserved byte is
+/// fixed `0x00`; under the post-MVP `reference-types` proposal it is a
+/// uleb128 `tableidx`. The decoder always reads it as a varuint so MVP
+/// fixtures (where `uleb128(0) == 0x00`) round-trip identically. The
+/// translator's lowering pass requires `table_idx == 0` (see
+/// `docs/spec_call_return_conversion.md` §7.5).
+pub const CallIndirectArgs = struct {
+    typeidx: u32,
+    table_idx: u32,
+};
+
 /// One variant per Core 1 opcode. Keep in lockstep with `opcode.spec`.
 pub const Instruction = union(enum) {
     // control
@@ -58,7 +77,7 @@ pub const Instruction = union(enum) {
     br_table: BrTable,
     return_,
     call: u32,
-    call_indirect: u32,
+    call_indirect: CallIndirectArgs,
 
     // parametric
     drop,
@@ -263,6 +282,8 @@ pub const Instruction = union(enum) {
     i64_trunc_sat_f64_u,
 
     // 0xFC-prefixed: bulk memory subset
+    memory_init: MemoryInitArgs,
+    data_drop: u32,
     memory_copy: MemoryCopyArgs,
     memory_fill: MemoryFillArgs,
 };
@@ -357,6 +378,26 @@ pub fn decodeInstruction(allocator: std.mem.Allocator, r: *Reader) errors.ParseE
                     if (reserved != 0x00) return error.MalformedReserved;
                     return @unionInit(Instruction, s.tag, MemoryFillArgs{ .mem = 0 });
                 }
+            } else if (comptime s.imm == .memory_init_args) {
+                if (s.opcode == fc_spec.opcode) {
+                    const data_idx = try leb128.readULEB128(u32, r);
+                    // Reserved trailing byte. Reference-types generalises
+                    // this slot to a memidx, but the translator only
+                    // supports memidx == 0 (single-memory assumption — see
+                    // `docs/spec_linear_memory.md`). Any non-zero value is
+                    // rejected here.
+                    const reserved = try r.readByte();
+                    if (reserved != 0x00) return error.MalformedReserved;
+                    return @unionInit(Instruction, s.tag, MemoryInitArgs{
+                        .data_idx = data_idx,
+                        .mem = 0,
+                    });
+                }
+            } else if (comptime s.imm == .data_drop_arg) {
+                if (s.opcode == fc_spec.opcode) {
+                    const data_idx = try leb128.readULEB128(u32, r);
+                    return @unionInit(Instruction, s.tag, data_idx);
+                }
             }
         }
         // Unreachable: findPrefixFc returned non-null, so the loop above must
@@ -374,10 +415,18 @@ pub fn decodeInstruction(allocator: std.mem.Allocator, r: *Reader) errors.ParseE
                     return @unionInit(Instruction, s.tag, idx);
                 },
                 .typeidx_reserved => {
+                    // Post-MVP `reference-types` generalises the trailing
+                    // reserved byte into a uleb128 table index. MVP fixtures
+                    // (where the byte was always `0x00`) parse identically
+                    // because `uleb128(0)` is the single byte `0x00`. The
+                    // translator's lowering pass enforces `table_idx == 0`
+                    // (see `docs/spec_call_return_conversion.md` §7.5).
                     const tidx = try leb128.readULEB128(u32, r);
-                    const reserved = try r.readByte();
-                    if (reserved != 0x00) return error.MalformedReserved;
-                    return @unionInit(Instruction, s.tag, tidx);
+                    const table_idx = try leb128.readULEB128(u32, r);
+                    return @unionInit(Instruction, s.tag, CallIndirectArgs{
+                        .typeidx = tidx,
+                        .table_idx = table_idx,
+                    });
                 },
                 .br_table => {
                     const bt = try readBrTable(allocator, r);
@@ -392,10 +441,11 @@ pub fn decodeInstruction(allocator: std.mem.Allocator, r: *Reader) errors.ParseE
                     if (reserved != 0x00) return error.MalformedReserved;
                     return @unionInit(Instruction, s.tag, {});
                 },
-                // memory_copy_args / memory_fill_args are only used by entries
-                // in `prefix_fc_spec`, which is dispatched separately above.
-                // No primary-spec entry should ever reach these arms.
-                .memory_copy_args, .memory_fill_args => unreachable,
+                // memory_copy_args / memory_fill_args / memory_init_args /
+                // data_drop_arg are only used by entries in `prefix_fc_spec`,
+                // which is dispatched separately above. No primary-spec
+                // entry should ever reach these arms.
+                .memory_copy_args, .memory_fill_args, .memory_init_args, .data_drop_arg => unreachable,
                 .i32_imm => {
                     const v = try leb128.readSLEB128(i32, r);
                     return @unionInit(Instruction, s.tag, v);
@@ -568,18 +618,31 @@ test "decode memory.grow" {
     try std.testing.expect(inst == .memory_grow);
 }
 
-test "decode call_indirect" {
+test "decode call_indirect (MVP form, table 0)" {
+    // typeidx=7, table_idx=0 (single byte 0x00).
     var r = mk(&[_]u8{ 0x11, 0x07, 0x00 });
     const inst = try decodeInstruction(std.testing.allocator, &r);
-    try std.testing.expectEqual(@as(u32, 7), inst.call_indirect);
+    try std.testing.expectEqual(@as(u32, 7), inst.call_indirect.typeidx);
+    try std.testing.expectEqual(@as(u32, 0), inst.call_indirect.table_idx);
 }
 
-test "decode call_indirect bad reserved" {
+test "decode call_indirect with reference-types varuint table_idx (=1)" {
+    // typeidx=7, table_idx=1. Under the post-MVP reference-types
+    // generalisation the trailing reserved byte becomes a uleb128 table
+    // index. Single-byte ULEB(1) = 0x01 — the previous strict check
+    // rejected this; the relaxed decoder must accept it.
     var r = mk(&[_]u8{ 0x11, 0x07, 0x01 });
-    try std.testing.expectError(
-        error.MalformedReserved,
-        decodeInstruction(std.testing.allocator, &r),
-    );
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expectEqual(@as(u32, 7), inst.call_indirect.typeidx);
+    try std.testing.expectEqual(@as(u32, 1), inst.call_indirect.table_idx);
+}
+
+test "decode call_indirect with multi-byte LEB table_idx (=128)" {
+    // typeidx=0, table_idx=128 (ULEB128 = 80 01).
+    var r = mk(&[_]u8{ 0x11, 0x00, 0x80, 0x01 });
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expectEqual(@as(u32, 0), inst.call_indirect.typeidx);
+    try std.testing.expectEqual(@as(u32, 128), inst.call_indirect.table_idx);
 }
 
 test "decode br_table" {
@@ -639,6 +702,42 @@ test "decodeInstruction handles i64.extend32_s (0xC4)" {
     var r = mk(&[_]u8{0xC4});
     const inst = try decodeInstruction(std.testing.allocator, &r);
     try std.testing.expect(inst == .i64_extend32_s);
+}
+
+test "decodeInstruction handles memory.init (0xFC 0x08)" {
+    // bytes: fc 08 data_idx=0 mem=0
+    var r = mk(&[_]u8{ 0xFC, 0x08, 0x00, 0x00 });
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expectEqual(@as(u32, 0), inst.memory_init.data_idx);
+    try std.testing.expectEqual(@as(u32, 0), inst.memory_init.mem);
+}
+
+test "decodeInstruction memory.init with multi-byte LEB data_idx (=128)" {
+    // fc 08 80 01 00 → data_idx=128, mem=0
+    var r = mk(&[_]u8{ 0xFC, 0x08, 0x80, 0x01, 0x00 });
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expectEqual(@as(u32, 128), inst.memory_init.data_idx);
+    try std.testing.expectEqual(@as(u32, 0), inst.memory_init.mem);
+}
+
+test "decodeInstruction rejects memory.init with non-zero reserved memidx" {
+    var r = mk(&[_]u8{ 0xFC, 0x08, 0x00, 0x01 });
+    try std.testing.expectError(
+        error.MalformedReserved,
+        decodeInstruction(std.testing.allocator, &r),
+    );
+}
+
+test "decodeInstruction handles data.drop (0xFC 0x09)" {
+    var r = mk(&[_]u8{ 0xFC, 0x09, 0x00 });
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expectEqual(@as(u32, 0), inst.data_drop);
+}
+
+test "decodeInstruction handles data.drop with multi-byte LEB (=128)" {
+    var r = mk(&[_]u8{ 0xFC, 0x09, 0x80, 0x01 });
+    const inst = try decodeInstruction(std.testing.allocator, &r);
+    try std.testing.expectEqual(@as(u32, 128), inst.data_drop);
 }
 
 test "decodeInstruction handles memory.copy (0xFC 0x0A 0x00 0x00)" {
