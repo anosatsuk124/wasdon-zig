@@ -32,6 +32,14 @@ pub const Prim = enum {
     gameobject,
     transform,
     udon_behaviour,
+    /// `System.DateTime` — used by the WASI `clock_time_get(realtime)`
+    /// lowering as the result type of `SystemDateTime.UtcNow`. Initialises
+    /// to `null` per `docs/udon_specs.md` §4.7 (no typed literal).
+    date_time,
+    /// `System.TimeSpan` — used by the WASI `clock_time_get(realtime)`
+    /// lowering as the result type of `DateTime - DateTime`. Initialises
+    /// to `null`.
+    time_span,
 };
 
 pub fn primName(p: Prim) []const u8 {
@@ -52,6 +60,8 @@ pub fn primName(p: Prim) []const u8 {
         // Per `docs/udon_specs.md` §3.4, Udon Assembly spells UdonBehaviour as
         // `VRCUdonCommonInterfacesIUdonEventReceiver` (the interface).
         .udon_behaviour => "VRCUdonCommonInterfacesIUdonEventReceiver",
+        .date_time => "SystemDateTime",
+        .time_span => "SystemTimeSpan",
     };
 }
 
@@ -89,6 +99,8 @@ pub const udon_behaviour: TypeName = .{ .prim = .udon_behaviour };
 pub const uint32_array: TypeName = .{ .prim = .uint32, .is_array = true };
 pub const byte: TypeName = .{ .prim = .byte };
 pub const byte_array: TypeName = .{ .prim = .byte, .is_array = true };
+pub const date_time: TypeName = .{ .prim = .date_time };
+pub const time_span: TypeName = .{ .prim = .time_span };
 
 /// Allocate a formatted Udon type name string. Caller owns memory.
 pub fn format(allocator: std.mem.Allocator, t: TypeName) ![]u8 {

@@ -121,6 +121,22 @@ pub fn lookup(inst: wasm.Instruction) ?Entry {
         .f64_div => .{ .arity = .binary, .operand_ty = tn.double, .result_ty = tn.double, .sig = "SystemDouble.__op_Division__SystemDouble_SystemDouble__SystemDouble" },
         .f64_floor => .{ .arity = .unary, .operand_ty = tn.double, .result_ty = tn.double, .sig = "SystemMath.__Floor__SystemDouble__SystemDouble" },
 
+        // ---- f32 comparisons (result bool) ----
+        .f32_eq => .{ .arity = .binary, .operand_ty = tn.single, .result_ty = tn.boolean, .sig = "SystemSingle.__op_Equality__SystemSingle_SystemSingle__SystemBoolean" },
+        .f32_ne => .{ .arity = .binary, .operand_ty = tn.single, .result_ty = tn.boolean, .sig = "SystemSingle.__op_Inequality__SystemSingle_SystemSingle__SystemBoolean" },
+        .f32_lt => .{ .arity = .binary, .operand_ty = tn.single, .result_ty = tn.boolean, .sig = "SystemSingle.__op_LessThan__SystemSingle_SystemSingle__SystemBoolean" },
+        .f32_le => .{ .arity = .binary, .operand_ty = tn.single, .result_ty = tn.boolean, .sig = "SystemSingle.__op_LessThanOrEqual__SystemSingle_SystemSingle__SystemBoolean" },
+        .f32_gt => .{ .arity = .binary, .operand_ty = tn.single, .result_ty = tn.boolean, .sig = "SystemSingle.__op_GreaterThan__SystemSingle_SystemSingle__SystemBoolean" },
+        .f32_ge => .{ .arity = .binary, .operand_ty = tn.single, .result_ty = tn.boolean, .sig = "SystemSingle.__op_GreaterThanOrEqual__SystemSingle_SystemSingle__SystemBoolean" },
+
+        // ---- f64 comparisons (result bool) ----
+        .f64_eq => .{ .arity = .binary, .operand_ty = tn.double, .result_ty = tn.boolean, .sig = "SystemDouble.__op_Equality__SystemDouble_SystemDouble__SystemBoolean" },
+        .f64_ne => .{ .arity = .binary, .operand_ty = tn.double, .result_ty = tn.boolean, .sig = "SystemDouble.__op_Inequality__SystemDouble_SystemDouble__SystemBoolean" },
+        .f64_lt => .{ .arity = .binary, .operand_ty = tn.double, .result_ty = tn.boolean, .sig = "SystemDouble.__op_LessThan__SystemDouble_SystemDouble__SystemBoolean" },
+        .f64_le => .{ .arity = .binary, .operand_ty = tn.double, .result_ty = tn.boolean, .sig = "SystemDouble.__op_LessThanOrEqual__SystemDouble_SystemDouble__SystemBoolean" },
+        .f64_gt => .{ .arity = .binary, .operand_ty = tn.double, .result_ty = tn.boolean, .sig = "SystemDouble.__op_GreaterThan__SystemDouble_SystemDouble__SystemBoolean" },
+        .f64_ge => .{ .arity = .binary, .operand_ty = tn.double, .result_ty = tn.boolean, .sig = "SystemDouble.__op_GreaterThanOrEqual__SystemDouble_SystemDouble__SystemBoolean" },
+
         // ---- Conversions (SystemConvert) ----
         // NOTE: `i32.wrap_i64` is NOT in this table — `SystemConvert.ToInt32(Int64)`
         // is a *checked* conversion that throws for values outside Int32 range,
@@ -318,6 +334,34 @@ test "f32.demote_f64 / f64.promote_f32 lower via SystemConvert" {
     try std.testing.expectEqualStrings(
         "SystemConvert.__ToDouble__SystemSingle__SystemDouble",
         (lookup(.f64_promote_f32) orelse return error.TestExpectedEqual).sig,
+    );
+}
+
+test "f64.le / f64.ge / f64.eq / f64.ne lower via SystemDouble" {
+    try std.testing.expectEqualStrings(
+        "SystemDouble.__op_LessThanOrEqual__SystemDouble_SystemDouble__SystemBoolean",
+        (lookup(.f64_le) orelse return error.TestExpectedEqual).sig,
+    );
+    try std.testing.expectEqualStrings(
+        "SystemDouble.__op_GreaterThanOrEqual__SystemDouble_SystemDouble__SystemBoolean",
+        (lookup(.f64_ge) orelse return error.TestExpectedEqual).sig,
+    );
+    try std.testing.expectEqualStrings(
+        "SystemDouble.__op_Equality__SystemDouble_SystemDouble__SystemBoolean",
+        (lookup(.f64_eq) orelse return error.TestExpectedEqual).sig,
+    );
+    try std.testing.expectEqualStrings(
+        "SystemDouble.__op_Inequality__SystemDouble_SystemDouble__SystemBoolean",
+        (lookup(.f64_ne) orelse return error.TestExpectedEqual).sig,
+    );
+    // f32 counterparts share the same shape on SystemSingle.
+    try std.testing.expectEqualStrings(
+        "SystemSingle.__op_LessThanOrEqual__SystemSingle_SystemSingle__SystemBoolean",
+        (lookup(.f32_le) orelse return error.TestExpectedEqual).sig,
+    );
+    try std.testing.expectEqualStrings(
+        "SystemSingle.__op_GreaterThanOrEqual__SystemSingle_SystemSingle__SystemBoolean",
+        (lookup(.f32_ge) orelse return error.TestExpectedEqual).sig,
     );
 }
 

@@ -6,6 +6,7 @@ pub const names = @import("names.zig");
 pub const numeric = @import("lower_numeric.zig");
 pub const extern_sig = @import("extern_sig.zig");
 pub const lower_import = @import("lower_import.zig");
+pub const lower_wasi = @import("lower_wasi.zig");
 pub const recursion = @import("recursion.zig");
 pub const translate = @import("translate.zig");
 
@@ -19,6 +20,7 @@ test {
     _ = numeric;
     _ = extern_sig;
     _ = lower_import;
+    _ = lower_wasi;
     _ = recursion;
     _ = translate;
 }

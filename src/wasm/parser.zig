@@ -21,6 +21,30 @@ pub const CustomSection = module.CustomSection;
 pub const WASM_MAGIC = [_]u8{ 0x00, 0x61, 0x73, 0x6D };
 pub const WASM_VERSION = [_]u8{ 0x01, 0x00, 0x00, 0x00 };
 
+/// Ordinal position in the binary stream used for ascending-order checks.
+/// For Core 1 sections this is just the binary id; the post-MVP `datacount`
+/// section has binary id 12 but per spec sits between Element (9) and Code
+/// (10), so we map it to "9.5" by giving it ordinal 10 and shifting Code (10)
+/// → 11 and Data (11) → 12. This way a single `prev <= cur` ascending check
+/// keeps the existing semantics.
+fn sectionOrder(id: section.SectionId) u8 {
+    return switch (id) {
+        .custom => 0, // unused: custom sections bypass the ordering check
+        .type => 1,
+        .import => 2,
+        .function => 3,
+        .table => 4,
+        .memory => 5,
+        .global => 6,
+        .@"export" => 7,
+        .start => 8,
+        .element => 9,
+        .datacount => 10,
+        .code => 11,
+        .data => 12,
+    };
+}
+
 pub fn parseModule(allocator: std.mem.Allocator, bytes: []const u8) errors.ParseError!Module {
     var r = Reader.init(bytes);
 
@@ -31,9 +55,10 @@ pub fn parseModule(allocator: std.mem.Allocator, bytes: []const u8) errors.Parse
 
     var mod: Module = .{};
     // Track non-custom sections for ordering + duplicate checks. Custom
-    // sections are permitted at any position and may repeat freely.
-    var last_id: ?u8 = null;
-    var seen = [_]bool{false} ** 12;
+    // sections are permitted at any position and may repeat freely. Indexed
+    // by raw binary id (0..12 inclusive).
+    var last_ord: ?u8 = null;
+    var seen = [_]bool{false} ** 13;
     var customs: std.ArrayList(CustomSection) = .empty;
     defer customs.deinit(allocator);
 
@@ -48,11 +73,12 @@ pub fn parseModule(allocator: std.mem.Allocator, bytes: []const u8) errors.Parse
         }
 
         if (seen[id_byte]) return error.DuplicateSection;
-        if (last_id) |prev| {
-            if (id_byte <= prev) return error.SectionOutOfOrder;
+        const ord = sectionOrder(raw.id);
+        if (last_ord) |prev| {
+            if (ord <= prev) return error.SectionOutOfOrder;
         }
         seen[id_byte] = true;
-        last_id = id_byte;
+        last_ord = ord;
 
         switch (raw.id) {
             .custom => unreachable,
@@ -67,6 +93,7 @@ pub fn parseModule(allocator: std.mem.Allocator, bytes: []const u8) errors.Parse
             .element => mod.elements = try module.parseElementSection(allocator, raw.payload),
             .code => mod.codes = try module.parseCodeSection(allocator, raw.payload),
             .data => mod.datas = try module.parseDataSection(allocator, raw.payload),
+            .datacount => mod.data_count = try module.parseDataCountSection(raw.payload),
         }
     }
 
@@ -211,6 +238,54 @@ test "parseModule accepts custom sections at arbitrary positions and preserves t
     try std.testing.expectEqualStrings("aaa", mod.customs[1].name);
 }
 
+test "parseModule accepts DataCount between Element and Code (post-MVP bulk-memory ordering)" {
+    // Per docs/w3c_wasm_binary_format_note.md "DataCount ordering exception",
+    // the DataCount section has binary id 12 but spec-wise sits between
+    // Element (id 9) and Code (id 10). A naive ascending-id check rejects
+    // this; the parser must use an ordinal mapping that places DataCount at
+    // ordinal 9.5.
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(gpa);
+    try buf.appendSlice(gpa, &WASM_MAGIC);
+    try buf.appendSlice(gpa, &WASM_VERSION);
+    // Type: 1 functype ()->()
+    try pushSection(&buf, gpa, 1, &[_]u8{ 0x01, 0x60, 0x00, 0x00 });
+    // Function: 1 entry typeidx=0
+    try pushSection(&buf, gpa, 3, &[_]u8{ 0x01, 0x00 });
+    // DataCount: count=1
+    try pushSection(&buf, gpa, 12, &[_]u8{0x01});
+    // Code: 1 trivial body
+    try pushSection(&buf, gpa, 10, &[_]u8{ 0x01, 0x02, 0x00, 0x0B });
+    // Data: 1 passive segment with init=""
+    try pushSection(&buf, gpa, 11, &[_]u8{ 0x01, 0x01, 0x00 });
+
+    const mod = try parseModule(arena.allocator(), buf.items);
+    try std.testing.expectEqual(@as(?u32, 1), mod.data_count);
+    try std.testing.expectEqual(@as(usize, 1), mod.datas.len);
+}
+
+test "parseModule rejects DataCount after Code" {
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(gpa);
+    try buf.appendSlice(gpa, &WASM_MAGIC);
+    try buf.appendSlice(gpa, &WASM_VERSION);
+    try pushSection(&buf, gpa, 1, &[_]u8{ 0x01, 0x60, 0x00, 0x00 });
+    try pushSection(&buf, gpa, 3, &[_]u8{ 0x01, 0x00 });
+    try pushSection(&buf, gpa, 10, &[_]u8{ 0x01, 0x02, 0x00, 0x0B });
+    // DataCount placed after Code is malformed.
+    try pushSection(&buf, gpa, 12, &[_]u8{0x01});
+
+    try std.testing.expectError(error.SectionOutOfOrder, parseModule(arena.allocator(), buf.items));
+}
+
 test "parseModule enforces function/code count match" {
     const gpa = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -240,27 +315,28 @@ test "parseModule integration: parses the bench.wasm fixture end-to-end" {
     defer arena.deinit();
     const mod = try parseModule(arena.allocator(), bench_wasm);
 
-    // The bench exposes __udon_meta_ptr / __udon_meta_len plus the Udon
-    // event-handler functions.
-    var saw_meta_ptr = false;
-    var saw_meta_len = false;
+    // The bench exposes the Udon event-handler functions; meta is supplied
+    // as a sidecar JSON, never embedded in the module.
     var saw_on_start = false;
+    var saw_on_update = false;
+    var saw_on_interact = false;
     for (mod.exports) |exp| {
-        if (std.mem.eql(u8, exp.name, "__udon_meta_ptr")) saw_meta_ptr = true;
-        if (std.mem.eql(u8, exp.name, "__udon_meta_len")) saw_meta_len = true;
         if (std.mem.eql(u8, exp.name, "on_start")) saw_on_start = true;
+        if (std.mem.eql(u8, exp.name, "on_update")) saw_on_update = true;
+        if (std.mem.eql(u8, exp.name, "on_interact")) saw_on_interact = true;
     }
-    try std.testing.expect(saw_meta_ptr);
-    try std.testing.expect(saw_meta_len);
     try std.testing.expect(saw_on_start);
+    try std.testing.expect(saw_on_update);
+    try std.testing.expect(saw_on_interact);
 
-    // Meta discovery + JSON decode should round-trip.
+    // The sidecar JSON for the bench fixture is mirrored into testdata by
+    // `build.zig`'s `wasm-example` step; parse it through the public
+    // `udon_meta.parse` entry point to make sure the schema decodes.
     const udon_meta = @import("udon_meta.zig");
-    const meta_opt = try udon_meta.parseFromModule(arena.allocator(), mod);
-    try std.testing.expect(meta_opt != null);
-    const meta = meta_opt.?;
+    const meta_json = @embedFile("testdata/bench.udon_meta.json");
+    const meta = try udon_meta.parse(arena.allocator(), meta_json);
     try std.testing.expectEqual(@as(u32, 1), meta.version);
-    // `behaviour.syncMode == "manual"` per examples/wasm-bench/main.zig.
+    // `behaviour.syncMode == "manual"` per examples/wasm-bench/bench.udon_meta.json.
     try std.testing.expect(meta.behaviour != null);
     try std.testing.expectEqual(udon_meta.SyncMode.manual, meta.behaviour.?.sync_mode.?);
     // At least one of the documented functions must be present.

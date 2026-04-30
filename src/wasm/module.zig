@@ -59,9 +59,26 @@ pub const Code = struct {
     body: []const Instruction,
 };
 
+/// Data segment, post-MVP `bulk-memory`-aware.
+///
+/// Mode 0x00 / 0x02 produce `.active` (with the offset expression and
+/// memidx); the translator expects `memory_index == 0` (single-memory
+/// assumption — see `docs/spec_linear_memory.md`) and the parser rejects
+/// other values with `MultiMemoryNotYetSupported` rather than letting them
+/// flow through.
+///
+/// Mode 0x01 produces `.passive`: just the init bytes, no offset, no
+/// memidx. Passive segments are not applied at instantiation; `memory.init`
+/// later copies their bytes into linear memory and `data.drop` marks them
+/// as discarded. See `docs/spec_linear_memory.md` "Passive data segments".
 pub const Data = struct {
-    memory_index: u32, // MVP: always 0
-    offset: []const Instruction,
+    mode: union(enum) {
+        active: struct {
+            memory_index: u32,
+            offset: []const Instruction,
+        },
+        passive,
+    },
     init: []const u8,
 };
 
@@ -82,6 +99,12 @@ pub const Module = struct {
     elements: []const Element = &.{},
     codes: []const Code = &.{},
     datas: []const Data = &.{},
+    /// Populated when the post-MVP `datacount` section is present (binary
+    /// id 12, `bulk-memory` proposal). The value is the declared count of
+    /// data segments. Validation that this matches `datas.len` and is
+    /// compatible with `memory.init` / `data.drop` indices is deferred to
+    /// the translator (Phase 3).
+    data_count: ?u32 = null,
     customs: []const CustomSection = &.{},
 };
 
@@ -266,13 +289,43 @@ pub fn parseCodeSection(allocator: std.mem.Allocator, payload: []const u8) error
 }
 
 fn decodeDataEntry(allocator: std.mem.Allocator, r: *Reader) errors.ParseError!Data {
-    const prefix = try leb128.readULEB128(u32, r);
-    if (prefix != 0) return error.MalformedDataSegment;
-    const offset = try instruction.decodeExpr(allocator, r);
-    errdefer allocator.free(offset);
-    const n = try leb128.readULEB128(u32, r);
-    const bytes = try r.readBytes(n);
-    return .{ .memory_index = 0, .offset = offset, .init = bytes };
+    // Per `docs/w3c_wasm_binary_format_note.md` §"Data segment modes
+    // (post-MVP, bulk-memory)" the leading byte tags one of three modes:
+    //   0x00 — active segment, implicit memidx=0
+    //   0x01 — passive segment (no memidx, no offset)
+    //   0x02 — active segment with explicit memidx (uleb128)
+    const mode = try leb128.readULEB128(u32, r);
+    switch (mode) {
+        0x00 => {
+            const offset = try instruction.decodeExpr(allocator, r);
+            errdefer allocator.free(offset);
+            const n = try leb128.readULEB128(u32, r);
+            const bytes = try r.readBytes(n);
+            return .{
+                .mode = .{ .active = .{ .memory_index = 0, .offset = offset } },
+                .init = bytes,
+            };
+        },
+        0x01 => {
+            const n = try leb128.readULEB128(u32, r);
+            const bytes = try r.readBytes(n);
+            return .{ .mode = .passive, .init = bytes };
+        },
+        0x02 => {
+            const memidx = try leb128.readULEB128(u32, r);
+            // Single-memory assumption — see `docs/spec_linear_memory.md`.
+            if (memidx != 0) return error.MultiMemoryNotYetSupported;
+            const offset = try instruction.decodeExpr(allocator, r);
+            errdefer allocator.free(offset);
+            const n = try leb128.readULEB128(u32, r);
+            const bytes = try r.readBytes(n);
+            return .{
+                .mode = .{ .active = .{ .memory_index = memidx, .offset = offset } },
+                .init = bytes,
+            };
+        },
+        else => return error.MalformedDataSegment,
+    }
 }
 
 pub fn parseDataSection(allocator: std.mem.Allocator, payload: []const u8) errors.ParseError![]Data {
@@ -280,6 +333,17 @@ pub fn parseDataSection(allocator: std.mem.Allocator, payload: []const u8) error
     const out = try readVec(Data, allocator, &r, decodeDataEntry);
     if (!r.eof()) return error.SectionSizeMismatch;
     return out;
+}
+
+/// Decode the post-MVP `datacount` section payload — a single uleb128
+/// `u32` declaring how many data segments the immediately following Data
+/// section will carry. See `docs/w3c_wasm_binary_format_note.md`
+/// §"Section IDs" + §"DataCount ordering exception".
+pub fn parseDataCountSection(payload: []const u8) errors.ParseError!u32 {
+    var r = Reader.init(payload);
+    const count = try leb128.readULEB128(u32, &r);
+    if (!r.eof()) return error.SectionSizeMismatch;
+    return count;
 }
 
 pub fn parseCustomSection(payload: []const u8) errors.ParseError!CustomSection {
@@ -386,18 +450,95 @@ test "parseCodeSection rejects body length mismatch (trailing bytes inside func)
     );
 }
 
-test "parseDataSection offset + bytes" {
+test "parseDataSection offset + bytes (mode 0x00, MVP active)" {
     // 1 data: offset=(i32.const 1024), bytes="ok"
     // flags=00  expr=41 80 08 0B   init=vec(2, 'o','k')
     const payload = &[_]u8{ 0x01, 0x00, 0x41, 0x80, 0x08, 0x0B, 0x02, 'o', 'k' };
     const ds = try parseDataSection(std.testing.allocator, payload);
     defer {
-        for (ds) |d| std.testing.allocator.free(d.offset);
+        for (ds) |d| switch (d.mode) {
+            .active => |a| std.testing.allocator.free(a.offset),
+            .passive => {},
+        };
         std.testing.allocator.free(ds);
     }
     try std.testing.expectEqual(@as(usize, 1), ds.len);
     try std.testing.expectEqualStrings("ok", ds[0].init);
-    try std.testing.expectEqual(@as(i32, 1024), ds[0].offset[0].i32_const);
+    switch (ds[0].mode) {
+        .active => |a| {
+            try std.testing.expectEqual(@as(u32, 0), a.memory_index);
+            try std.testing.expectEqual(@as(i32, 1024), a.offset[0].i32_const);
+        },
+        .passive => return error.TestExpectedEqual,
+    }
+}
+
+test "parseDataSection passive segment (mode 0x01, post-MVP bulk-memory)" {
+    // 1 data: passive (no offset), bytes="ABC"
+    // flags=01 init=vec(3, 'A','B','C')
+    const payload = &[_]u8{ 0x01, 0x01, 0x03, 'A', 'B', 'C' };
+    const ds = try parseDataSection(std.testing.allocator, payload);
+    defer std.testing.allocator.free(ds);
+    try std.testing.expectEqual(@as(usize, 1), ds.len);
+    try std.testing.expectEqualStrings("ABC", ds[0].init);
+    try std.testing.expect(ds[0].mode == .passive);
+}
+
+test "parseDataSection active with explicit memidx=0 (mode 0x02)" {
+    // 1 data: mode=02 memidx=0 offset=(i32.const 8) init=vec(1,'X')
+    const payload = &[_]u8{ 0x01, 0x02, 0x00, 0x41, 0x08, 0x0B, 0x01, 'X' };
+    const ds = try parseDataSection(std.testing.allocator, payload);
+    defer {
+        for (ds) |d| switch (d.mode) {
+            .active => |a| std.testing.allocator.free(a.offset),
+            .passive => {},
+        };
+        std.testing.allocator.free(ds);
+    }
+    try std.testing.expectEqual(@as(usize, 1), ds.len);
+    try std.testing.expectEqualStrings("X", ds[0].init);
+    switch (ds[0].mode) {
+        .active => |a| {
+            try std.testing.expectEqual(@as(u32, 0), a.memory_index);
+            try std.testing.expectEqual(@as(i32, 8), a.offset[0].i32_const);
+        },
+        .passive => return error.TestExpectedEqual,
+    }
+}
+
+test "parseDataSection rejects mode 0x02 with non-zero memidx" {
+    // mode=02 memidx=1 offset=(i32.const 0) init=vec(0)
+    const payload = &[_]u8{ 0x01, 0x02, 0x01, 0x41, 0x00, 0x0B, 0x00 };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.MultiMemoryNotYetSupported,
+        parseDataSection(arena.allocator(), payload),
+    );
+}
+
+test "parseDataSection rejects unknown mode prefix" {
+    // mode=05 — undefined
+    const payload = &[_]u8{ 0x01, 0x05, 0x00 };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.MalformedDataSegment,
+        parseDataSection(arena.allocator(), payload),
+    );
+}
+
+test "parseDataCountSection one entry" {
+    // payload = 03 → count=3
+    const c = try parseDataCountSection(&[_]u8{0x03});
+    try std.testing.expectEqual(@as(u32, 3), c);
+}
+
+test "parseDataCountSection rejects trailing bytes" {
+    try std.testing.expectError(
+        error.SectionSizeMismatch,
+        parseDataCountSection(&[_]u8{ 0x03, 0x00 }),
+    );
 }
 
 test "parseCustomSection keeps name + payload" {
@@ -421,6 +562,30 @@ test "parseGlobalSection single i32 global" {
     try std.testing.expectEqual(types.ValType.i32, gs[0].ty.valtype);
     try std.testing.expectEqual(types.Mutability.mutable, gs[0].ty.mut);
     try std.testing.expectEqual(@as(i32, 42), gs[0].init[0].i32_const);
+}
+
+test "parseImportSection accepts mutable global import" {
+    // Post-MVP "mutable-globals" proposal: an imported global with `mut = 0x01`
+    // must round-trip through the parser unmodified. The translator already
+    // emits every global as a mutable Udon field (Udon has no const concept
+    // for fields), so allowing the bit through here is the only piece of
+    // parser-side support the feature needs. See `docs/spec_variable_conversion.md`
+    // ("Mutability") and `docs/producer_guide.md` §1.
+    //
+    // count=01 mod="env" name="g" desc=0x03 valtype=i32 mut=0x01
+    const payload = &[_]u8{ 0x01, 0x03, 'e', 'n', 'v', 0x01, 'g', 0x03, 0x7F, 0x01 };
+    const is = try parseImportSection(std.testing.allocator, payload);
+    defer std.testing.allocator.free(is);
+    try std.testing.expectEqual(@as(usize, 1), is.len);
+    try std.testing.expectEqualStrings("env", is[0].module);
+    try std.testing.expectEqualStrings("g", is[0].name);
+    switch (is[0].desc) {
+        .global => |gt| {
+            try std.testing.expectEqual(types.ValType.i32, gt.valtype);
+            try std.testing.expectEqual(types.Mutability.mutable, gt.mut);
+        },
+        else => return error.TestExpectedEqual,
+    }
 }
 
 test "parseImportSection one func import" {

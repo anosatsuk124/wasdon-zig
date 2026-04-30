@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "behaviour": { "syncMode": "manual" },
+  "functions": {
+    "start":    { "source": {"kind":"export","name":"on_start"},    "label":"_start",    "export": true, "event":"Start"    },
+    "update":   { "source": {"kind":"export","name":"on_update"},   "label":"_update",   "export": true, "event":"Update"   },
+    "interact": { "source": {"kind":"export","name":"on_interact"}, "label":"_interact", "export": true, "event":"Interact" }
+  },
+  "options": {
+    "strict": false,
+    "recursion": "stack",
+    "memory": { "initialPages": 8, "maxPages": 32, "udonName": "_memory" }
+  }
+}

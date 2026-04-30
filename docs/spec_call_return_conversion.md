@@ -158,6 +158,8 @@ Since Udon has no runtime value stack, the WASM value stack is **resolved at com
 
 This way, step §4(a) at the call site is reduced to plain "copy caller's S slots into callee's P slots".
 
+> Numeric WASM opcodes that read/write `S{d}` slots (arithmetic, comparisons, conversions, sign extension, etc.) are catalogued in `docs/spec_numeric_instruction_lowering.md`, which lists each opcode's EXTERN signature(s) and any synthesised multi-EXTERN sequence.
+
 ---
 
 ## 7. Indirect Call (`call_indirect`)
@@ -206,6 +208,65 @@ A function reachable through `call_indirect` must read its return address from a
 ### 7.4 Type Checking
 
 WASM's `call_indirect` validates the signature at runtime. Reproducing this faithfully in Udon is expensive, so it is **omitted by default**: the translator classifies entries in the table by signature at translation time and rejects mismatches as a translation error. Future activation may be exposed via `__udon_meta.options`.
+
+### 7.5 `call_indirect` with explicit table index (reference-types)
+
+The post-MVP `reference-types` proposal generalises the trailing
+reserved byte of `call_indirect` into a varuint **table index**:
+
+```text
+call_indirect typeidx:uleb128 table_idx:uleb128
+```
+
+See `docs/w3c_wasm_binary_format_note.md` §"`call_indirect` under the
+`reference-types` proposal" for the binary-format change. This
+subsection covers what the translator does with the parsed value.
+
+#### Decoder
+
+The instruction's payload is no longer a single `u32` (the type index)
+plus an asserted-zero byte; it is the pair
+`CallIndirectArgs { typeidx: u32, table_idx: u32 }`, both decoded as
+ULEB128 `u32`s.
+
+#### Backwards compatibility
+
+MVP fixtures where the table index is implicitly `0` parse identically
+under the new decoder, because `uleb128(0)` is exactly the single byte
+`0x00`. Every Core 1 `call_indirect` therefore round-trips through the
+generalised decoder without any producer-side change.
+
+#### Lowering — only `table_idx == 0` is supported
+
+The translator's lowering pass requires `args.table_idx == 0`. Any
+other value returns `error.MultiTableNotYetSupported` with a clear
+diagnostic identifying the offending function and call site.
+
+Rationale: with a single function table, the existing
+`__fn_table__` global (see §7.1) suffices, and the per-call lowering
+in §7.2 is unchanged. Multi-table support would require:
+
+1. Per-table fields (e.g. `__fn_table_<n>__: %SystemUInt32Array`),
+   each populated at startup from its corresponding WASM `element`
+   segment.
+2. A per-call dispatch that selects the correct `__fn_table_<n>__`
+   based on `args.table_idx` — straightforward but mechanical.
+3. Recursion-checker / signature-checker tweaks so that table
+   classification (§7.4) is per-table.
+
+None of these are conceptually difficult, but they were deferred
+because the producers the translator supports today
+(`wasm32v1-none` Rust, MVP-pinned Zig, hand-rolled WAT) only ever
+emit a single function table. The opt-in `reference-types`
+fixtures in `examples/post-mvp/reference-types-funcref/` therefore
+all use `table_idx == 0`.
+
+#### Producer-side note
+
+Producers that opt into the `reference-types` proposal (typically by
+passing `--enable-reference-types` to `wat2wasm`) must keep the
+target table index at `0` until multi-table support lands. See
+`docs/producer_guide.md` for the toolchain incantations.
 
 ---
 
@@ -257,6 +318,8 @@ JUMP, __F_exit__
 ```
 
 `__F_exit__` joins the tail in §4. Natural fall-through (control reaching the end of the WASM function) is translated identically — place the function tail immediately before the `__F_exit__` label.
+
+**Dead-code fall-through.** When the body ends with `unreachable`, an unconditional branch out of the function, or a `return` followed by dead code, the abstract value-stack at the textual end of the body may not actually contain `result_arity` entries — the validator treats the stack as polymorphic in that region, but the translator tracks concrete depth. The fall-through result-copy is dead in that case (the function trapped or returned earlier), so the translator emits the `__F_exit__` label and the indirect jump but **omits the `S → R` copy** when concrete `depth < result_arity`. This is observable as a missing tail-copy stanza in the lowered assembly for functions whose last instruction is `unreachable`; the program is correct because that copy can never execute.
 
 ---
 
@@ -375,7 +438,7 @@ Important addresses produced:
     __add_RA__:         %SystemUInt32, 0
 
     # Call site 0's RAC (return address computed in Pass A)
-    __ret_addr_0__:     %SystemUInt32, 0x0000006Cu
+    __ret_addr_0__:     %SystemUInt32, 0x0000006C
 .data_end
 
 .code_start
@@ -446,7 +509,7 @@ If the translator adds or removes a single instruction, `__call_ret_0__`'s addre
 - **RAC must be a named variable.** Anonymous variables created from string literals (`docs/udon_specs.md` §10) produce `SystemString` and cannot be used for `SystemUInt32`. RACs and function-table elements must be declared explicitly in the data section.
 - **EXTERN's optimization cache.** The heap slot referenced by an `EXTERN` parameter is overwritten by optimization-cache data on first execution (`docs/udon_specs.md` §6.2.6, §12). Never share a RAC slot or RA slot with an `EXTERN` parameter.
 - **Avoid `Address aliasing detected`.** When two consecutive labels (e.g. `__call_ret_K__` and the very next function's entry) collide on the same address, insert a `NOP` to shift by 4 bytes (`docs/udon_specs.md` §5.2).
-- **Notation for `0xFFFFFFFC`.** As a `JUMP` immediate it can be written without a suffix as `0xFFFFFFFC` (matching the example in `docs/udon_specs.md` §11.1). When used as a data initial value, write it as `0xFFFFFFFCu`.
+- **Notation for `0xFFFFFFFC`.** Both as a `JUMP` immediate and as a data initial value, write it without a suffix as `0xFFFFFFFC` — the matching form for `JUMP` immediates per `docs/udon_specs.md` §11.1 and the only form accepted in `%SystemUInt32` data initializers (the `u` suffix is rejected by the lexer; see `docs/udon_specs.md` §4.7).
 - **Initial-value restrictions on return-value slots.** `SystemInt64` / `SystemUInt64` / `SystemSByte` / `SystemByte` / `SystemInt16` / `SystemUInt16` / `SystemBoolean` cannot be initialized to anything but `null` (`docs/udon_specs.md` §4.7, §12). Such return values must be initialized to `null` and assumed to be filled by the first `COPY`. In particular, the translator must guarantee that a boolean return value is assigned before any `JUMP_IF_FALSE` reads it.
 - **Floating-point precision.** `SystemDouble` data initial values are read at `float` precision (`docs/udon_specs.md` §4.7). WASM `f64` constants therefore should not be stored as data initial values; assemble them via EXTERN if needed.
 - **Optimizations that mutate the instruction stream.** Such optimizations would shift label addresses; do not modify the code after Pass A's address determination. If you must, all RACs and function-table elements must be recomputed.

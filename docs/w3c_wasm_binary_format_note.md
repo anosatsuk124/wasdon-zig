@@ -339,7 +339,30 @@ In Core 1, `call_indirect` has the following form.
 0x11 typeidx 0x00
 ```
 
-The trailing `0x00` is a reserved byte. Any other value is malformed.
+The trailing `0x00` is a reserved byte. Any other value is malformed
+under the strict Core 1 reading.
+
+#### `call_indirect` under the `reference-types` proposal (post-MVP)
+
+The `reference-types` proposal repurposes that trailing byte as an
+explicit `tableidx`, encoded as a `uleb128`:
+
+```text
+0x11 typeidx:uleb128 table_idx:uleb128
+```
+
+The translator decodes this generalised form. The MVP encoding is a
+strict subset because `uleb128(0)` is exactly the single byte `0x00`,
+so any `call_indirect` written for Core 1 (where the table is
+implicitly table 0) parses byte-for-byte identically. The decoder
+change is a relaxation: instead of requiring the trailing byte to
+equal `0x00`, the parser reads it as a varuint table index. Multi-byte
+encodings (`tableidx >= 128`) are accepted at the parser layer.
+
+The translator still requires `table_idx == 0` at the lowering layer
+(see `docs/spec_call_return_conversion.md` §"call_indirect with
+explicit table index (reference-types)"); other values are rejected
+with `MultiTableNotYetSupported`.
 
 ### `memory.size` and `memory.grow`
 
@@ -370,7 +393,7 @@ The following table lists the binary encodings of the opcodes included in Core 1
 | `0x0E` | `br_table`      | `vec(labelidx)`, default `labelidx`                      |
 | `0x0F` | `return`        | none                                                     |
 | `0x10` | `call`          | `funcidx`                                                |
-| `0x11` | `call_indirect` | `typeidx`, `0x00`                                        |
+| `0x11` | `call_indirect` | `typeidx`, `0x00` (Core 1) / `typeidx:uleb128 table_idx:uleb128` (reference-types) |
 
 ## Parametric Instructions
 
@@ -582,6 +605,76 @@ All of the following load/store instructions take `memarg` as their immediate.
 
 An unknown opcode is malformed at the binary-format level.
 
+## Post-MVP Extensions Accepted by the Translator
+
+The opcodes in the following tables fall outside the Core 1 / MVP set above, but `wasdon-zig` accepts them as deliberate, opt-in post-MVP extensions. They are listed here so that a parser implementer working from this note can reproduce what the translator decodes.
+
+### Reference-types `funcref` value type (post-MVP)
+
+The `reference-types` proposal extends `valtype` with two reference
+forms (`funcref = 0x70`, `externref = 0x6F`). The translator's value-type
+decoder accepts the byte `0x70` (`funcref`) so that modules emitted by
+toolchains with reference-types enabled (notably any binary that uses
+the `call_indirect` table-index encoding above) parse cleanly.
+
+| byte   | type      |
+| ------ | --------- |
+| `0x70` | `funcref` |
+
+`externref` (`0x6F`) is **not** decoded.
+
+The acceptance is decoder-only: as soon as a `funcref` appears as a
+function parameter, function result, local variable, or global type, the
+translator raises `FuncrefValueTypeNotYetSupported` because there is no
+Udon-side representation for first-class function references yet. The
+practical use case the decoder enables today is `call_indirect` with an
+explicit `table_idx` over a function table that is itself declared at
+the `tabletype` level (where `funcref` was already accepted as the only
+legal `elemtype` even in Core 1).
+
+### Sign-extension (post-MVP)
+
+These five opcodes belong to the `sign-extension-ops` proposal. The translator decodes them as single-byte opcodes with no immediate. Their lowering to Udon is described in `docs/spec_numeric_instruction_lowering.md` §4.
+
+| opcode | instruction      |
+| ------ | ---------------- |
+| `0xC0` | `i32.extend8_s`  |
+| `0xC1` | `i32.extend16_s` |
+| `0xC2` | `i64.extend8_s`  |
+| `0xC3` | `i64.extend16_s` |
+| `0xC4` | `i64.extend32_s` |
+
+### `0xFC` prefix sub-opcodes (post-MVP)
+
+The `0xFC` byte introduces a prefix-encoded family of post-MVP opcodes whose sub-opcode is itself encoded as a `u32` LEB128. The translator decodes the following sub-opcodes; the saturating-truncation entries belong to the `nontrapping-fptoint` proposal (lowering: `docs/spec_numeric_instruction_lowering.md` §5), and the `memory.copy` / `memory.fill` entries belong to the `bulk-memory` proposal (lowering: `docs/spec_linear_memory.md`).
+
+| opcode      | instruction           | trailing immediates                                                       |
+| ----------- | --------------------- | ------------------------------------------------------------------------- |
+| `0xFC 0x00` | `i32.trunc_sat_f32_s` | none                                                                      |
+| `0xFC 0x01` | `i32.trunc_sat_f32_u` | none                                                                      |
+| `0xFC 0x02` | `i32.trunc_sat_f64_s` | none                                                                      |
+| `0xFC 0x03` | `i32.trunc_sat_f64_u` | none                                                                      |
+| `0xFC 0x04` | `i64.trunc_sat_f32_s` | none                                                                      |
+| `0xFC 0x05` | `i64.trunc_sat_f32_u` | none                                                                      |
+| `0xFC 0x06` | `i64.trunc_sat_f64_s` | none                                                                      |
+| `0xFC 0x07` | `i64.trunc_sat_f64_u` | none                                                                      |
+| `0xFC 0x08` | `memory.init`         | `data_idx:uleb128 reserved:0x00`                                          |
+| `0xFC 0x09` | `data.drop`           | `data_idx:uleb128`                                                        |
+| `0xFC 0x0A` | `memory.copy`         | two reserved `0x00` bytes (dst, src mem)                                  |
+| `0xFC 0x0B` | `memory.fill`         | one reserved `0x00` byte (mem)                                            |
+
+The reserved trailing byte of `memory.init` is currently always `0`.
+The post-MVP `reference-types` proposal generalises that slot into a
+`memidx`, but the translator only accepts `memidx == 0`; any other
+value is rejected with `NotYetSupported`.
+
+Other `0xFC` sub-opcodes (e.g. `table.copy`, `table.init`, `elem.drop`)
+are rejected by the translator as unknown post-MVP opcodes. The
+bulk-memory `memory.init` (`0xFC 0x08`) and `data.drop` (`0xFC 0x09`)
+sub-opcodes that earlier revisions of this note listed as rejected are
+now accepted as part of the supported bulk-memory subset; their lowering
+to Udon Assembly is documented in `docs/spec_linear_memory.md`.
+
 ## Sections
 
 Each section has the following form.
@@ -594,22 +687,36 @@ The internal structure of `payload` is determined by `id`.
 
 ## Section IDs
 
-| id   | section  |
-| ---- | -------- |
-| `0`  | custom   |
-| `1`  | type     |
-| `2`  | import   |
-| `3`  | function |
-| `4`  | table    |
-| `5`  | memory   |
-| `6`  | global   |
-| `7`  | export   |
-| `8`  | start    |
-| `9`  | element  |
-| `10` | code     |
-| `11` | data     |
+| id   | section    |
+| ---- | ---------- |
+| `0`  | custom     |
+| `1`  | type       |
+| `2`  | import     |
+| `3`  | function   |
+| `4`  | table      |
+| `5`  | memory     |
+| `6`  | global     |
+| `7`  | export     |
+| `8`  | start      |
+| `9`  | element    |
+| `10` | code       |
+| `11` | data       |
+| `12` | datacount  |
 
 Any other section ID is malformed.
+
+`datacount` (id `12`) is part of the post-MVP `bulk-memory` proposal,
+and the translator accepts it as a deliberate post-MVP extension. Its
+payload is a single `u32` count encoded as `vec(uleb128 u32) of length 1`
+— concretely just one ULEB128 `u32` giving the number of data segments
+that the immediately following Data section will declare.
+
+```text
+datacountsec := section_12(u32)
+```
+
+The number must equal the actual `vec(data)` length in the Data
+section; a mismatch is malformed.
 
 ## Section Order
 
@@ -618,6 +725,21 @@ Except for custom sections, known sections must appear in ascending order of the
 * A custom section may appear at any position.
 * Repetition of a non-custom section is malformed.
 * Violating the required order is malformed.
+
+### DataCount ordering exception (post-MVP)
+
+The `datacount` section breaks the simple "ascending numeric ID" rule.
+The bulk-memory proposal places it **between Element (id `9`) and Code
+(id `10`)** in the binary stream, even though its numeric id (`12`) is
+larger than `10` and `11`. A naive ascending-id check would reject this
+ordering; the translator's parser uses an ordinal mapping that assigns
+DataCount a position equivalent to "9.5". Concretely:
+
+* DataCount must appear **after** Element (if Element is present) and
+  **before** Code.
+* DataCount appearing after Code (or after Data) is malformed.
+* DataCount may still appear between custom sections at the same
+  position.
 
 ## Custom Section
 
@@ -756,6 +878,28 @@ data := 0x00 expr vec(byte)
 ```
 
 Here the target memory is implicitly memory 0.
+
+### Data segment modes (post-MVP, bulk-memory)
+
+The `bulk-memory` proposal generalises the segment encoding by tagging
+each segment with a leading mode byte. The translator accepts the
+following three modes:
+
+| mode   | encoding                              | meaning                                         |
+| ------ | ------------------------------------- | ----------------------------------------------- |
+| `0x00` | `0x00 offset:expr init:vec(byte)`     | active segment, implicit `memidx = 0` (MVP form) |
+| `0x01` | `0x01 init:vec(byte)`                 | passive segment — no memidx, no offset expression, just init bytes |
+| `0x02` | `0x02 memidx:uleb128 offset:expr init:vec(byte)` | active segment with explicit `memidx` |
+
+Mode `0x01` (passive) segments are not applied to linear memory at
+instantiation; they sit as named blobs that `memory.init` later copies
+into memory and that `data.drop` can mark as discarded. Mode `0x02`
+parses an explicit `memidx` but the translator only supports
+`memidx == 0` (consistent with the rest of the translator's
+single-memory assumption); any other `memidx` is rejected with
+`NotYetSupported`.
+
+Any other leading byte is malformed.
 
 ## Correspondence Between the Function Section and the Code Section
 

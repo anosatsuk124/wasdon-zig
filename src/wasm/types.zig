@@ -23,6 +23,13 @@ pub const ValType = enum(u8) {
     i64 = 0x7E,
     f32 = 0x7D,
     f64 = 0x7C,
+    /// Post-MVP `reference-types` proposal (`docs/w3c_wasm_binary_format_note.md`
+    /// §"Reference-types `funcref` value type"). Decoder-only acceptance:
+    /// the translator raises `FuncrefValueTypeNotYetSupported` if a
+    /// `funcref` reaches a position that would require materializing a
+    /// first-class function reference (param / result / local / global /
+    /// stack value). Table elem types still go through their own decoder.
+    funcref = 0x70,
 };
 
 pub fn decodeValType(r: *Reader) errors.ParseError!ValType {
@@ -32,6 +39,7 @@ pub fn decodeValType(r: *Reader) errors.ParseError!ValType {
         0x7E => .i64,
         0x7D => .f32,
         0x7C => .f64,
+        0x70 => .funcref,
         else => error.InvalidValType,
     };
 }
@@ -151,7 +159,7 @@ pub fn decodeBlockType(r: *Reader) errors.ParseError!BlockType {
         return .empty;
     }
     switch (first) {
-        0x7F, 0x7E, 0x7D, 0x7C => {
+        0x7F, 0x7E, 0x7D, 0x7C, 0x70 => {
             const vt = try decodeValType(r);
             return .{ .value = vt };
         },
@@ -302,6 +310,25 @@ test "decodeBlockType typeidx positive" {
     const bt = try decodeBlockType(&r);
     switch (bt) {
         .type_index => |idx| try std.testing.expectEqual(@as(u32, 3), idx),
+        else => try std.testing.expect(false),
+    }
+}
+
+test "decodeValType funcref (post-MVP reference-types 0x70)" {
+    var r = mk(&[_]u8{0x70});
+    try std.testing.expectEqual(ValType.funcref, try decodeValType(&r));
+}
+
+test "decodeBlockType single funcref valtype (0x70)" {
+    // Reference-types extends `valtype` (and thus the single-valtype short
+    // form of `blocktype`) with `funcref = 0x70`. The decoder accepts this
+    // form so that producer toolchains with reference-types enabled can
+    // emit blocks like `(block (result funcref) ...)` or implicit
+    // funcref-returning ifs that arise from `select` on funcref values.
+    var r = mk(&[_]u8{0x70});
+    const bt = try decodeBlockType(&r);
+    switch (bt) {
+        .value => |vt| try std.testing.expectEqual(ValType.funcref, vt),
         else => try std.testing.expect(false),
     }
 }

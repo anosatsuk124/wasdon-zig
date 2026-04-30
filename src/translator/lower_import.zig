@@ -100,6 +100,42 @@ pub const Host = struct {
         /// collide on the same `__marshal_str_loop_<tag>__` label — the
         /// UAssembly assembler rejects duplicate labels at `VisitLabelStmt`.
         uniqueId: *const fn (ctx: *anyopaque) u32,
+
+        /// Emit JUMP to a literal bytecode address. Used by `proc_exit` to
+        /// emit the `0xFFFFFFFC` Udon program-end sentinel.
+        jumpAddr: *const fn (ctx: *anyopaque, addr: u32) Error!void,
+
+        /// Emit code that writes `val_slot`'s SystemInt32 value to linear
+        /// memory at `*addr_slot`.  WASI bodies use this for out-pointer
+        /// stores (`*nwritten`, `*newoffset`, `fdstat` zero-fill, etc.).
+        storeI32: *const fn (ctx: *anyopaque, addr_slot: []const u8, val_slot: []const u8) Error!void,
+
+        /// Like `storeI32` but at `*addr_slot + offset`.
+        storeI32Offset: *const fn (ctx: *anyopaque, addr_slot: []const u8, offset: u32, val_slot: []const u8) Error!void,
+
+        /// Emit code that loads a SystemInt32 from `*addr_slot` into
+        /// `out_slot`. WASI bodies use this for iovec field reads.
+        loadI32: *const fn (ctx: *anyopaque, addr_slot: []const u8, out_slot: []const u8) Error!void,
+
+        /// Like `loadI32` but at `*addr_slot + offset`.
+        loadI32Offset: *const fn (ctx: *anyopaque, addr_slot: []const u8, offset: u32, out_slot: []const u8) Error!void,
+
+        /// Run the same UTF-8 (ptr, len) → SystemString marshal path used by
+        /// `emitStringMarshal`, leaving the result in
+        /// `marshal_str_tmp_name`. Implemented as a thin reuse of the shared
+        /// helper so WASI's iovec walker doesn't replicate its 30-line body.
+        marshalSystemString: *const fn (ctx: *anyopaque, ptr_slot: []const u8, len_slot: []const u8) Error!void,
+
+        /// Emit code that stores an 8-byte SystemInt64 value to linear memory
+        /// at `*addr_slot`. Used by `clock_time_get` to write the WASI
+        /// `*time_out_ptr` (`u64` ns). Encoding is the WASM little-endian i64
+        /// store: low 32 bits at offset 0, high 32 bits at offset 4.
+        storeI64: *const fn (ctx: *anyopaque, addr_slot: []const u8, val_i64_slot: []const u8) Error!void,
+
+        /// Emit code that stores the low 8 bits of `val_i32_slot` to linear
+        /// memory at `*addr_slot`. Used by `random_get` to fill bytes one at
+        /// a time from an i32-typed RNG result.
+        storeByteToMemory: *const fn (ctx: *anyopaque, addr_slot: []const u8, val_i32_slot: []const u8) Error!void,
     };
 
     pub fn allocator(self: Host) std.mem.Allocator {
@@ -149,6 +185,30 @@ pub const Host = struct {
     }
     pub fn uniqueId(self: Host) u32 {
         return self.vtable.uniqueId(self.ctx);
+    }
+    pub fn jumpAddr(self: Host, addr: u32) Error!void {
+        return self.vtable.jumpAddr(self.ctx, addr);
+    }
+    pub fn storeI32(self: Host, addr_slot: []const u8, val_slot: []const u8) Error!void {
+        return self.vtable.storeI32(self.ctx, addr_slot, val_slot);
+    }
+    pub fn storeI32Offset(self: Host, addr_slot: []const u8, offset: u32, val_slot: []const u8) Error!void {
+        return self.vtable.storeI32Offset(self.ctx, addr_slot, offset, val_slot);
+    }
+    pub fn loadI32(self: Host, addr_slot: []const u8, out_slot: []const u8) Error!void {
+        return self.vtable.loadI32(self.ctx, addr_slot, out_slot);
+    }
+    pub fn loadI32Offset(self: Host, addr_slot: []const u8, offset: u32, out_slot: []const u8) Error!void {
+        return self.vtable.loadI32Offset(self.ctx, addr_slot, offset, out_slot);
+    }
+    pub fn marshalSystemString(self: Host, ptr_slot: []const u8, len_slot: []const u8) Error!void {
+        return self.vtable.marshalSystemString(self.ctx, ptr_slot, len_slot);
+    }
+    pub fn storeI64(self: Host, addr_slot: []const u8, val_i64_slot: []const u8) Error!void {
+        return self.vtable.storeI64(self.ctx, addr_slot, val_i64_slot);
+    }
+    pub fn storeByteToMemory(self: Host, addr_slot: []const u8, val_i32_slot: []const u8) Error!void {
+        return self.vtable.storeByteToMemory(self.ctx, addr_slot, val_i32_slot);
     }
 };
 
@@ -315,6 +375,15 @@ fn emitGenericExtern(
         try host.push(dst_name);
         try host.copy();
     }
+}
+
+/// Public wrapper around the internal `emitStringMarshal` helper. Exists so
+/// the translator's `HostBridge` can implement `Host.marshalSystemString`
+/// (used by WASI's `fd_write` iovec walk) by reusing the exact same
+/// (ptr, len) → SystemString sequence that the generic extern dispatch
+/// emits — without forking a parallel implementation.
+pub fn emitStringMarshalPub(host: Host, ptr_slot: []const u8, len_slot: []const u8) Error!void {
+    return emitStringMarshal(host, ptr_slot, len_slot);
 }
 
 fn emitStringMarshal(host: Host, ptr_slot: []const u8, len_slot: []const u8) Error!void {
@@ -547,6 +616,14 @@ const MockHost = struct {
         .jumpIfFalse = vt_jif,
         .readByteFromMemory = vt_readbyte,
         .uniqueId = vt_unique,
+        .jumpAddr = vt_jump_addr,
+        .storeI32 = vt_store_i32,
+        .storeI32Offset = vt_store_i32_off,
+        .loadI32 = vt_load_i32,
+        .loadI32Offset = vt_load_i32_off,
+        .marshalSystemString = vt_marshal_string,
+        .storeI64 = vt_store_i64,
+        .storeByteToMemory = vt_store_byte,
     };
 
     fn self_(ctx: *anyopaque) *MockHost {
@@ -632,6 +709,42 @@ const MockHost = struct {
         s.next_id += 1;
         return id;
     }
+    fn vt_jump_addr(ctx: *anyopaque, addr: u32) Error!void {
+        const s = self_(ctx);
+        try s.buf.print(s.ally, "JUMP_ADDR 0x{X:0>8}\n", .{addr});
+    }
+    fn vt_store_i32(ctx: *anyopaque, addr: []const u8, val: []const u8) Error!void {
+        const s = self_(ctx);
+        try s.buf.appendSlice(s.ally, "STORE_I32 ");
+        try s.buf.appendSlice(s.ally, addr);
+        try s.buf.appendSlice(s.ally, " <- ");
+        try s.buf.appendSlice(s.ally, val);
+        try s.buf.appendSlice(s.ally, "\n");
+    }
+    fn vt_store_i32_off(ctx: *anyopaque, addr: []const u8, off: u32, val: []const u8) Error!void {
+        const s = self_(ctx);
+        try s.buf.print(s.ally, "STORE_I32 {s}+{d} <- {s}\n", .{ addr, off, val });
+    }
+    fn vt_load_i32(ctx: *anyopaque, addr: []const u8, out: []const u8) Error!void {
+        const s = self_(ctx);
+        try s.buf.print(s.ally, "LOAD_I32 {s} -> {s}\n", .{ addr, out });
+    }
+    fn vt_load_i32_off(ctx: *anyopaque, addr: []const u8, off: u32, out: []const u8) Error!void {
+        const s = self_(ctx);
+        try s.buf.print(s.ally, "LOAD_I32 {s}+{d} -> {s}\n", .{ addr, off, out });
+    }
+    fn vt_marshal_string(ctx: *anyopaque, ptr: []const u8, len: []const u8) Error!void {
+        const s = self_(ctx);
+        try s.buf.print(s.ally, "MARSHAL_STR ({s},{s})\n", .{ ptr, len });
+    }
+    fn vt_store_i64(ctx: *anyopaque, addr: []const u8, val: []const u8) Error!void {
+        const s = self_(ctx);
+        try s.buf.print(s.ally, "STORE_I64 {s} <- {s}\n", .{ addr, val });
+    }
+    fn vt_store_byte(ctx: *anyopaque, addr: []const u8, val: []const u8) Error!void {
+        const s = self_(ctx);
+        try s.buf.print(s.ally, "STORE_BYTE {s} <- {s}\n", .{ addr, val });
+    }
 };
 
 test "generic extern: (int, int) -> int pass-through" {
@@ -656,8 +769,7 @@ test "generic extern: (int, int) -> int pass-through" {
     // EXTERN with raw sig.
     try expect(std.mem.indexOf(u8, out, "PUSH __caller_S0_i32__") != null);
     try expect(std.mem.indexOf(u8, out, "PUSH __caller_S1_i32__") != null);
-    try expect(std.mem.indexOf(u8, out,
-        "EXTERN SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
+    try expect(std.mem.indexOf(u8, out, "EXTERN SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32") != null);
     // Stack net: consume 2, produce 1.
     try std.testing.expectEqual(@as(u32, 1), mh.depth);
 }
@@ -682,17 +794,13 @@ test "generic extern: SystemString arg consumes two i32s and marshals" {
     const out = mh.buf.items;
     try expect(std.mem.indexOf(u8, out, "marshal SystemString") != null);
     try expect(std.mem.indexOf(u8, out, "_marshal_str_tmp") != null);
-    try expect(std.mem.indexOf(u8, out,
-        "EXTERN SystemConsole.__WriteLine__SystemString__SystemVoid") != null);
+    try expect(std.mem.indexOf(u8, out, "EXTERN SystemConsole.__WriteLine__SystemString__SystemVoid") != null);
     // Byte array allocated + populated via the read-byte helper.
-    try expect(std.mem.indexOf(u8, out,
-        "EXTERN SystemByteArray.__ctor__SystemInt32__SystemByteArray") != null);
+    try expect(std.mem.indexOf(u8, out, "EXTERN SystemByteArray.__ctor__SystemInt32__SystemByteArray") != null);
     try expect(std.mem.indexOf(u8, out, "READBYTE _marshal_str_addr") != null);
-    try expect(std.mem.indexOf(u8, out,
-        "EXTERN SystemByteArray.__Set__SystemInt32_SystemByte__SystemVoid") != null);
+    try expect(std.mem.indexOf(u8, out, "EXTERN SystemByteArray.__Set__SystemInt32_SystemByte__SystemVoid") != null);
     // Instance method: encoding pushed as `this` before GetString.
-    const gs_pos = std.mem.indexOf(u8, out,
-        "EXTERN SystemTextEncoding.__GetString__SystemByteArray__SystemString").?;
+    const gs_pos = std.mem.indexOf(u8, out, "EXTERN SystemTextEncoding.__GetString__SystemByteArray__SystemString").?;
     const this_pos = std.mem.lastIndexOf(u8, out[0..gs_pos], "PUSH _marshal_encoding_utf8").?;
     _ = this_pos; // just verify it exists before the GetString EXTERN
     // Scratch decls registered, including encoding and the new counter/byte.

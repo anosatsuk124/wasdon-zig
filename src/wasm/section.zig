@@ -23,10 +23,14 @@ pub const SectionId = enum(u8) {
     element = 9,
     code = 10,
     data = 11,
+    /// `bulk-memory` proposal (post-MVP). Binary id 12, but per spec this
+    /// section sits between Element (id 9) and Code (id 10) in the binary
+    /// stream — see `parser.zig`'s ordinal mapping.
+    datacount = 12,
 };
 
 pub fn sectionIdFromByte(b: u8) errors.ParseError!SectionId {
-    if (b > 11) return error.UnknownSectionId;
+    if (b > 12) return error.UnknownSectionId;
     return @enumFromInt(b);
 }
 
@@ -57,8 +61,12 @@ test "sectionIdFromByte maps all ids" {
     try std.testing.expectEqual(SectionId.data, try sectionIdFromByte(11));
 }
 
+test "sectionIdFromByte maps datacount (post-MVP bulk-memory id 12)" {
+    try std.testing.expectEqual(SectionId.datacount, try sectionIdFromByte(12));
+}
+
 test "sectionIdFromByte rejects unknown" {
-    try std.testing.expectError(error.UnknownSectionId, sectionIdFromByte(12));
+    try std.testing.expectError(error.UnknownSectionId, sectionIdFromByte(13));
     try std.testing.expectError(error.UnknownSectionId, sectionIdFromByte(0xFF));
 }
 

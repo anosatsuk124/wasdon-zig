@@ -27,6 +27,15 @@ pub const Immediate = enum {
     loop,
     if_,
     memory_op, // memory.size / memory.grow — consumes a reserved 0x00 byte
+    memory_copy_args, // memory.copy — two reserved 0x00 bytes (src/dst memidx)
+    memory_fill_args, // memory.fill — one reserved 0x00 byte (memidx)
+    /// memory.init — `data_idx:uleb128` followed by a reserved byte. The
+    /// reserved byte is generalised to `memidx` by the post-MVP
+    /// reference-types proposal but the translator only supports
+    /// `memidx == 0` (single-memory assumption).
+    memory_init_args,
+    /// data.drop — `data_idx:uleb128` only.
+    data_drop_arg,
 };
 
 pub const OpSpec = struct {
@@ -234,6 +243,36 @@ pub const spec = [_]OpSpec{
     .{ .opcode = 0xBD, .tag = "i64_reinterpret_f64", .mnemonic = "i64.reinterpret_f64", .imm = .none },
     .{ .opcode = 0xBE, .tag = "f32_reinterpret_i32", .mnemonic = "f32.reinterpret_i32", .imm = .none },
     .{ .opcode = 0xBF, .tag = "f64_reinterpret_i64", .mnemonic = "f64.reinterpret_i64", .imm = .none },
+
+    // --- sign-extension operators (0xC0..0xC4) ---
+    .{ .opcode = 0xC0, .tag = "i32_extend8_s", .mnemonic = "i32.extend8_s", .imm = .none },
+    .{ .opcode = 0xC1, .tag = "i32_extend16_s", .mnemonic = "i32.extend16_s", .imm = .none },
+    .{ .opcode = 0xC2, .tag = "i64_extend8_s", .mnemonic = "i64.extend8_s", .imm = .none },
+    .{ .opcode = 0xC3, .tag = "i64_extend16_s", .mnemonic = "i64.extend16_s", .imm = .none },
+    .{ .opcode = 0xC4, .tag = "i64_extend32_s", .mnemonic = "i64.extend32_s", .imm = .none },
+};
+
+// NOTE: prefix_fc_spec covers the 0xFC two-byte prefix family. Lowering of
+// memory.copy / memory.fill is specified in `docs/spec_linear_memory.md`;
+// trunc_sat lowering will be specified in `docs/spec_numeric_instruction_lowering.md`
+// (to be added by the §6 docs agent).
+//
+// Convention: `OpSpec.opcode` holds the *sub-opcode* (u32 LEB128 in the wire
+// format, but every defined sub-opcode fits in a u8 today) rather than the
+// 0xFC prefix byte. `findPrefixFc` resolves a sub-opcode value to its entry.
+pub const prefix_fc_spec = [_]OpSpec{
+    .{ .opcode = 0x00, .tag = "i32_trunc_sat_f32_s", .mnemonic = "i32.trunc_sat_f32_s", .imm = .none },
+    .{ .opcode = 0x01, .tag = "i32_trunc_sat_f32_u", .mnemonic = "i32.trunc_sat_f32_u", .imm = .none },
+    .{ .opcode = 0x02, .tag = "i32_trunc_sat_f64_s", .mnemonic = "i32.trunc_sat_f64_s", .imm = .none },
+    .{ .opcode = 0x03, .tag = "i32_trunc_sat_f64_u", .mnemonic = "i32.trunc_sat_f64_u", .imm = .none },
+    .{ .opcode = 0x04, .tag = "i64_trunc_sat_f32_s", .mnemonic = "i64.trunc_sat_f32_s", .imm = .none },
+    .{ .opcode = 0x05, .tag = "i64_trunc_sat_f32_u", .mnemonic = "i64.trunc_sat_f32_u", .imm = .none },
+    .{ .opcode = 0x06, .tag = "i64_trunc_sat_f64_s", .mnemonic = "i64.trunc_sat_f64_s", .imm = .none },
+    .{ .opcode = 0x07, .tag = "i64_trunc_sat_f64_u", .mnemonic = "i64.trunc_sat_f64_u", .imm = .none },
+    .{ .opcode = 0x08, .tag = "memory_init", .mnemonic = "memory.init", .imm = .memory_init_args },
+    .{ .opcode = 0x09, .tag = "data_drop", .mnemonic = "data.drop", .imm = .data_drop_arg },
+    .{ .opcode = 0x0A, .tag = "memory_copy", .mnemonic = "memory.copy", .imm = .memory_copy_args },
+    .{ .opcode = 0x0B, .tag = "memory_fill", .mnemonic = "memory.fill", .imm = .memory_fill_args },
 };
 
 /// Find the spec entry for a byte. Returns `null` if the byte is not a known
@@ -241,6 +280,15 @@ pub const spec = [_]OpSpec{
 pub fn find(opcode: u8) ?OpSpec {
     inline for (spec) |s| {
         if (s.opcode == opcode) return s;
+    }
+    return null;
+}
+
+/// Find the spec entry for a 0xFC-prefixed sub-opcode. Returns `null` if the
+/// sub-opcode is not a known prefixed instruction.
+pub fn findPrefixFc(sub: u32) ?OpSpec {
+    inline for (prefix_fc_spec) |s| {
+        if (s.opcode == sub) return s;
     }
     return null;
 }
@@ -269,12 +317,12 @@ test "opcode table: all opcodes unique" {
     }
 }
 
-test "opcode table: expected count (Core 1 MVP)" {
+test "opcode table: expected count (Core 1 MVP + sign-extension)" {
     // 11 control + 2 parametric + 5 variable + 25 memory + 4 numeric-const
     // + 11 i32 cmp + 11 i64 cmp + 6 f32 cmp + 6 f64 cmp
     // + 18 i32 arith + 18 i64 arith + 14 f32 arith + 14 f64 arith + 25 conv
-    // = 170
-    try std.testing.expectEqual(@as(usize, 170), spec.len);
+    // + 5 sign-extension (0xC0..0xC4) = 175
+    try std.testing.expectEqual(@as(usize, 175), spec.len);
 }
 
 test "opcode table: critical entries present" {
@@ -288,7 +336,40 @@ test "opcode table: critical entries present" {
     // Unknown
     try std.testing.expect(find(0x05) == null);
     try std.testing.expect(find(0x12) == null);
-    try std.testing.expect(find(0xC0) == null);
+    try std.testing.expect(find(0xC5) == null);
+}
+
+test "0xC0..0xC4 sign-extension are present in spec" {
+    try std.testing.expect(std.mem.eql(u8, find(0xC0).?.tag, "i32_extend8_s"));
+    try std.testing.expect(std.mem.eql(u8, find(0xC1).?.tag, "i32_extend16_s"));
+    try std.testing.expect(std.mem.eql(u8, find(0xC2).?.tag, "i64_extend8_s"));
+    try std.testing.expect(std.mem.eql(u8, find(0xC3).?.tag, "i64_extend16_s"));
+    try std.testing.expect(std.mem.eql(u8, find(0xC4).?.tag, "i64_extend32_s"));
+}
+
+test "prefix_fc_spec coverage" {
+    try std.testing.expectEqual(@as(usize, 12), prefix_fc_spec.len);
+    try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x00).?.tag, "i32_trunc_sat_f32_s"));
+    try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x01).?.tag, "i32_trunc_sat_f32_u"));
+    try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x02).?.tag, "i32_trunc_sat_f64_s"));
+    try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x03).?.tag, "i32_trunc_sat_f64_u"));
+    try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x04).?.tag, "i64_trunc_sat_f32_s"));
+    try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x05).?.tag, "i64_trunc_sat_f32_u"));
+    try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x06).?.tag, "i64_trunc_sat_f64_s"));
+    try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x07).?.tag, "i64_trunc_sat_f64_u"));
+    try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x08).?.tag, "memory_init"));
+    try std.testing.expect(findPrefixFc(0x08).?.imm == .memory_init_args);
+    try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x09).?.tag, "data_drop"));
+    try std.testing.expect(findPrefixFc(0x09).?.imm == .data_drop_arg);
+    try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x0A).?.tag, "memory_copy"));
+    try std.testing.expect(findPrefixFc(0x0A).?.imm == .memory_copy_args);
+    try std.testing.expect(std.mem.eql(u8, findPrefixFc(0x0B).?.tag, "memory_fill"));
+    try std.testing.expect(findPrefixFc(0x0B).?.imm == .memory_fill_args);
+}
+
+test "findPrefixFc returns null for unknown sub-opcode" {
+    try std.testing.expect(findPrefixFc(0x7F) == null);
+    try std.testing.expect(findPrefixFc(0x0C) == null);
 }
 
 test "mnemonicFor returns canonical mnemonic" {

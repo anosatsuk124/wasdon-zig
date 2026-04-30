@@ -142,8 +142,7 @@ The following literal forms may be used as initial values.
 | `true` / `false` | Boolean values (subject to the restriction in §4.7). |
 | String literal `"..."` | `System.String` |
 | Character literal | `System.Char` |
-| Integer literal (decimal or hexadecimal) | A signed integer |
-| Integer literal with trailing `u` | An unsigned integer (e.g. `0xFFFFFFFFu`) |
+| Integer literal (decimal or hexadecimal) | A signed or unsigned integer (the slot type controls signedness; for unsigned values above `Int32.MaxValue` use the hexadecimal bit-pattern form, see §4.7). |
 | Floating-point literal | A floating-point number |
 
 **The assembler strictly validates which literal forms may be used for each type.**
@@ -164,7 +163,7 @@ The meaning of `this` is determined by the declared type of the variable as foll
 | Type | Permitted literals |
 | --- | --- |
 | `SystemSingle` (float), `SystemDouble` (double) | Numeric literal, or `null` |
-| `SystemInt32`, `SystemUInt32` | Integer literal (with or without the `u` suffix), or `null` |
+| `SystemInt32`, `SystemUInt32` | Integer literal (decimal or hexadecimal, **no `u` suffix** — see caveats), or `null` |
 | `SystemString` | String literal, or `null` |
 | Any other type (including `SystemObject`) | Only `this` or `null` |
 
@@ -173,6 +172,19 @@ The meaning of `this` is determined by the declared type of the variable as foll
 - It is **not possible** to specify a non-null value for `SystemType` from Udon Assembly.
 - The same limitation applies to `SystemInt64`, `SystemUInt64`, `SystemSByte`, `SystemByte`, `SystemInt16`, `SystemUInt16`, and `SystemBoolean`. In particular, **it is impossible to successfully specify `true` or `false` for a `SystemBoolean` variable** from Udon Assembly.
 - **`Int32.MinValue` must be emitted as the hexadecimal bit-pattern literal `0x80000000`, not the decimal form `-2147483648`.** The Udon Assembler's literal parser splits sign and magnitude and calls `Int32.Parse` on the magnitude; for `MinValue` the magnitude (`2147483648`) exceeds `Int32.MaxValue`, throwing `OverflowException: Value was either too large or too small for an Int32.` at assemble time. Hex form is parsed as a bit pattern (`int.Parse(..., NumberStyles.HexNumber)`) and yields `Int32.MinValue` cleanly. Other negative `SystemInt32` values are unaffected because their magnitudes fit in `Int32`. This shows up in real producers: Rust `alloc::raw_vec`'s capacity-check idiom emits `i32.const -2147483648`, so any `alloc`-using bench triggers it.
+- **`SystemUInt32` literals greater than `Int32.MaxValue` (`2147483647`) must be emitted as the bare hexadecimal bit-pattern form (e.g. `0xFFFFFFFF`, `0x80000000`) with **no `u` suffix**.** Two distinct lexer bugs make every other notation unsafe:
+  - The decimal+`u` form (`4294967295u`, `2147483648u`) is the same `LexNumber` overflow as the `Int32.MinValue` caveat above: the scanner runs `Int32.Parse` on the token's magnitude *before* honoring the suffix, so any decimal magnitude over `Int32.MaxValue` throws `OverflowException` at assemble time even with the unsigned suffix.
+  - The hex+`u` form (`0xFFFFFFFFu`, `0x80000000u`) is *also* rejected, but for an unrelated reason: `LexNumber` ends a hex token at the first non-hex-digit character, so the trailing `u` is never folded into the literal — it is left over as a separate identifier token. The parser consumes that orphan `u` as the apparent name of the *next* data declaration, so the error surfaces one line later as `ParseException: Expected ':', found '<real-name>'` (e.g. line 30's `__c_i32_32` when the bad `u` was on line 29). Earlier revisions of this spec mistakenly listed `0xFFFFFFFFu` as canonical; that is wrong.
+  The bare hex form is parsed via `NumberStyles.HexNumber` and produces the correct `UInt32` bit pattern in the slot — same path the `Int32.MinValue` `0x80000000` emission already relies on. This is triggered in the wild by any `__ds_word_0_*` data-segment word containing 0xFF-saturated bytes (common in Rust/Zig output for memset patterns) and by cached unsigned constants like `0xFFFFFFFF`.
+- **`SystemSingle` literals must be plain decimal with a fractional point (`.`) and *no* exponent marker. Both `e`/`E` forms and bare-integer forms are unsafe.** Two distinct VRC `LexNumber` quirks combine to make every other shape fragile:
+  - **Bare-integer shape (`10000000000000`, `170141180000000000000000000000000000000`)** — `LexNumber` classifies a numeric token by shape *before* the slot type is consulted, and a digit-only token routes to integer parse where `Int32.Parse` overflows on the magnitude. Even for an `f32` slot, a Zig `{d}` rendering of an integer-valued IEEE constant goes down this path. Append `.0` (or insert `.` somewhere) to switch the lexer onto the float path.
+  - **Exponent shape (`1e13`, `1.0e39`, `3.4028235e38`)** — VRC's `LexNumber` does *not* treat `e`/`E` as a continuation of either the integer or the float token, *even when a `.` precedes it*. Empirically, `1.0e39` lexes as `1.0` (float, accepted) plus an orphan IDENTIFIER `e39`; the orphan becomes the apparent name of the *next* data declaration and the parser then reports `ParseException: Expected ':', found '<next-name>' instead. Line: <N+1>` — the same failure mode as the `0xFFFFFFFFu` orphan-`u` case in the `SystemUInt32` section above. There is *no* exponent shape (lowercase / uppercase / signed / unsigned exponent) that lexes as a float in VRC's UAssembly. Producers must emit the full decimal expansion (e.g. `340282346638528859811704183484516925440.0` for `f32::MAX`) instead. Earlier revisions of this spec mistakenly recommended `1e13` and `1.0e39`; both are wrong.
+- **Non-finite `SystemSingle` values (`±Inf`, `NaN`) have no parseable literal form at all.** Combining the two rules above:
+  - The bare `inf` / `-inf` / `nan` tokens Zig's `{d}` (and other "natural" debug printers) emit get classified as IDENTIFIER and trip `ParseException: Unexpected Token in DataDeclaration initializer: Type: IDENTIFIER, Lexeme: [inf]`.
+  - The `±1.0e39` overflow trick — `float.Parse` is documented to round magnitudes outside `[-MaxValue, MaxValue]` to `±Infinity`, which would otherwise let an arbitrarily large literal stand in for `±Inf` — fails because the lexer never delivers `1.0e39` to `float.Parse` as a single token (per the exponent-shape rule above).
+  - `NaN` has nothing analogous to the `±Inf` overflow trick to begin with — there is no number-shaped token that `float.Parse` returns NaN for.
+
+  The translator therefore emits `%SystemSingle, null` (slot defaults to `default(float) = 0.0f`) for all three non-finite values and synthesises the canonical IEEE values at startup in `_onEnable` via three division-by-zero idioms: `1.0 / 0.0 = +Inf`, `-1.0 / 0.0 = -Inf`, `0.0 / 0.0 = NaN`. Each canon is computed once and `COPY`-ed into every registered slot. This adds a one-time per-non-finite-slot cost; the alternative — leaving slots at `0.0f` and tolerating wrong semantics — silently breaks consumers like Rhai's float comparison operators that depend on `NaN != NaN` and `1.0/0.0 == +Infinity`.
 - These are limitations of the Udon Assembly assembler itself. They can only be circumvented by producing assembly via Udon Graph or UdonSharp.
 
 ### 4.8 Attributes
@@ -489,6 +501,8 @@ __<methodName>__<argTypeList>__<returnType>
 - **`VRCInstantiate`:** The sole known example of a "falsified" Udon type name.
 - **Missing nodes silently halt at load time.** UdonBehaviour validates every EXTERN signature against the static Udon node list when the program is loaded. A signature that does not resolve sets `_isReady = false`, after which Udon dispatches no events at all — neither `_onEnable` nor `_start` runs, and the only log line is `[UdonBehaviour] Udon VM execution errored, this UdonBehaviour will be halted.` (no exception name, no node name, no PC). When debugging a producer that assembles cleanly but never executes, the first hypothesis to test is "did we emit a node not in `docs/udon_nodes.txt`?". Confirmed missing arithmetic nodes that translators must synthesize from primitives:
   - **Modulus / Remainder.** C# names the `%` operator method `op_Modulus`, but Udon's static node list calls it `op_Remainder` — and only ships the `SystemInt32` and `SystemDecimal` variants. `SystemUInt32`, `SystemInt64`, and `SystemUInt64` have **neither** `op_Modulus` nor `op_Remainder` exposed. The translator must therefore (a) emit `SystemInt32.__op_Remainder__` (not `__op_Modulus__`) for `i32.rem_s`, and (b) synthesize the other three as `a - (a/b)*b` using the corresponding `__op_Division__` / `__op_Multiplication__` / `__op_Subtraction__` nodes (all present in the node list).
+
+> See `docs/spec_numeric_instruction_lowering.md` for the full mapping from WASM numeric opcodes to Udon EXTERN signatures, including the synthesised multi-EXTERN sequences (e.g. post-MVP sign-extension as `(x << N) >> N`).
 
 ### 7.5 Absence of a Complete Reference
 

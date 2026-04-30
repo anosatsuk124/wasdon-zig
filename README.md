@@ -53,15 +53,22 @@ zig build wasm-example    # compiles examples/wasm-bench/main.zig to MVP WASM an
 ### Translate
 
 ```sh
-# build the bench fixture, then translate it
+# build the bench fixture, then translate it (sidecar bench.udon_meta.json
+# is auto-discovered next to bench.wasm)
 zig build wasm-example
 zig build run -- translate src/translator/testdata/bench.wasm -o /tmp/bench.uasm
 
 # or use the installed binary directly
 ./zig-out/bin/wasdon_zig translate path/to/input.wasm -o output.uasm
+
+# pass an explicit __udon_meta sidecar
+./zig-out/bin/wasdon_zig translate path/to/input.wasm \
+    --meta path/to/input.udon_meta.json -o output.uasm
 ```
 
-Omit `-o` to write to stdout.
+Omit `-o` to write to stdout. Omit `--meta` and the CLI looks for
+`<wasm-stem>.udon_meta.json` next to the `.wasm` input; if no sidecar
+is found, translation proceeds with translator defaults.
 
 ### Writing your own WASM
 
@@ -81,29 +88,26 @@ export fn on_start() void {
 
 The translator parses the import name against the Udon extern signature grammar (`docs/udon_specs.md` §7) and dispatches it generically, so adding new externs never requires touching the translator. `SystemString` arguments are automatically UTF-8 decoded from the `(ptr, len)` pair.
 
-For an end-to-end walkthrough — toolchain pinning (Zig + Rust `wasm32v1-none`), Cargo workspace layout, host-import declarations, mutable-state limitations, `__udon_meta` discovery rules, recursion opt-in, and the build → translate pipeline — see [`docs/producer_guide.md`](docs/producer_guide.md). Working examples live under `examples/` (Zig: `wasm-bench`, `udon-orbit`; Rust: `wasm-bench-rs`, `udon-orbit-rs`).
+For an end-to-end walkthrough — toolchain pinning (Zig + Rust `wasm32v1-none`), Cargo workspace layout, host-import declarations, mutable-state limitations, the `__udon_meta` sidecar JSON contract, recursion opt-in, and the build → translate pipeline — see [`docs/producer_guide.md`](docs/producer_guide.md). Working examples live under `examples/` (Zig: `wasm-bench`, `udon-orbit`; Rust: `wasm-bench-rs`, `udon-orbit-rs`).
 
-Udon-side field names, events, sync modes, and memory sizing are configured via a `__udon_meta` JSON blob embedded in the module (see `docs/spec_udonmeta_conversion.md`):
+Udon-side field names, events, sync modes, and memory sizing are configured via a `__udon_meta` JSON file that ships alongside the `.wasm` (see `docs/spec_udonmeta_conversion.md`). For `bench.wasm`, the translator auto-discovers `bench.udon_meta.json` in the same directory:
 
-```zig
-const udon_meta_json =
-    \\{
-    \\  "version": 1,
-    \\  "functions": {
-    \\    "start": { "source": {"kind":"export","name":"on_start"}, "label":"_start", "export": true, "event":"Start" }
-    \\  },
-    \\  "fields": {
-    \\    "counter": { "source":{"kind":"global","name":"counter"}, "udonName":"_counter", "type":"int", "export": true }
-    \\  },
-    \\  "options": {
-    \\    "memory": { "initialPages": 1, "maxPages": 16 }
-    \\  }
-    \\}
-;
-
-export fn __udon_meta_ptr() [*]const u8 { return udon_meta_json.ptr; }
-export fn __udon_meta_len() u32 { return @intCast(udon_meta_json.len); }
+```json
+{
+  "version": 1,
+  "functions": {
+    "start": { "source": {"kind":"export","name":"on_start"}, "label":"_start", "export": true, "event":"Start" }
+  },
+  "fields": {
+    "counter": { "source":{"kind":"global","name":"counter"}, "udonName":"_counter", "type":"int", "export": true }
+  },
+  "options": {
+    "memory": { "initialPages": 1, "maxPages": 16 }
+  }
+}
 ```
+
+The Wasm binary contains nothing related to `__udon_meta` — no exports, no data segments, no globals are reserved for it.
 
 ## Project layout
 
@@ -160,9 +164,10 @@ const wasdon_zig = @import("wasdon_zig");
 pub fn translate_wasm(
     gpa: std.mem.Allocator,
     wasm_bytes: []const u8,
+    udon_meta_json: ?[]const u8, // pass `null` for "no meta"
     writer: *std.Io.Writer,
 ) !void {
-    try wasdon_zig.translateBytes(gpa, wasm_bytes, writer, .{});
+    try wasdon_zig.translateBytes(gpa, wasm_bytes, udon_meta_json, writer, .{});
 }
 ```
 

@@ -177,32 +177,9 @@ fn bump_peak() -> i32 {
     unsafe { *(&raw const PEAK) as i32 }
 }
 
-// ---------- __udon_meta ----------
-
-const UDON_META_JSON: &[u8] = br#"{
-  "version": 1,
-  "behaviour": { "syncMode": "manual" },
-  "functions": {
-    "start":    { "source": {"kind":"export","name":"on_start"},    "label":"_start",    "export": true, "event":"Start"    },
-    "update":   { "source": {"kind":"export","name":"on_update"},   "label":"_update",   "export": true, "event":"Update"   },
-    "interact": { "source": {"kind":"export","name":"on_interact"}, "label":"_interact", "export": true, "event":"Interact" }
-  },
-  "options": {
-    "strict": false,
-    "recursion": "stack",
-    "memory": { "initialPages": 8, "maxPages": 32, "udonName": "_memory" }
-  }
-}"#;
-
-#[unsafe(no_mangle)]
-pub extern "C" fn __udon_meta_ptr() -> *const u8 {
-    UDON_META_JSON.as_ptr()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn __udon_meta_len() -> u32 {
-    UDON_META_JSON.len() as u32
-}
+// `__udon_meta` is supplied as a sidecar file
+// (`wasm_bench_alloc_rs.udon_meta.json`) alongside the compiled `.wasm` —
+// see docs/spec_udonmeta_conversion.md.
 
 // ---------- Bench scenarios ----------
 
