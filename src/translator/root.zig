@@ -15,5 +15,4 @@ pub const Error = translate.Error;
 
 test {
     std.testing.refAllDecls(@This());
-    _ = @import("tests.zig");
 }

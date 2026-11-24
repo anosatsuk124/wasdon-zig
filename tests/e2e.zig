@@ -76,14 +76,22 @@ const Host = struct {
     }
 };
 
+pub const RunOptions = struct {
+    stats: ?*Stats = null,
+    /// Translation warnings the module is expected to produce.
+    warnings: usize = 0,
+};
+
 /// Translate, check and run one WASM module; returns the emulator log.
-pub fn run(arena: std.mem.Allocator, wasm_bytes: []const u8, scenario: []const u8, stats: ?*Stats) ![]const u8 {
+pub fn run(arena: std.mem.Allocator, wasm_bytes: []const u8, scenario: []const u8, options: RunOptions) ![]const u8 {
     var nodes = try udon.check.loadNodes(arena, node_list);
     var diagnostics: wasdon.Diagnostics = .init(arena);
     var text: std.Io.Writer.Allocating = .init(arena);
     try wasdon.translateBytes(arena, wasm_bytes, &text.writer, .{ .nodes = &nodes, .diagnostics = &diagnostics });
-    for (diagnostics.warnings.items) |w| std.debug.print("warning: {s}\n", .{w});
-    try testing.expectEqual(@as(usize, 0), diagnostics.warnings.items.len);
+    if (diagnostics.warnings.items.len != options.warnings) {
+        for (diagnostics.warnings.items) |w| std.debug.print("warning: {s}\n", .{w});
+        return error.UnexpectedWarnings;
+    }
 
     var diag: udon.text.Diag = .{};
     const prog = udon.text.parse(arena, text.written(), &diag) catch |e| {
@@ -108,15 +116,33 @@ pub fn run(arena: std.mem.Allocator, wasm_bytes: []const u8, scenario: []const u
             return e;
         };
     }
-    if (stats) |s| s.* = .{ .heap_slots = report.heap_slots, .code_bytes = prog.code_size, .steps = vm.steps, .extern_calls = vm.extern_calls };
+    if (options.stats) |s| s.* = .{ .heap_slots = report.heap_slots, .code_bytes = prog.code_size, .steps = vm.steps, .extern_calls = vm.extern_calls };
     return vm.log.items;
+}
+
+test {
+    _ = @import("ops.zig");
+}
+
+test "hand-assembled programs: control flow, calls, memory, imports" {
+    const structure = @import("structure.zig");
+    const builder = @import("wasm_builder.zig");
+    for (structure.cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        errdefer std.debug.print("case '{s}' failed\n", .{case.name});
+        var m: builder.Module = .{ .a = arena.allocator() };
+        try case.build(&m);
+        const log = try run(arena.allocator(), try m.build(), case.scenario, .{ .warnings = case.warnings });
+        try testing.expectEqualStrings(case.expected, log);
+    }
 }
 
 fn example(comptime name: []const u8) !Stats {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var stats: Stats = undefined;
-    const log = try run(arena.allocator(), @embedFile(name ++ ".wasm"), @embedFile(name ++ ".scenario"), &stats);
+    const log = try run(arena.allocator(), @embedFile(name ++ ".wasm"), @embedFile(name ++ ".scenario"), .{ .stats = &stats });
     try testing.expectEqualStrings(@embedFile(name ++ ".log"), log);
     return stats;
 }

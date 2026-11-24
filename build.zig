@@ -96,6 +96,19 @@ pub fn build(b: *std.Build) void {
         e2e_mod.addAnonymousImport(b.fmt("{s}.scenario", .{example.name}), .{ .root_source_file = b.path(b.fmt("examples/{s}/scenario.txt", .{example.dir})) });
     }
 
+    // ---- hand-assembled fixtures, for replay in a real WASM engine ----
+    const dump = b.addExecutable(.{
+        .name = "dump_fixtures",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/dump_fixtures.zig"),
+            .target = b.graph.host,
+            .imports = &.{.{ .name = "wasdon_zig", .module = mod }},
+        }),
+    });
+    const dump_run = b.addRunArtifact(dump);
+    dump_run.addArg(b.getInstallPath(.prefix, "fixtures"));
+    b.step("dump-fixtures", "Write the hand-assembled test modules to zig-out/fixtures").dependOn(&dump_run.step);
+
     // ---- tests ----
     const test_step = b.step("test", "Run all tests");
     for ([_]*std.Build.Module{ wasm_mod, udon_mod, translator_mod, mod, exe.root_module, e2e_mod }) |m| {

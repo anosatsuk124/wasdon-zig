@@ -7,11 +7,18 @@
 // everything the program logs. `zig build test` replays the same scenario
 // against the translated Udon Assembly in the emulator and compares the logs.
 //
+//   node tools/golden.mjs --check <dir>
+//
+// Replays every `<name>.wasm` + `<name>.scenario` in a directory written by
+// `zig build dump-fixtures` and compares the output with `<name>.log`, the
+// expectation hard-coded in `tests/structure.zig`.
+//
 // Host imports mirror `tests/e2e.zig`: `Debug.Log*` plus the Unity mocks
 // used by the udon-orbit example.
 import fs from "node:fs";
+import path from "node:path";
 
-const [wasmPath, scenarioPath] = process.argv.slice(2);
+function run(wasmPath, scenarioPath) {
 const out = [];
 let memory;
 const text = (ptr, len) => new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len));
@@ -24,6 +31,7 @@ const self = handle({ type: "Transform", position: [0, 0, 0] });
 let clones = 0;
 
 const host = {
+  "UnityEngineDebug.__Log__SystemObject__SystemVoid": (v) => out.push(String(v)),
   "UnityEngineDebug.__Log__SystemString__SystemVoid": (p, n) => out.push(text(p, n)),
   "UnityEngineDebug.__LogWarning__SystemString__SystemVoid": (p, n) => out.push("[warning] " + text(p, n)),
   "UnityEngineDebug.__LogError__SystemString__SystemVoid": (p, n) => out.push("[error] " + text(p, n)),
@@ -48,16 +56,17 @@ const host = {
 
 const module = new WebAssembly.Module(fs.readFileSync(wasmPath));
 const imports = {};
+const labels = {};
 for (const imp of WebAssembly.Module.imports(module)) {
   if (!(imp.name in host)) throw new Error(`no host implementation for import ${imp.module}.${imp.name}`);
   (imports[imp.module] ??= {})[imp.name] = host[imp.name];
 }
+// A start function may log before `memory` is known; none of ours passes strings.
 const instance = new WebAssembly.Instance(module, imports);
 const ex = instance.exports;
 memory = ex.memory;
 
 // Map Udon labels to exports through __udon_meta (or use export names as-is).
-const labels = {};
 const value = (e) => (typeof e === "function" ? e() : e.value);
 if (ex.__udon_meta_ptr && ex.__udon_meta_len) {
   const meta = JSON.parse(text(value(ex.__udon_meta_ptr), value(ex.__udon_meta_len)));
@@ -76,4 +85,23 @@ for (const line of fs.readFileSync(scenarioPath, "utf8").split("\n")) {
     out.push(`[trap] ${e.message}`);
   }
 }
-process.stdout.write(out.join("\n") + "\n");
+return out.join("\n") + "\n";
+}
+
+const args = process.argv.slice(2);
+if (args[0] === "--check") {
+  let failed = 0;
+  const names = fs.readdirSync(args[1]).filter((f) => f.endsWith(".wasm")).map((f) => f.slice(0, -5));
+  for (const name of names.sort()) {
+    const base = path.join(args[1], name);
+    const got = run(base + ".wasm", base + ".scenario");
+    const want = fs.readFileSync(base + ".log", "utf8");
+    console.log(`${got === want ? "ok  " : "FAIL"} ${name}`);
+    if (got !== want) {
+      failed++;
+      console.log(`--- expected\n${want}--- engine\n${got}`);
+    }
+  }
+  process.exit(failed ? 1 : 0);
+}
+process.stdout.write(run(args[0], args[1]));
