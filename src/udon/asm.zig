@@ -1,565 +1,289 @@
-//! Udon Assembly writer.
+//! Udon Assembly program builder and text writer (`docs/udon_specs.md`).
 //!
-//! Models the textual form from `docs/udon_specs.md` §2-6. Responsibilities:
-//!
-//!   * Collect data-section variable declarations and their `.export`/`.sync`
-//!     attributes.
-//!   * Collect code-section instructions and their address layout. Pass A
-//!     determines each label's bytecode address (each instruction is 4 or 8
-//!     bytes per §6.1) so Pass B can materialize hard-coded `SystemUInt32`
-//!     RAC literals.
-//!   * Render the full `.data_start … .data_end` / `.code_start … .code_end`
-//!     program as text.
-//!
-//! The writer is **append-only** and owns no WASM knowledge — the translator
-//! calls these primitives to stream out instructions.
+//! The builder works one level above raw opcodes: an `ext` instruction owns
+//! its argument list and a `copy` owns both operands, so every `PUSH` in the
+//! output is consumed by the instruction right after its group. Jump targets
+//! are `Label`s resolved to bytecode addresses when the program is written;
+//! only exported labels (event entry points) appear by name in the text.
 
 const std = @import("std");
-const type_name = @import("type_name.zig");
-const TypeName = type_name.TypeName;
 
-/// Every data-section literal we emit for WASM-side needs.
-/// `null_literal` is used for reference types and for the strict-initializer
-/// scalars (SystemByte, SystemSByte, SystemInt16/UInt16, SystemInt64/UInt64,
-/// SystemBoolean, SystemType) whose only legal non-`this` initial value is
-/// `null` — see docs/udon_specs.md §4.7. There is deliberately no byte-literal
-/// variant: the UAssembly assembler rejects any numeric initializer for a
-/// SystemByte field with `AssemblyException: Type 'SystemByte' must be
-/// initialized to null or a this reference.`
-pub const Literal = union(enum) {
-    int32: i32,
-    uint32: u32,
-    single: f32,
+pub const Var = u32;
+pub const Label = u32;
+pub const Extern = u32;
+
+pub const max_args = 6;
+/// `JUMP` to this address ends the current event (§9.2).
+pub const halt_addr: u32 = 0xFFFFFFFC;
+
+pub const Sync = enum { none, linear, smooth };
+
+pub const Init = union(enum) {
+    null_,
+    this,
+    int: i32,
+    uint: u32,
+    float: f32,
     string: []const u8,
-    null_literal,
-    /// The bare token `this`. Legal only for `GameObject`, `Transform`, or
-    /// UdonBehaviour/Object-typed slots (`docs/udon_specs.md` §4.6).
-    this_ref,
-
-    pub fn write(self: Literal, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        switch (self) {
-            .int32 => |v| {
-                if (v == std.math.minInt(i32)) {
-                    // The Udon Assembler parses signed-decimal literals by
-                    // splitting sign and magnitude, then `Int32.Parse(magnitude)`.
-                    // For Int32.MinValue this throws OverflowException because
-                    // |MinValue| = 2147483648 > Int32.MaxValue. Emit the
-                    // bit-pattern hex literal instead — `int.Parse` with
-                    // `NumberStyles.HexNumber` returns Int32.MinValue without
-                    // overflowing. Triggered in the wild by Rust
-                    // `alloc::raw_vec`'s capacity-check idiom.
-                    try writer.writeAll("0x80000000");
-                } else {
-                    try writer.print("{d}", .{v});
-                }
-            },
-            .uint32 => |v| {
-                if (v <= std.math.maxInt(i32)) {
-                    try writer.print("{d}", .{v});
-                } else {
-                    try writer.print("{d}u", .{v});
-                }
-            },
-            .single => |v| try writer.print("{d}", .{v}),
-            .string => |s| {
-                try writer.writeAll("\"");
-                try escapeString(writer, s);
-                try writer.writeAll("\"");
-            },
-            .null_literal => try writer.writeAll("null"),
-            .this_ref => try writer.writeAll("this"),
-        }
-    }
-
-    /// Canonical zero/initial Literal for a `Prim`. Returns a typed zero for
-    /// the three primitives whose Udon type accepts non-null numeric
-    /// literals (Int32/UInt32/Single per `docs/udon_specs.md` §4.7); every
-    /// other primitive — including reference types like GameObject /
-    /// Transform / UdonBehaviour — defaults to `null_literal`. Adding a new
-    /// reference-typed `Prim` variant therefore needs no change to this
-    /// function: the `else` branch absorbs it. If a future `Prim` accepts
-    /// a typed literal, add a new arm above the `else` for it.
-    pub fn zeroFor(prim: type_name.Prim) Literal {
-        return switch (prim) {
-            .int32 => .{ .int32 = 0 },
-            .uint32 => .{ .uint32 = 0 },
-            .single => .{ .single = 0.0 },
-            else => .null_literal,
-        };
-    }
+    /// `SystemUInt32` literal holding the bytecode address of a label.
+    label: Label,
+    /// `SystemString` literal: base64 of the labels' addresses as
+    /// little-endian `u32`s (decoded at runtime into a jump table).
+    label_table: []const Label,
 };
 
-fn escapeString(w: *std.Io.Writer, s: []const u8) std.Io.Writer.Error!void {
-    for (s) |c| switch (c) {
-        '"' => try w.writeAll("\\\""),
-        '\\' => try w.writeAll("\\\\"),
-        '\n' => try w.writeAll("\\n"),
-        '\r' => try w.writeAll("\\r"),
-        '\t' => try w.writeAll("\\t"),
-        else => try w.writeByte(c),
-    };
-}
-
-pub const SyncMode = enum { none, linear, smooth };
-
-pub const DataDecl = struct {
+pub const VarDecl = struct {
     name: []const u8,
-    ty: TypeName,
-    init: Literal,
-    is_export: bool = false,
-    sync: ?SyncMode = null,
+    ty: []const u8,
+    init: Init = .null_,
+    exported: bool = false,
+    sync: ?Sync = null,
 };
 
-/// Opcodes corresponding to Udon Assembly §6.1.
-pub const Opcode = enum {
-    nop, // 4
-    push, // 8 (param)
-    pop, // 4
-    jump_if_false, // 8 (addr)
-    jump, // 8 (addr)
-    extern_, // 8 (name string)
-    annotation, // 4 (param)
-    jump_indirect, // 8 (var)
-    copy, // 4
+pub const Ext = struct {
+    sig: Extern,
+    args: [max_args]Var = undefined,
+    n: u8 = 0,
 };
 
-pub fn opcodeSize(op: Opcode) u32 {
-    return switch (op) {
-        .nop, .pop, .annotation, .copy => 4,
-        .push, .jump_if_false, .jump, .extern_, .jump_indirect => 8,
-    };
-}
-
-pub fn opcodeMnemonic(op: Opcode) []const u8 {
-    return switch (op) {
-        .nop => "NOP",
-        .push => "PUSH",
-        .pop => "POP",
-        .jump_if_false => "JUMP_IF_FALSE",
-        .jump => "JUMP",
-        .extern_ => "EXTERN",
-        .annotation => "ANNOTATION",
-        .jump_indirect => "JUMP_INDIRECT",
-        .copy => "COPY",
-    };
-}
-
-/// An instruction parameter — one of an integer literal, a symbol name, a
-/// label reference (resolved at emit time), or a string literal (creating an
-/// anonymous data variable — used for EXTERN signatures).
-pub const ParamKind = enum { none, symbol, label, integer, string };
-
-pub const Param = union(ParamKind) {
-    none,
-    /// Name of a variable or label. Stored as an owning slice.
-    symbol: []const u8,
-    label: []const u8,
-    integer: u32,
-    string: []const u8,
-};
-
-pub const CodeItem = union(enum) {
-    label: []const u8,
-    export_label: []const u8, // ".export <label>" directive (applies to next label)
+pub const Inst = union(enum) {
+    label: Label,
+    /// `PUSH` each argument, then `EXTERN`.
+    ext: Ext,
+    /// `PUSH src; PUSH dst; COPY`.
+    copy: struct { src: Var, dst: Var },
+    jump: Label,
+    /// `PUSH cond; JUMP_IF_FALSE target`.
+    jump_if_false: struct { cond: Var, target: Label },
+    jump_indirect: Var,
+    halt,
     comment: []const u8,
-    instr: struct {
-        op: Opcode,
-        param: Param,
-    },
-};
 
-pub const Asm = struct {
-    allocator: std.mem.Allocator,
-    datas: std.ArrayList(DataDecl),
-    items: std.ArrayList(CodeItem),
-
-    pub fn init(allocator: std.mem.Allocator) Asm {
-        return .{
-            .allocator = allocator,
-            .datas = .empty,
-            .items = .empty,
+    pub fn size(self: Inst) u32 {
+        return switch (self) {
+            .label, .comment => 0,
+            .ext => |e| 8 * @as(u32, e.n) + 8,
+            .copy => 20,
+            .jump_if_false => 16,
+            .jump, .jump_indirect, .halt => 8,
         };
-    }
-
-    pub fn deinit(self: *Asm) void {
-        self.datas.deinit(self.allocator);
-        self.items.deinit(self.allocator);
-    }
-
-    // ---- data section ----
-
-    pub fn addData(self: *Asm, d: DataDecl) !void {
-        try self.datas.append(self.allocator, d);
-    }
-
-    // ---- code section ----
-
-    pub fn label(self: *Asm, name: []const u8) !void {
-        if (self.lastItemIsLabel()) try self.nop();
-        try self.items.append(self.allocator, .{ .label = name });
-    }
-
-    pub fn exportLabel(self: *Asm, name: []const u8) !void {
-        if (self.lastItemIsLabel()) try self.nop();
-        try self.items.append(self.allocator, .{ .export_label = name });
-    }
-
-    /// Walk backwards through `items`, transparently skipping decorative
-    /// entries (`comment`, `export_label`). Returns true when the first
-    /// non-decorative entry encountered is a bare `label` — i.e. adding a
-    /// new label right now would produce two labels at the same bytecode
-    /// address, which Udon rejects as `AliasedSymbolException`.
-    fn lastItemIsLabel(self: *const Asm) bool {
-        var i = self.items.items.len;
-        while (i > 0) {
-            i -= 1;
-            switch (self.items.items[i]) {
-                .comment, .export_label => continue,
-                .label => return true,
-                .instr => return false,
-            }
-        }
-        return false;
-    }
-
-    pub fn comment(self: *Asm, text: []const u8) !void {
-        try self.items.append(self.allocator, .{ .comment = text });
-    }
-
-    pub fn nop(self: *Asm) !void {
-        try self.emit(.nop, .none);
-    }
-
-    pub fn push(self: *Asm, symbol: []const u8) !void {
-        try self.emit(.push, .{ .symbol = symbol });
-    }
-
-    pub fn pop(self: *Asm) !void {
-        try self.emit(.pop, .none);
-    }
-
-    pub fn jump(self: *Asm, lbl: []const u8) !void {
-        try self.emit(.jump, .{ .label = lbl });
-    }
-
-    pub fn jumpAddr(self: *Asm, addr: u32) !void {
-        try self.emit(.jump, .{ .integer = addr });
-    }
-
-    pub fn jumpIfFalse(self: *Asm, lbl: []const u8) !void {
-        try self.emit(.jump_if_false, .{ .label = lbl });
-    }
-
-    pub fn extern_(self: *Asm, sig: []const u8) !void {
-        try self.emit(.extern_, .{ .string = sig });
-    }
-
-    pub fn annotation(self: *Asm, sym: []const u8) !void {
-        try self.emit(.annotation, .{ .symbol = sym });
-    }
-
-    pub fn jumpIndirect(self: *Asm, sym: []const u8) !void {
-        try self.emit(.jump_indirect, .{ .symbol = sym });
-    }
-
-    pub fn copy(self: *Asm) !void {
-        try self.emit(.copy, .none);
-    }
-
-    fn emit(self: *Asm, op: Opcode, p: Param) !void {
-        try self.items.append(self.allocator, .{ .instr = .{ .op = op, .param = p } });
-    }
-
-    // ---- layout: bytecode address per label ----
-
-    pub const LabelMap = std.StringHashMapUnmanaged(u32);
-
-    /// Pass A: compute bytecode address for every label. Returns an owned
-    /// hash map (caller must `labels.deinit(allocator)`).
-    pub fn computeLayout(self: *const Asm, allocator: std.mem.Allocator) !LabelMap {
-        var map: LabelMap = .empty;
-        errdefer map.deinit(allocator);
-        var addr: u32 = 0;
-        for (self.items.items) |it| switch (it) {
-            .label => |name| try map.put(allocator, name, addr),
-            .export_label, .comment => {},
-            .instr => |ins| addr += opcodeSize(ins.op),
-        };
-        return map;
-    }
-
-    /// Resolve a label name to its bytecode address. Returns null when the
-    /// label is not defined.
-    pub fn labelAddr(map: LabelMap, name: []const u8) ?u32 {
-        return map.get(name);
-    }
-
-    // ---- rendering ----
-
-    /// Pass C: render the complete program. `data_extra` is a list of data
-    /// declarations the caller computed from the layout (e.g. RACs whose
-    /// literals are label addresses) — they are emitted verbatim alongside
-    /// `self.datas`.
-    pub fn render(self: *const Asm, writer: *std.Io.Writer, layout: LabelMap) std.Io.Writer.Error!void {
-        try writer.writeAll(".data_start\n");
-        for (self.datas.items) |d| {
-            // attributes first
-            if (d.is_export) try writer.print("    .export {s}\n", .{d.name});
-            if (d.sync) |mode| try writer.print("    .sync {s}, {s}\n", .{ d.name, syncModeName(mode) });
-            try writer.print("    {s}: %", .{d.name});
-            try d.ty.write(writer);
-            try writer.writeAll(", ");
-            try d.init.write(writer);
-            try writer.writeAll("\n");
-        }
-        try writer.writeAll(".data_end\n\n");
-
-        try writer.writeAll(".code_start\n");
-        // Track: after `.export <lbl>` we expect to hit that label next — we
-        // render it verbatim; the label itself is written before the first
-        // instruction that follows.
-        for (self.items.items) |it| switch (it) {
-            .comment => |t| try writer.print("    # {s}\n", .{t}),
-            .export_label => |n| try writer.print("    .export {s}\n", .{n}),
-            .label => |n| try writer.print("    {s}:\n", .{n}),
-            .instr => |ins| try renderInstr(writer, ins.op, ins.param, layout),
-        };
-        try writer.writeAll(".code_end\n");
     }
 };
 
-fn syncModeName(m: SyncMode) []const u8 {
-    return switch (m) {
-        .none => "none",
-        .linear => "linear",
-        .smooth => "smooth",
-    };
-}
+pub const Program = struct {
+    gpa: std.mem.Allocator,
+    vars: std.ArrayList(VarDecl) = .empty,
+    externs: std.ArrayList([]const u8) = .empty,
+    extern_ids: std.StringHashMapUnmanaged(Extern) = .empty,
+    insts: std.ArrayList(Inst) = .empty,
+    exports: std.ArrayList(struct { label: Label, name: []const u8 }) = .empty,
+    label_count: u32 = 0,
 
-fn renderInstr(w: *std.Io.Writer, op: Opcode, p: Param, layout: Asm.LabelMap) std.Io.Writer.Error!void {
-    const m = opcodeMnemonic(op);
-    switch (p) {
-        .none => try w.print("        {s}\n", .{m}),
-        .symbol => |s| try w.print("        {s}, {s}\n", .{ m, s }),
-        .label => |n| {
-            const addr = layout.get(n) orelse {
-                // Fall back to writing the name literally — allows the
-                // assembler-side integrator to resolve it, and tests to
-                // catch missing labels by substring match. In production
-                // an unresolved label is a translator bug.
-                try w.print("        {s}, {s} # unresolved\n", .{ m, n });
-                return;
-            };
-            try w.print("        {s}, 0x{X:0>8}\n", .{ m, addr });
-        },
-        .integer => |v| try w.print("        {s}, 0x{X:0>8}\n", .{ m, v }),
-        .string => |s| {
-            try w.print("        {s}, \"", .{m});
-            try escapeString(w, s);
-            try w.writeAll("\"\n");
-        },
+    pub fn init(gpa: std.mem.Allocator) Program {
+        return .{ .gpa = gpa };
     }
-}
 
-// ------------------ tests ------------------
+    pub fn deinit(self: *Program) void {
+        self.vars.deinit(self.gpa);
+        self.externs.deinit(self.gpa);
+        self.extern_ids.deinit(self.gpa);
+        self.insts.deinit(self.gpa);
+        self.exports.deinit(self.gpa);
+    }
 
-fn renderToOwned(a: *const Asm, alloc: std.mem.Allocator) ![]u8 {
-    var layout = try a.computeLayout(alloc);
-    defer layout.deinit(alloc);
-    var buf: std.Io.Writer.Allocating = .init(alloc);
+    pub fn addVar(self: *Program, decl: VarDecl) !Var {
+        try self.vars.append(self.gpa, decl);
+        return @intCast(self.vars.items.len - 1);
+    }
+
+    pub fn internExtern(self: *Program, sig: []const u8) !Extern {
+        const gop = try self.extern_ids.getOrPut(self.gpa, sig);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = @intCast(self.externs.items.len);
+            try self.externs.append(self.gpa, sig);
+        }
+        return gop.value_ptr.*;
+    }
+
+    pub fn newLabel(self: *Program) Label {
+        self.label_count += 1;
+        return self.label_count - 1;
+    }
+
+    pub fn exportLabel(self: *Program, label: Label, name: []const u8) !void {
+        try self.exports.append(self.gpa, .{ .label = label, .name = name });
+    }
+
+    pub fn emit(self: *Program, inst: Inst) !void {
+        try self.insts.append(self.gpa, inst);
+    }
+
+    /// Heap slots the assembled program occupies: one per declared variable
+    /// plus one anonymous string per distinct `EXTERN` name in use (§10).
+    pub fn heapSlots(self: *const Program) !usize {
+        var used = try std.DynamicBitSetUnmanaged.initEmpty(self.gpa, self.externs.items.len);
+        defer used.deinit(self.gpa);
+        for (self.insts.items) |inst| if (inst == .ext) used.set(inst.ext.sig);
+        return self.vars.items.len + used.count();
+    }
+
+    /// Bytecode address of every label. Caller frees the slice.
+    pub fn layout(self: *const Program, gpa: std.mem.Allocator) ![]u32 {
+        const addrs = try gpa.alloc(u32, self.label_count);
+        @memset(addrs, halt_addr);
+        var pc: u32 = 0;
+        for (self.insts.items) |inst| {
+            if (inst == .label) addrs[inst.label] = pc;
+            pc += inst.size();
+        }
+        return addrs;
+    }
+
+    pub const WriteError = error{ UndefinedLabel, AliasedLabels } || std.mem.Allocator.Error || std.Io.Writer.Error;
+
+    pub fn write(self: *const Program, w: *std.Io.Writer) WriteError!void {
+        const addrs = try self.layout(self.gpa);
+        defer self.gpa.free(addrs);
+        for (self.exports.items, 0..) |e, i| {
+            if (addrs[e.label] == halt_addr) return error.UndefinedLabel;
+            // Two named labels on one address trip "Address aliasing detected" (§5.2).
+            for (self.exports.items[0..i]) |prev| if (addrs[prev.label] == addrs[e.label]) return error.AliasedLabels;
+        }
+
+        try w.writeAll(".data_start\n");
+        for (self.vars.items) |v| {
+            if (v.exported) try w.print("    .export {s}\n", .{v.name});
+            if (v.sync) |mode| try w.print("    .sync {s}, {s}\n", .{ v.name, @tagName(mode) });
+            try w.print("    {s}: %{s}, ", .{ v.name, v.ty });
+            try self.writeInit(w, v.init, addrs);
+            try w.writeByte('\n');
+        }
+        try w.writeAll(".data_end\n\n.code_start\n");
+        for (self.insts.items) |inst| switch (inst) {
+            .comment => |text| try w.print("    # {s}\n", .{text}),
+            .label => |l| for (self.exports.items) |e| {
+                if (e.label == l) try w.print("    .export {s}\n    {s}:\n", .{ e.name, e.name });
+            },
+            .ext => |e| {
+                for (e.args[0..e.n]) |a| try self.writePush(w, a);
+                try w.print("        EXTERN, \"{s}\"\n", .{self.externs.items[e.sig]});
+            },
+            .copy => |c| {
+                try self.writePush(w, c.src);
+                try self.writePush(w, c.dst);
+                try w.writeAll("        COPY\n");
+            },
+            .jump => |l| try writeJump(w, "JUMP", try resolve(addrs, l)),
+            .jump_if_false => |j| {
+                try self.writePush(w, j.cond);
+                try writeJump(w, "JUMP_IF_FALSE", try resolve(addrs, j.target));
+            },
+            .jump_indirect => |v| try w.print("        JUMP_INDIRECT, {s}\n", .{self.vars.items[v].name}),
+            .halt => try writeJump(w, "JUMP", halt_addr),
+        };
+        try w.writeAll(".code_end\n");
+    }
+
+    fn writePush(self: *const Program, w: *std.Io.Writer, v: Var) !void {
+        try w.print("        PUSH, {s}\n", .{self.vars.items[v].name});
+    }
+
+    fn writeJump(w: *std.Io.Writer, op: []const u8, addr: u32) !void {
+        try w.print("        {s}, 0x{X:0>8}\n", .{ op, addr });
+    }
+
+    fn resolve(addrs: []const u32, l: Label) !u32 {
+        if (addrs[l] == halt_addr) return error.UndefinedLabel;
+        return addrs[l];
+    }
+
+    fn writeInit(self: *const Program, w: *std.Io.Writer, init_: Init, addrs: []const u32) WriteError!void {
+        switch (init_) {
+            .null_ => try w.writeAll("null"),
+            .this => try w.writeAll("this"),
+            // The assembler parses a decimal magnitude with `Int32.Parse`,
+            // which overflows on |Int32.MinValue|; the hex form is read as a
+            // bit pattern (§4.7).
+            .int => |v| if (v == std.math.minInt(i32)) try w.writeAll("0x80000000") else try w.print("{d}", .{v}),
+            .uint => |v| try writeUInt(w, v),
+            .float => |v| try w.print("{d}", .{v}),
+            .string => |s| {
+                try w.writeByte('"');
+                for (s) |c| switch (c) {
+                    '"' => try w.writeAll("\\\""),
+                    '\\' => try w.writeAll("\\\\"),
+                    '\n' => try w.writeAll("\\n"),
+                    '\r' => try w.writeAll("\\r"),
+                    '\t' => try w.writeAll("\\t"),
+                    else => try w.writeByte(c),
+                };
+                try w.writeByte('"');
+            },
+            .label => |l| try writeUInt(w, try resolve(addrs, l)),
+            .label_table => |labels| {
+                const bytes = try self.gpa.alloc(u8, labels.len * 4);
+                defer self.gpa.free(bytes);
+                for (labels, 0..) |l, i| std.mem.writeInt(u32, bytes[i * 4 ..][0..4], try resolve(addrs, l), .little);
+                try w.writeByte('"');
+                try std.base64.standard.Encoder.encodeWriter(w, bytes);
+                try w.writeByte('"');
+            },
+        }
+    }
+
+    fn writeUInt(w: *std.Io.Writer, v: u32) !void {
+        try w.print("{d}", .{v});
+        if (v > std.math.maxInt(i32)) try w.writeByte('u');
+    }
+};
+
+fn render(p: *const Program) ![]u8 {
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer buf.deinit();
-    try a.render(&buf.writer, layout);
-    return try buf.toOwnedSlice();
+    try p.write(&buf.writer);
+    return buf.toOwnedSlice();
 }
 
-test "empty program renders the two required sections" {
-    var a: Asm = .init(std.testing.allocator);
-    defer a.deinit();
-    const out = try renderToOwned(&a, std.testing.allocator);
+test "writes sections, attributes, grouped pushes and resolved jumps" {
+    var p: Program = .init(std.testing.allocator);
+    defer p.deinit();
+    const start = p.newLabel();
+    const done = p.newLabel();
+    const a = try p.addVar(.{ .name = "_a", .ty = "SystemInt32", .init = .{ .int = std.math.minInt(i32) }, .exported = true, .sync = .none });
+    const ok = try p.addVar(.{ .name = "_ok", .ty = "SystemBoolean" });
+    const ra = try p.addVar(.{ .name = "_ra", .ty = "SystemUInt32", .init = .{ .label = done } });
+    const eq = try p.internExtern("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean");
+    try std.testing.expectEqual(eq, try p.internExtern("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"));
+
+    try p.exportLabel(start, "_start");
+    try p.emit(.{ .label = start });
+    var e: Ext = .{ .sig = eq, .n = 3 };
+    e.args[0..3].* = .{ a, a, ok };
+    try p.emit(.{ .ext = e }); // 0x00..0x20
+    try p.emit(.{ .jump_if_false = .{ .cond = ok, .target = done } }); // 0x20..0x30
+    try p.emit(.{ .copy = .{ .src = a, .dst = a } }); // 0x30..0x44
+    try p.emit(.{ .label = done });
+    try p.emit(.{ .jump_indirect = ra });
+    try p.emit(.halt);
+
+    const out = try render(&p);
     defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, ".data_start") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, ".data_end") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, ".code_start") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, ".code_end") != null);
+    const has = struct {
+        fn f(hay: []const u8, needle: []const u8) !void {
+            try std.testing.expect(std.mem.indexOf(u8, hay, needle) != null);
+        }
+    }.f;
+    try has(out, "    .export _a\n    .sync _a, none\n    _a: %SystemInt32, 0x80000000\n");
+    try has(out, "    _ra: %SystemUInt32, 68\n");
+    try has(out, "    .export _start\n    _start:\n        PUSH, _a\n        PUSH, _a\n        PUSH, _ok\n        EXTERN, \"SystemInt32.__op_Equality__");
+    try has(out, "        PUSH, _ok\n        JUMP_IF_FALSE, 0x00000044\n");
+    try has(out, "        JUMP, 0xFFFFFFFC\n.code_end\n");
+    try std.testing.expectEqual(@as(usize, 4), try p.heapSlots());
 }
 
-test "data decl with .export and .sync" {
-    var a: Asm = .init(std.testing.allocator);
-    defer a.deinit();
-    try a.addData(.{
-        .name = "_counter",
-        .ty = type_name.int32,
-        .init = .{ .int32 = 42 },
-        .is_export = true,
-        .sync = .none,
-    });
-    const out = try renderToOwned(&a, std.testing.allocator);
-    defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, ".export _counter") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, ".sync _counter, none") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "_counter: %SystemInt32, 42") != null);
-}
-
-test "hello-world-style code emission" {
-    var a: Asm = .init(std.testing.allocator);
-    defer a.deinit();
-    try a.addData(.{ .name = "message", .ty = type_name.string, .init = .{ .string = "hi" } });
-    try a.exportLabel("_start");
-    try a.label("_start");
-    try a.push("message");
-    try a.extern_("SystemConsole.__WriteLine__SystemString__SystemVoid");
-    try a.jumpAddr(0xFFFFFFFC);
-
-    const out = try renderToOwned(&a, std.testing.allocator);
-    defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, ".export _start") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "_start:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "PUSH, message") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out,
-        "EXTERN, \"SystemConsole.__WriteLine__SystemString__SystemVoid\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "JUMP, 0xFFFFFFFC") != null);
-}
-
-test "label layout assigns correct bytecode addresses" {
-    var a: Asm = .init(std.testing.allocator);
-    defer a.deinit();
-    try a.label("l0"); // addr 0
-    try a.push("x"); // 8 bytes → next addr 8
-    try a.label("l1"); // addr 8
-    try a.pop(); // 4 bytes → next addr 12
-    try a.label("l2"); // addr 12
-    try a.nop(); // 4 bytes
-    try a.label("l3"); // addr 16
-
-    var layout = try a.computeLayout(std.testing.allocator);
-    defer layout.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(u32, 0), layout.get("l0").?);
-    try std.testing.expectEqual(@as(u32, 8), layout.get("l1").?);
-    try std.testing.expectEqual(@as(u32, 12), layout.get("l2").?);
-    try std.testing.expectEqual(@as(u32, 16), layout.get("l3").?);
-}
-
-test "consecutive labels get distinct addresses via implicit NOP" {
-    var a: Asm = .init(std.testing.allocator);
-    defer a.deinit();
-    try a.label("a"); // 0
-    try a.label("b"); // implicit NOP at 0, b @ 4
-    try a.label("c"); // implicit NOP at 4, c @ 8
-
-    var layout = try a.computeLayout(std.testing.allocator);
-    defer layout.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(u32, 0), layout.get("a").?);
-    try std.testing.expectEqual(@as(u32, 4), layout.get("b").?);
-    try std.testing.expectEqual(@as(u32, 8), layout.get("c").?);
-}
-
-test "export label right after its bare label pair does not collapse addresses" {
-    var a: Asm = .init(std.testing.allocator);
-    defer a.deinit();
-    try a.exportLabel("_start");
-    try a.label("_start"); // co-located with the export directive — no NOP expected
-    try a.nop();
-
-    var layout = try a.computeLayout(std.testing.allocator);
-    defer layout.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(u32, 0), layout.get("_start").?);
-}
-
-test "comment between two labels is transparent and still triggers NOP" {
-    var a: Asm = .init(std.testing.allocator);
-    defer a.deinit();
-    try a.label("a"); // 0
-    try a.comment("between");
-    try a.label("b"); // implicit NOP at 0, b @ 4
-
-    var layout = try a.computeLayout(std.testing.allocator);
-    defer layout.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(u32, 0), layout.get("a").?);
-    try std.testing.expectEqual(@as(u32, 4), layout.get("b").?);
-}
-
-test "jump label references resolve to hex addresses" {
-    var a: Asm = .init(std.testing.allocator);
-    defer a.deinit();
-    try a.label("entry"); // 0
-    try a.push("cond"); // 8
-    try a.jumpIfFalse("else_branch"); // 8 -> 16
-    try a.jump("done"); // 8 -> 24
-    try a.label("else_branch"); // 24
-    try a.nop(); // 4 -> 28
-    try a.label("done"); // 28
-
-    const out = try renderToOwned(&a, std.testing.allocator);
-    defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "JUMP_IF_FALSE, 0x00000018") != null); // else_branch @ 24
-    try std.testing.expect(std.mem.indexOf(u8, out, "JUMP, 0x0000001C") != null); // done @ 28
-}
-
-test "uint32 literal within int32 range is plain decimal" {
-    var a: Asm = .init(std.testing.allocator);
-    defer a.deinit();
-    try a.addData(.{ .name = "__ret_addr_0__", .ty = type_name.uint32, .init = .{ .uint32 = 0x6C } });
-    try a.addData(.{ .name = "__zero__", .ty = type_name.uint32, .init = .{ .uint32 = 0 } });
-    try a.addData(.{ .name = "__max_i32__", .ty = type_name.uint32, .init = .{ .uint32 = 0x7FFFFFFF } });
-    const out = try renderToOwned(&a, std.testing.allocator);
-    defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 108\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 0\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 2147483647\n") != null);
-}
-
-test "uint32 literal above int32 range uses u suffix" {
-    var a: Asm = .init(std.testing.allocator);
-    defer a.deinit();
-    try a.addData(.{ .name = "__big__", .ty = type_name.uint32, .init = .{ .uint32 = 0x80000000 } });
-    try a.addData(.{ .name = "__max__", .ty = type_name.uint32, .init = .{ .uint32 = 0xFFFFFFFF } });
-    const out = try renderToOwned(&a, std.testing.allocator);
-    defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 2147483648u\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemUInt32, 4294967295u\n") != null);
-}
-
-// The Udon Assembler chokes on the decimal form `-2147483648` with
-// `OverflowException: Value was either too large or too small for an Int32.`
-// — it parses sign and magnitude separately and `Int32.Parse("2147483648")`
-// overflows. Hex bit-pattern form sidesteps the bug. Encountered in the wild
-// from Rust `alloc::raw_vec`'s capacity-check idiom in
-// `examples/wasm-bench-alloc-rs`.
-test "int32 literal at Int32.MinValue renders as hex bit pattern" {
-    var a: Asm = .init(std.testing.allocator);
-    defer a.deinit();
-    try a.addData(.{ .name = "__min__", .ty = type_name.int32, .init = .{ .int32 = std.math.minInt(i32) } });
-    const out = try renderToOwned(&a, std.testing.allocator);
-    defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemInt32, 0x80000000\n") != null);
-    // Make sure the decimal form is NOT present anywhere — this is the form
-    // that crashes the Udon Assembler.
-    try std.testing.expect(std.mem.indexOf(u8, out, "-2147483648") == null);
-}
-
-test "int32 literal at MinValue+1 keeps decimal form" {
-    // Only Int32.MinValue is special; -2147483647 and friends parse fine as
-    // decimal because the magnitude (2147483647) fits in Int32.
-    var a: Asm = .init(std.testing.allocator);
-    defer a.deinit();
-    try a.addData(.{ .name = "__almost_min__", .ty = type_name.int32, .init = .{ .int32 = -2147483647 } });
-    const out = try renderToOwned(&a, std.testing.allocator);
-    defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemInt32, -2147483647\n") != null);
-}
-
-// Per docs/udon_specs.md §4.7 the UAssembly assembler rejects any non-null,
-// non-`this` initializer for `SystemByte`. A literal `0` triggers
-// `AssemblyException: Type 'SystemByte' must be initialized to null or a this
-// reference.` at `VisitDataDeclarationStmt`. The `Literal` union therefore
-// offers no byte-literal variant; callers must pick `.null_literal`.
-test "byte data decl must render as null" {
-    var a: Asm = .init(std.testing.allocator);
-    defer a.deinit();
-    try a.addData(.{ .name = "_b", .ty = type_name.byte, .init = .null_literal });
-    const out = try renderToOwned(&a, std.testing.allocator);
-    defer std.testing.allocator.free(out);
-    try std.testing.expect(std.mem.indexOf(u8, out, "_b: %SystemByte, null\n") != null);
-    // No numeric-initialized SystemByte should ever appear in rendered output.
-    try std.testing.expect(std.mem.indexOf(u8, out, "%SystemByte, 0") == null);
+test "jump to an unplaced label is an error" {
+    var p: Program = .init(std.testing.allocator);
+    defer p.deinit();
+    try p.emit(.{ .jump = p.newLabel() });
+    try std.testing.expectError(error.UndefinedLabel, render(&p));
 }

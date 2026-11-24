@@ -44,9 +44,11 @@ pub const Export = struct {
 };
 
 pub const Element = struct {
-    table_index: u32, // MVP: always 0
+    table_index: u32,
+    /// Empty for passive and declarative segments.
     offset: []const Instruction,
     init: []const u32, // funcidx sequence
+    active: bool = true,
 };
 
 pub const LocalGroup = struct {
@@ -60,9 +62,11 @@ pub const Code = struct {
 };
 
 pub const Data = struct {
-    memory_index: u32, // MVP: always 0
+    memory_index: u32,
+    /// Empty for passive segments (`memory.init` only).
     offset: []const Instruction,
     init: []const u8,
+    passive: bool = false,
 };
 
 pub const CustomSection = struct {
@@ -225,12 +229,17 @@ pub fn parseStartSection(payload: []const u8) errors.ParseError!u32 {
 }
 
 fn decodeElementEntry(allocator: std.mem.Allocator, r: *Reader) errors.ParseError!Element {
-    const prefix = try leb128.readULEB128(u32, r);
-    if (prefix != 0) return error.MalformedElementSegment;
-    const offset = try instruction.decodeExpr(allocator, r);
+    // Flags 0..3 list plain function indices; 4..7 (element expressions)
+    // need reference types and are not supported.
+    const flags = try leb128.readULEB128(u32, r);
+    if (flags > 3) return error.MalformedElementSegment;
+    const active = flags & 1 == 0;
+    const table_index = if (flags == 2) try leb128.readULEB128(u32, r) else 0;
+    const offset: []const Instruction = if (active) try instruction.decodeExpr(allocator, r) else &.{};
     errdefer allocator.free(offset);
+    if (flags != 0 and try r.readByte() != 0x00) return error.MalformedElementSegment; // elemkind: funcref
     const init = try readVec(u32, allocator, r, decodeTypeIdx);
-    return .{ .table_index = 0, .offset = offset, .init = init };
+    return .{ .table_index = table_index, .offset = offset, .init = init, .active = active };
 }
 
 pub fn parseElementSection(allocator: std.mem.Allocator, payload: []const u8) errors.ParseError![]Element {
@@ -266,13 +275,14 @@ pub fn parseCodeSection(allocator: std.mem.Allocator, payload: []const u8) error
 }
 
 fn decodeDataEntry(allocator: std.mem.Allocator, r: *Reader) errors.ParseError!Data {
-    const prefix = try leb128.readULEB128(u32, r);
-    if (prefix != 0) return error.MalformedDataSegment;
-    const offset = try instruction.decodeExpr(allocator, r);
+    const flags = try leb128.readULEB128(u32, r);
+    if (flags > 2) return error.MalformedDataSegment;
+    const memory_index = if (flags == 2) try leb128.readULEB128(u32, r) else 0;
+    const offset: []const Instruction = if (flags != 1) try instruction.decodeExpr(allocator, r) else &.{};
     errdefer allocator.free(offset);
     const n = try leb128.readULEB128(u32, r);
     const bytes = try r.readBytes(n);
-    return .{ .memory_index = 0, .offset = offset, .init = bytes };
+    return .{ .memory_index = memory_index, .offset = offset, .init = bytes, .passive = flags == 1 };
 }
 
 pub fn parseDataSection(allocator: std.mem.Allocator, payload: []const u8) errors.ParseError![]Data {

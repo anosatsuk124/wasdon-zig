@@ -1,22 +1,22 @@
-//! Udon Assembly construction primitives (WASM-independent).
+//! Udon Assembly toolkit (WASM-independent).
 //!
-//! Surface:
-//!   * `type_name` — encode .NET type names per `docs/udon_specs.md` §3.
-//!   * `asm` — build and render a Udon Assembly program, including bytecode
-//!     address layout (Pass A) and text rendering (Pass C).
+//!   * `asm`   — program builder and text writer.
+//!   * `sig`   — extern signature parser.
+//!   * `text`  — Udon Assembly text parser.
+//!   * `check` — static conformance checker against `docs/udon_specs.md`.
+//!   * `vm`    — strict Udon VM emulator.
 
 const std = @import("std");
 
-pub const type_name = @import("type_name.zig");
 pub const asm_ = @import("asm.zig");
+pub const sig = @import("sig.zig");
+pub const text = @import("text.zig");
+pub const check = @import("check.zig");
+pub const vm = @import("vm.zig");
 
-pub const TypeName = type_name.TypeName;
-pub const Asm = asm_.Asm;
-pub const Literal = asm_.Literal;
-pub const DataDecl = asm_.DataDecl;
+pub const Program = asm_.Program;
+pub const Vm = vm.Vm;
 
 test {
     std.testing.refAllDecls(@This());
-    _ = type_name;
-    _ = asm_;
 }

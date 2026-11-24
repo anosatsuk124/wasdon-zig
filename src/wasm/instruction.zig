@@ -36,7 +36,7 @@ pub const If = struct {
     else_body: ?[]const Instruction,
 };
 
-/// One variant per Core 1 opcode. Keep in lockstep with `opcode.spec`.
+/// One variant per entry of `opcode.spec` and `opcode.fc_spec`.
 pub const Instruction = union(enum) {
     // control
     unreachable_,
@@ -235,6 +235,29 @@ pub const Instruction = union(enum) {
     i64_reinterpret_f64,
     f32_reinterpret_i32,
     f64_reinterpret_i64,
+
+    // sign extension
+    i32_extend8_s,
+    i32_extend16_s,
+    i64_extend8_s,
+    i64_extend16_s,
+    i64_extend32_s,
+
+    // saturating truncation (0xFC 0..7)
+    i32_trunc_sat_f32_s,
+    i32_trunc_sat_f32_u,
+    i32_trunc_sat_f64_s,
+    i32_trunc_sat_f64_u,
+    i64_trunc_sat_f32_s,
+    i64_trunc_sat_f32_u,
+    i64_trunc_sat_f64_s,
+    i64_trunc_sat_f64_u,
+
+    // bulk memory (0xFC 8..11)
+    memory_init: u32,
+    data_drop: u32,
+    memory_copy,
+    memory_fill,
 };
 
 // Compile-time invariant: every opcode in `spec` has a matching union tag,
@@ -242,8 +265,11 @@ pub const Instruction = union(enum) {
 comptime {
     @setEvalBranchQuota(100_000);
     const union_fields = @typeInfo(Instruction).@"union".fields;
-    if (union_fields.len != opcode.spec.len) {
-        @compileError("Instruction union field count does not match opcode.spec length");
+    if (union_fields.len != opcode.spec.len + opcode.fc_spec.len) {
+        @compileError("Instruction union field count does not match the opcode tables");
+    }
+    for (opcode.fc_spec) |s| {
+        if (!@hasField(Instruction, s.tag)) @compileError("opcode.fc_spec tag missing from Instruction union: " ++ s.tag);
     }
     for (opcode.spec) |s| {
         var found = false;
@@ -284,6 +310,13 @@ pub fn decodeInstruction(allocator: std.mem.Allocator, r: *Reader) errors.ParseE
     // standalone instructions at this layer.
     if (op == 0x0B) return error.UnexpectedEndOpcode;
     if (op == 0x05) return error.UnexpectedElseOpcode;
+    // Typed `select t*`: the annotation is redundant for numeric types.
+    if (op == 0x1C) {
+        const n = try leb128.readULEB128(u32, r);
+        for (0..n) |_| _ = try types.decodeValType(r);
+        return .select;
+    }
+    if (op == 0xFC) return decodeFc(r);
 
     inline for (opcode.spec) |s| {
         if (s.opcode == op) {
@@ -362,6 +395,28 @@ pub fn decodeInstruction(allocator: std.mem.Allocator, r: *Reader) errors.ParseE
     return error.UnknownOpcode;
 }
 
+fn decodeFc(r: *Reader) errors.ParseError!Instruction {
+    const sub = try leb128.readULEB128(u32, r);
+    inline for (opcode.fc_spec) |s| {
+        if (s.sub == sub) {
+            switch (s.imm) {
+                .none => return @unionInit(Instruction, s.tag, {}),
+                .dataidx, .dataidx_mem => {
+                    const idx = try leb128.readULEB128(u32, r);
+                    if (s.imm == .dataidx_mem and try r.readByte() != 0x00) return error.MalformedReserved;
+                    return @unionInit(Instruction, s.tag, idx);
+                },
+                .mem, .mem_mem => {
+                    if (try r.readByte() != 0x00) return error.MalformedReserved;
+                    if (s.imm == .mem_mem and try r.readByte() != 0x00) return error.MalformedReserved;
+                    return @unionInit(Instruction, s.tag, {});
+                },
+            }
+        }
+    }
+    return error.UnknownOpcode;
+}
+
 const SequenceTerminator = enum { end_only, end_or_else };
 const ActualTerminator = enum { end, else_ };
 const DecodedSequence = struct {
@@ -405,9 +460,19 @@ fn mk(bytes: []const u8) Reader {
     return Reader.init(bytes);
 }
 
-test "Instruction union matches opcode.spec length" {
-    const union_fields = @typeInfo(Instruction).@"union".fields;
-    try std.testing.expectEqual(opcode.spec.len, union_fields.len);
+test "decode post-MVP instructions" {
+    var r = mk(&[_]u8{ 0xC0, 0xFC, 0x02, 0xFC, 0x0A, 0x00, 0x00, 0xFC, 0x0B, 0x00, 0xFC, 0x08, 0x03, 0x00, 0xFC, 0x09, 0x03, 0x1C, 0x01, 0x7F });
+    const a = std.testing.allocator;
+    try std.testing.expect(try decodeInstruction(a, &r) == .i32_extend8_s);
+    try std.testing.expect(try decodeInstruction(a, &r) == .i32_trunc_sat_f64_s);
+    try std.testing.expect(try decodeInstruction(a, &r) == .memory_copy);
+    try std.testing.expect(try decodeInstruction(a, &r) == .memory_fill);
+    try std.testing.expectEqual(@as(u32, 3), (try decodeInstruction(a, &r)).memory_init);
+    try std.testing.expectEqual(@as(u32, 3), (try decodeInstruction(a, &r)).data_drop);
+    try std.testing.expect(try decodeInstruction(a, &r) == .select);
+    try std.testing.expect(r.eof());
+    var bad = mk(&[_]u8{ 0xFC, 0x0C, 0x00, 0x00 });
+    try std.testing.expectError(error.UnknownOpcode, decodeInstruction(a, &bad));
 }
 
 test "decode nop" {
@@ -521,7 +586,7 @@ test "decode unknown opcode rejected" {
         error.UnexpectedElseOpcode,
         decodeInstruction(std.testing.allocator, &r),
     );
-    var r2 = mk(&[_]u8{0xC0});
+    var r2 = mk(&[_]u8{0xC5});
     try std.testing.expectError(error.UnknownOpcode, decodeInstruction(std.testing.allocator, &r2));
 }
 

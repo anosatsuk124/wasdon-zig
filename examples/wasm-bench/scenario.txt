@@ -1,0 +1,20 @@
+# Events fired by the golden run and by `zig build test`.
+_start
+_interact
+_interact
+_interact
+_interact
+_interact
+_interact
+_interact
+_interact
+_interact
+_interact
+_interact
+_interact
+_interact
+_interact
+_interact
+_interact
+_update
+_update

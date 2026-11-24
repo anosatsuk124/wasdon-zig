@@ -33,7 +33,7 @@ pub fn parseModule(allocator: std.mem.Allocator, bytes: []const u8) errors.Parse
     // Track non-custom sections for ordering + duplicate checks. Custom
     // sections are permitted at any position and may repeat freely.
     var last_id: ?u8 = null;
-    var seen = [_]bool{false} ** 12;
+    var seen = [_]bool{false} ** 13;
     var customs: std.ArrayList(CustomSection) = .empty;
     defer customs.deinit(allocator);
 
@@ -49,10 +49,10 @@ pub fn parseModule(allocator: std.mem.Allocator, bytes: []const u8) errors.Parse
 
         if (seen[id_byte]) return error.DuplicateSection;
         if (last_id) |prev| {
-            if (id_byte <= prev) return error.SectionOutOfOrder;
+            if (raw.id.order() <= prev) return error.SectionOutOfOrder;
         }
         seen[id_byte] = true;
-        last_id = id_byte;
+        last_id = raw.id.order();
 
         switch (raw.id) {
             .custom => unreachable,
@@ -67,6 +67,7 @@ pub fn parseModule(allocator: std.mem.Allocator, bytes: []const u8) errors.Parse
             .element => mod.elements = try module.parseElementSection(allocator, raw.payload),
             .code => mod.codes = try module.parseCodeSection(allocator, raw.payload),
             .data => mod.datas = try module.parseDataSection(allocator, raw.payload),
+            .data_count => {},
         }
     }
 
@@ -228,45 +229,4 @@ test "parseModule enforces function/code count match" {
     try pushSection(&buf, gpa, 10, &[_]u8{ 0x01, 0x02, 0x00, 0x0B });
 
     try std.testing.expectError(error.FuncCodeCountMismatch, parseModule(arena.allocator(), buf.items));
-}
-
-test "parseModule integration: parses the bench.wasm fixture end-to-end" {
-    // @embedFile picks up `zig-out/wasm/bench.wasm` produced by
-    // `zig build wasm-example`. If the file is missing at compile time this
-    // test fails to build — run `zig build wasm-example` first.
-    const bench_wasm: []const u8 = @embedFile("testdata/bench.wasm");
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const mod = try parseModule(arena.allocator(), bench_wasm);
-
-    // The bench exposes __udon_meta_ptr / __udon_meta_len plus the Udon
-    // event-handler functions.
-    var saw_meta_ptr = false;
-    var saw_meta_len = false;
-    var saw_on_start = false;
-    for (mod.exports) |exp| {
-        if (std.mem.eql(u8, exp.name, "__udon_meta_ptr")) saw_meta_ptr = true;
-        if (std.mem.eql(u8, exp.name, "__udon_meta_len")) saw_meta_len = true;
-        if (std.mem.eql(u8, exp.name, "on_start")) saw_on_start = true;
-    }
-    try std.testing.expect(saw_meta_ptr);
-    try std.testing.expect(saw_meta_len);
-    try std.testing.expect(saw_on_start);
-
-    // Meta discovery + JSON decode should round-trip.
-    const udon_meta = @import("udon_meta.zig");
-    const meta_opt = try udon_meta.parseFromModule(arena.allocator(), mod);
-    try std.testing.expect(meta_opt != null);
-    const meta = meta_opt.?;
-    try std.testing.expectEqual(@as(u32, 1), meta.version);
-    // `behaviour.syncMode == "manual"` per examples/wasm-bench/main.zig.
-    try std.testing.expect(meta.behaviour != null);
-    try std.testing.expectEqual(udon_meta.SyncMode.manual, meta.behaviour.?.sync_mode.?);
-    // At least one of the documented functions must be present.
-    var saw_start_fn = false;
-    for (meta.functions) |f| {
-        if (std.mem.eql(u8, f.key, "start")) saw_start_fn = true;
-    }
-    try std.testing.expect(saw_start_fn);
 }

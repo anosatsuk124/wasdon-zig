@@ -23,10 +23,22 @@ pub const SectionId = enum(u8) {
     element = 9,
     code = 10,
     data = 11,
+    data_count = 12,
+
+    /// Position in the mandated section order: `data_count` sits between
+    /// `element` and `code`.
+    pub fn order(self: SectionId) u8 {
+        return switch (self) {
+            .data_count => 10,
+            .code => 11,
+            .data => 12,
+            else => @intFromEnum(self),
+        };
+    }
 };
 
 pub fn sectionIdFromByte(b: u8) errors.ParseError!SectionId {
-    if (b > 11) return error.UnknownSectionId;
+    if (b > 12) return error.UnknownSectionId;
     return @enumFromInt(b);
 }
 
@@ -58,7 +70,8 @@ test "sectionIdFromByte maps all ids" {
 }
 
 test "sectionIdFromByte rejects unknown" {
-    try std.testing.expectError(error.UnknownSectionId, sectionIdFromByte(12));
+    try std.testing.expectEqual(SectionId.data_count, try sectionIdFromByte(12));
+    try std.testing.expectError(error.UnknownSectionId, sectionIdFromByte(13));
     try std.testing.expectError(error.UnknownSectionId, sectionIdFromByte(0xFF));
 }
 

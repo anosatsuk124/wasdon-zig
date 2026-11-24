@@ -92,7 +92,9 @@ pub const Options = struct {
     unknown_field_policy: ?UnknownPolicy = null,
     unknown_function_policy: ?UnknownPolicy = null,
     memory: MemoryOptions = .{},
-    recursion: RecursionMode = .disabled,
+    /// `stack` (default): recursive calls save and restore their frame.
+    /// `disabled`: no frame saving — only for modules known not to recurse.
+    recursion: RecursionMode = .stack,
 };
 
 pub const UdonMeta = struct {
@@ -360,6 +362,7 @@ pub fn findMetaBytes(mod: Module) errors.ParseError!?[]const u8 {
 fn resolveDataRange(mod: Module, ptr: u32, len: u32) errors.ParseError![]const u8 {
     var saw_partial = false;
     for (mod.datas) |d| {
+        if (d.passive) continue;
         const off_i32 = try const_eval.evalConstI32(mod, d.offset);
         if (off_i32 < 0) continue;
         const off: u32 = @intCast(off_i32);
@@ -527,12 +530,12 @@ test "parse options.recursion=stack" {
     try std.testing.expectEqual(RecursionMode.stack, m.options.recursion);
 }
 
-test "parse options.recursion default is disabled" {
+test "parse options.recursion defaults to stack" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const j = "{\"version\":1,\"options\":{}}";
     const m = try parse(arena.allocator(), j);
-    try std.testing.expectEqual(RecursionMode.disabled, m.options.recursion);
+    try std.testing.expectEqual(RecursionMode.stack, m.options.recursion);
 }
 
 test "parse options.recursion invalid string" {

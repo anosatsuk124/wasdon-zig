@@ -1,43 +1,41 @@
-//! wasdon-zig: WASM → Udon Assembly translator.
+//! wasdon-zig: WebAssembly → Udon Assembly translator.
 //!
-//! Public library surface. The CLI in `src/main.zig` is a thin driver that
-//! composes these building blocks.
+//! Library surface; `src/main.zig` is a thin CLI over it.
+//!
+//!   * `wasm`       — WASM binary parser and `__udon_meta` reader.
+//!   * `udon`       — Udon Assembly writer, parser, conformance checker and
+//!                    VM emulator.
+//!   * `translator` — the WASM → Udon lowering.
 
 const std = @import("std");
-const Io = std.Io;
 
 pub const wasm = @import("wasm");
 pub const udon = @import("udon");
 pub const translator = @import("translator");
 
-pub const translate = translator.translateModule;
 pub const Options = translator.Options;
+pub const Diagnostics = translator.Diagnostics;
 
-/// Read a WASM binary from bytes, optionally discover its `__udon_meta`
-/// blob, and emit Udon Assembly text into `writer`. All allocations live in
-/// `gpa`; the caller owns whatever the writer is backed by.
+/// Parse a WASM binary, read its `__udon_meta` (if any) and write the
+/// equivalent Udon Assembly program to `writer`.
 pub fn translateBytes(
     gpa: std.mem.Allocator,
     wasm_bytes: []const u8,
-    writer: *Io.Writer,
+    writer: *std.Io.Writer,
     options: Options,
 ) !void {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
-    const aa = arena.allocator();
-
-    const mod = try wasm.parseModule(aa, wasm_bytes);
-    const meta = try wasm.parseUdonMetaFromModule(aa, mod);
-    try translate(gpa, mod, meta, writer, options);
+    const mod = try wasm.parseModule(arena.allocator(), wasm_bytes);
+    const meta = try wasm.parseUdonMetaFromModule(arena.allocator(), mod);
+    try translator.translateModule(gpa, mod, meta, writer, options);
 }
 
-test "library translate surface wires up" {
-    // Tiny WASM module: magic + version + empty sections.
+test "translateBytes accepts an empty module" {
     const bytes = [_]u8{ 0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00 };
-    var buf: Io.Writer.Allocating = .init(std.testing.allocator);
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer buf.deinit();
     try translateBytes(std.testing.allocator, &bytes, &buf.writer, .{});
-    const out = buf.written();
-    try std.testing.expect(std.mem.indexOf(u8, out, ".data_start") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, ".code_start") != null);
+    try std.testing.expect(std.mem.startsWith(u8, buf.written(), ".data_start\n"));
+    try std.testing.expect(std.mem.endsWith(u8, buf.written(), ".code_end\n"));
 }

@@ -1,4 +1,5 @@
-//! Opcode table for WASM Core 1 / MVP.
+//! Opcode table: WASM Core 1 / MVP plus the sign-extension, saturating
+//! float-to-int and bulk-memory extensions.
 //!
 //! This module is the single source of truth for every opcode this parser
 //! recognises. Anything that needs a full enumeration — decoder dispatch,
@@ -234,6 +235,49 @@ pub const spec = [_]OpSpec{
     .{ .opcode = 0xBD, .tag = "i64_reinterpret_f64", .mnemonic = "i64.reinterpret_f64", .imm = .none },
     .{ .opcode = 0xBE, .tag = "f32_reinterpret_i32", .mnemonic = "f32.reinterpret_i32", .imm = .none },
     .{ .opcode = 0xBF, .tag = "f64_reinterpret_i64", .mnemonic = "f64.reinterpret_i64", .imm = .none },
+
+    // --- sign-extension operators (0xC0..0xC4) ---
+    .{ .opcode = 0xC0, .tag = "i32_extend8_s", .mnemonic = "i32.extend8_s", .imm = .none },
+    .{ .opcode = 0xC1, .tag = "i32_extend16_s", .mnemonic = "i32.extend16_s", .imm = .none },
+    .{ .opcode = 0xC2, .tag = "i64_extend8_s", .mnemonic = "i64.extend8_s", .imm = .none },
+    .{ .opcode = 0xC3, .tag = "i64_extend16_s", .mnemonic = "i64.extend16_s", .imm = .none },
+    .{ .opcode = 0xC4, .tag = "i64_extend32_s", .mnemonic = "i64.extend32_s", .imm = .none },
+};
+
+/// Immediates of the `0xFC`-prefixed instructions.
+pub const FcImmediate = enum {
+    none,
+    /// `memory.init`: dataidx followed by a reserved memory index.
+    dataidx_mem,
+    /// `data.drop`: dataidx.
+    dataidx,
+    /// `memory.copy`: two reserved memory indices.
+    mem_mem,
+    /// `memory.fill`: one reserved memory index.
+    mem,
+};
+
+pub const FcSpec = struct {
+    sub: u32,
+    tag: []const u8,
+    mnemonic: []const u8,
+    imm: FcImmediate,
+};
+
+/// `0xFC`-prefixed instructions: saturating truncation and bulk memory.
+pub const fc_spec = [_]FcSpec{
+    .{ .sub = 0, .tag = "i32_trunc_sat_f32_s", .mnemonic = "i32.trunc_sat_f32_s", .imm = .none },
+    .{ .sub = 1, .tag = "i32_trunc_sat_f32_u", .mnemonic = "i32.trunc_sat_f32_u", .imm = .none },
+    .{ .sub = 2, .tag = "i32_trunc_sat_f64_s", .mnemonic = "i32.trunc_sat_f64_s", .imm = .none },
+    .{ .sub = 3, .tag = "i32_trunc_sat_f64_u", .mnemonic = "i32.trunc_sat_f64_u", .imm = .none },
+    .{ .sub = 4, .tag = "i64_trunc_sat_f32_s", .mnemonic = "i64.trunc_sat_f32_s", .imm = .none },
+    .{ .sub = 5, .tag = "i64_trunc_sat_f32_u", .mnemonic = "i64.trunc_sat_f32_u", .imm = .none },
+    .{ .sub = 6, .tag = "i64_trunc_sat_f64_s", .mnemonic = "i64.trunc_sat_f64_s", .imm = .none },
+    .{ .sub = 7, .tag = "i64_trunc_sat_f64_u", .mnemonic = "i64.trunc_sat_f64_u", .imm = .none },
+    .{ .sub = 8, .tag = "memory_init", .mnemonic = "memory.init", .imm = .dataidx_mem },
+    .{ .sub = 9, .tag = "data_drop", .mnemonic = "data.drop", .imm = .dataidx },
+    .{ .sub = 10, .tag = "memory_copy", .mnemonic = "memory.copy", .imm = .mem_mem },
+    .{ .sub = 11, .tag = "memory_fill", .mnemonic = "memory.fill", .imm = .mem },
 };
 
 /// Find the spec entry for a byte. Returns `null` if the byte is not a known
@@ -269,12 +313,11 @@ test "opcode table: all opcodes unique" {
     }
 }
 
-test "opcode table: expected count (Core 1 MVP)" {
-    // 11 control + 2 parametric + 5 variable + 25 memory + 4 numeric-const
-    // + 11 i32 cmp + 11 i64 cmp + 6 f32 cmp + 6 f64 cmp
-    // + 18 i32 arith + 18 i64 arith + 14 f32 arith + 14 f64 arith + 25 conv
-    // = 170
-    try std.testing.expectEqual(@as(usize, 170), spec.len);
+test "opcode table: expected count" {
+    // Core 1: 11 control + 2 parametric + 5 variable + 25 memory + 4 const
+    // + 34 comparisons + 64 arithmetic + 25 conversions = 170; + 5 sign-extension.
+    try std.testing.expectEqual(@as(usize, 175), spec.len);
+    try std.testing.expectEqual(@as(usize, 12), fc_spec.len);
 }
 
 test "opcode table: critical entries present" {
@@ -288,7 +331,8 @@ test "opcode table: critical entries present" {
     // Unknown
     try std.testing.expect(find(0x05) == null);
     try std.testing.expect(find(0x12) == null);
-    try std.testing.expect(find(0xC0) == null);
+    try std.testing.expect(find(0xC0) != null);
+    try std.testing.expect(find(0xC5) == null);
 }
 
 test "mnemonicFor returns canonical mnemonic" {
