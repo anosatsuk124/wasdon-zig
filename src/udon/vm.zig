@@ -513,9 +513,11 @@ pub const Vm = struct {
         const base_sp = self.sp;
         var pc = pc_ptr.*;
         defer pc_ptr.* = pc;
-        while (pc != program.halt_address) {
-            if (pc & 3 != 0 or (pc >> 2) >= cells.len)
-                return self.raise("jump to 0x{X:0>8}, which is not an instruction address", .{pc});
+        // The real loop runs while the next instruction lies inside the
+        // bytecode: a jump anywhere past the end — the conventional
+        // 0xFFFFFFFC, UdonSharp's 0xFFFFFFFF — ends the event normally.
+        while ((pc >> 2) < cells.len) {
+            if (pc & 3 != 0) return self.raise("jump to 0x{X:0>8}, which is not an instruction address", .{pc});
             const c = cells[pc >> 2];
             self.stats.instrs += 1;
             if (self.stats.instrs > self.options.max_steps) return error.StepLimit;
@@ -563,9 +565,18 @@ pub const Vm = struct {
                         // differ by one leading `this`; take what was pushed.
                         const sig = r.sig orelse return self.raise("EXTERN operand is not an extern signature: \"{s}\"", .{r.text});
                         const n = sig.staticParamCount();
-                        if (depth != n and depth != n + 1 and !sig.isGeneric())
-                            return self.raise("EXTERN \"{s}\" expects {d} or {d} arguments, {d} pushed", .{ r.text, n, n + 1, depth });
-                        break :blk depth;
+                        if (depth == n or depth == n + 1 or sig.isGeneric()) break :blk depth;
+                        if (depth < n) return self.raise("EXTERN \"{s}\" expects {d} or {d} arguments, {d} pushed", .{ r.text, n, n + 1, depth });
+                        // More is on the stack than this call takes (other
+                        // compilers park return addresses there). It is an
+                        // instance call if the slot where `this` would be
+                        // holds an object of the method's type.
+                        if (sig.isKnownStatic()) break :blk n;
+                        const receiver = heap[self.stack[self.sp - n - 1]];
+                        const name = receiver.typeName();
+                        const is_receiver = std.mem.eql(u8, name, sig.type_name) or
+                            (receiver == .array and std.mem.eql(u8, sig.type_name, "SystemArray"));
+                        break :blk if (is_receiver) n + 1 else n;
                     };
                     if (depth < argc) return self.raise("EXTERN \"{s}\" needs {d} arguments, {d} pushed", .{ r.text, argc, depth });
                     if (strict and depth != argc) return self.raise("EXTERN \"{s}\" takes {d} arguments, {d} pushed", .{ r.text, argc, depth });

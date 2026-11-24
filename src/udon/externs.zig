@@ -1144,6 +1144,7 @@ const fixed_entries = [_]KV{
     .{ "SystemString.__Format__SystemString_SystemObject_SystemObject__SystemString", wrap(str.format2) },
     .{ "SystemString.__Format__SystemString_SystemObject_SystemObject_SystemObject__SystemString", wrap(str.format3) },
     .{ "SystemString.__ToString__SystemString", wrap(str.toString) },
+    .{ "SystemString.__Copy__SystemString__SystemString", wrap(str.toString) },
     .{ "SystemObject.__ToString__SystemString", wrap(str.toString) },
     .{ "SystemBoolean.__ToString__SystemString", wrap(str.toString) },
     .{ "SystemObject.__Equals__SystemObject__SystemBoolean", wrap(objectEquals) },

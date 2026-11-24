@@ -115,6 +115,9 @@ pub const Func = struct {
     /// Parameter slots followed by declared-local slots.
     locals: []Sym = &.{},
     local_types: []ValType = &.{},
+    /// Per local: it only ever holds a condition and is declared
+    /// `SystemBoolean` (`liveness.boolLocals`).
+    bool_locals: []bool = &.{},
     trampoline: Label = 0,
 };
 
@@ -178,8 +181,12 @@ pub const Translator = struct {
     table_sym: ?Sym = null,
     halt_rac: ?Sym = null,
     rac_count: u32 = 0,
-    call_stack: ?Sym = null,
-    call_stack_top: Sym = 0,
+    /// Recursion frames: column *k* holds the *k*-th saved slot of every
+    /// active frame, indexed by `frame_depth`.
+    frame_columns: std.ArrayList(Sym) = .empty,
+    frame_depth: ?Sym = null,
+    bool_true: ?Sym = null,
+    bool_false: ?Sym = null,
 
     // ---- runtime routines ----
     trap_label: ?Label = null,
@@ -415,11 +422,12 @@ pub const Translator = struct {
                 @memset(f.local_types[k..][0..g.count], g.ty);
                 k += g.count;
             }
-            for (f.locals, f.local_types, 0..) |*s, ty, li| {
+            f.bool_locals = try @import("liveness.zig").boolLocals(a, f.ty.params.len, f.local_types, code.body);
+            for (f.locals, f.local_types, f.bool_locals, 0..) |*s, ty, is_bool, li| {
                 s.* = try self.a.declare(.{
                     .name = try self.name("__{s}_{c}{d}__", .{ f.name, @as(u8, if (li < f.ty.params.len) 'P' else 'L'), li }),
-                    .type_name = udonType(ty),
-                    .init = zeroInit(ty),
+                    .type_name = if (is_bool) "SystemBoolean" else udonType(ty),
+                    .init = if (is_bool) .null_ else zeroInit(ty),
                 });
             }
             f.entry = try self.a.newLabel();
@@ -855,12 +863,27 @@ pub const Translator = struct {
         return self.utf8.?;
     }
 
-    pub fn callStack(self: *Translator) Error!Sym {
-        if (self.call_stack == null) {
-            self.call_stack = try self.a.declare(.{ .name = "__call_stack", .type_name = "SystemObjectArray" });
-            self.call_stack_top = try self.a.declare(.{ .name = "__call_stack_top", .type_name = "SystemInt32", .init = .{ .int32 = 0 } });
+    /// Column `k` of the recursion stack (`docs/spec_call_return_conversion.md` §6).
+    pub fn frameColumn(self: *Translator, k: usize) Error!Sym {
+        while (self.frame_columns.items.len <= k) {
+            const sym = try self.a.declare(.{ .name = try self.name("__frame{d}", .{self.frame_columns.items.len}), .type_name = "SystemObjectArray" });
+            try self.frame_columns.append(self.arena(), sym);
         }
-        return self.call_stack.?;
+        return self.frame_columns.items[k];
+    }
+
+    pub fn frameDepth(self: *Translator) Error!Sym {
+        if (self.frame_depth == null) self.frame_depth = try self.a.declare(.{ .name = "__frame_depth", .type_name = "SystemInt32", .init = .{ .int32 = 0 } });
+        return self.frame_depth.?;
+    }
+
+    /// A `SystemBoolean` constant. Udon Assembly has no Boolean literals:
+    /// `false` is a slot nothing writes, `true` is computed by the init
+    /// routine.
+    pub fn constBool(self: *Translator, value: bool) Error!Sym {
+        const slot = if (value) &self.bool_true else &self.bool_false;
+        if (slot.* == null) slot.* = try self.a.declare(.{ .name = if (value) "__true" else "__false", .type_name = "SystemBoolean" });
+        return slot.*.?;
     }
 
     pub fn trapLabel(self: *Translator) Error!Label {
@@ -1015,10 +1038,12 @@ pub const Translator = struct {
         };
         for (self.store_arrays, array_ctors) |slot, ctor| if (slot) |s| try a.call(ctor, &.{ c1, s });
         if (self.utf8) |s| try a.call("SystemTextEncoding.__get_UTF8__SystemTextEncoding", &.{s});
-        if (self.call_stack) |s| {
-            const size: u32 = if (self.meta) |m| m.options.call_stack_size orelse 4096 else 4096;
-            try a.call("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", &.{ try self.constI32(@intCast(size)), s });
+        if (self.frame_columns.items.len != 0) {
+            const depth: u32 = if (self.meta) |m| m.options.call_stack_size orelse 1024 else 1024;
+            const n = try self.constI32(@intCast(depth));
+            for (self.frame_columns.items) |column| try a.call("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", &.{ n, column });
         }
+        if (self.bool_true) |s| try a.call("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean", &.{ c0, c0, s });
 
         if (self.table_sym) |tbl| {
             const labels = try self.arena().alloc(Label, self.table.len);

@@ -48,15 +48,17 @@ pub fn main(init: std.process.Init) !u8 {
             failed = true;
             continue;
         };
-        if (!r.report.ok() or r.fault != null) {
+        if ((ex.uasm == null and !r.report.ok()) or r.fault != null) {
             failed = true;
             const why = if (r.fault) |f| f.message else r.report.errors[0].message;
             try w.print("| `{s}` | **failed**: {s} |\n", .{ ex.name, why });
             continue;
         }
+        // Assembly from elsewhere has no translator statistics; the
+        // checker's independent count gives the same columns.
         try w.print("| `{s}` | {d} | {d} | {d} | {d} | {d} | {d} | {d} | {d} |\n", .{
-            ex.name,            ex.wasm.len,       r.size.heapSize(), r.size.instructions,
-            r.size.externs,     r.size.code_bytes, r.uasm.len,        r.vm.stats.instrs,
+            ex.name,            ex.wasm.len,         r.report.heap_size, r.report.instructions,
+            r.report.externs,   r.report.code_bytes, r.uasm.len,         r.vm.stats.instrs,
             r.vm.stats.externs,
         });
         if (emit_dir) |dir| {

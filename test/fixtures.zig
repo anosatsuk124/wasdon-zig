@@ -12,10 +12,16 @@ const build_options = @import("build_options");
 
 const udon = wasdon.udon;
 const Vm = udon.vm.Vm;
+const Value = udon.vm.Value;
 
 pub const Example = struct {
     name: []const u8,
-    wasm: []const u8,
+    /// The module to translate; empty when `uasm` is given.
+    wasm: []const u8 = "",
+    /// Udon Assembly from another compiler, run as it is. It is not held
+    /// to the checker's rules for translator output (UdonSharp, for one,
+    /// keeps return addresses on the VM stack across jumps).
+    uasm: ?[]const u8 = null,
     /// Events to deliver, in `wasdon-zig run --events` syntax.
     scenario: []const u8,
     /// Expected `Debug.Log` output, one message per line.
@@ -325,6 +331,58 @@ fn blockfallVerify(vm: *Vm) !void {
     try std.testing.expect(remote.fault == null);
 }
 
+// ---------------------------------------------------------------------
+//  The benchmark against UdonSharp (examples/bench)
+// ---------------------------------------------------------------------
+
+/// One event per workload, so the statistics separate them.
+const usharp_scenario = "Fib,Mandel,Str";
+
+/// The integer Mandelbrot of the benchmark, as the reference.
+fn benchMandel() i32 {
+    var total: i32 = 0;
+    var py: i32 = 0;
+    while (py < 8) : (py += 1) {
+        var px: i32 = 0;
+        while (px < 16) : (px += 1) {
+            const x0 = @divTrunc(px * 3072, 16) - 2048;
+            const y0 = @divTrunc(py * 2048, 8) - 1024;
+            var x: i32 = 0;
+            var y: i32 = 0;
+            var it: i32 = 0;
+            while (it < 24) : (it += 1) {
+                const xx = @divTrunc(x * x, 1024);
+                const yy = @divTrunc(y * y, 1024);
+                if (xx + yy > 4096) break;
+                const xy = @divTrunc(x * y, 1024);
+                x = xx - yy + x0;
+                y = 2 * xy + y0;
+            }
+            total += it;
+        }
+    }
+    return total;
+}
+
+/// UdonSharp writes heap defaults that Udon Assembly cannot express
+/// straight to the heap; for this program, the recursive-method stack.
+fn usharpSetup(vm: *Vm) !void {
+    const stack = try vm.newArray("SystemObjectArray", 2);
+    try std.testing.expect(vm.setVar("__gintnl_SystemObjectArray_0", .{ .array = stack }));
+}
+
+/// All three implementations leave the same results in the same variables.
+fn benchVerify(vm: *Vm) !void {
+    try std.testing.expectEqual(Value{ .int32 = 6765 }, vm.getVar("fibResult").?);
+    try std.testing.expectEqual(Value{ .int32 = benchMandel() }, vm.getVar("mandelResult").?);
+    try std.testing.expectEqual(Value{ .int32 = 192 }, vm.getVar("strResult").?);
+}
+
+const bench_examples = [_]Example{
+    .{ .name = "bench-usharp", .uasm = @embedFile("bench-usharp.uasm"), .scenario = usharp_scenario, .setup = usharpSetup, .verify = benchVerify },
+    .{ .name = "bench-zig", .wasm = @embedFile("bench-zig.wasm"), .scenario = usharp_scenario, .verify = benchVerify },
+};
+
 const rust_examples = if (build_options.with_rust) [_]Example{
     .{
         .name = "wasm-bench-rs",
@@ -346,7 +404,7 @@ const rust_examples = if (build_options.with_rust) [_]Example{
     },
 } else [_]Example{};
 
-pub const examples = zig_examples ++ rust_examples;
+pub const examples = zig_examples ++ bench_examples ++ rust_examples;
 
 pub fn find(name: []const u8) ?Example {
     for (examples) |e| if (std.mem.eql(u8, e.name, name)) return e;
@@ -360,8 +418,9 @@ pub fn find(name: []const u8) ?Example {
 pub const Result = struct {
     arena: std.heap.ArenaAllocator,
     uasm: []const u8,
-    /// Size of the translation as the translator reports it.
-    size: wasdon.Stats,
+    /// Size of the translation as the translator reports it; null for
+    /// assembly that was not translated here.
+    size: ?wasdon.Stats,
     report: udon.check.Report,
     prog: *udon.program.Program,
     vm: *Vm,
@@ -384,7 +443,7 @@ pub const Result = struct {
 /// The Zig examples ship as Unity assets (`unity/Wasdon/Examples/`); the
 /// Rust ones need a toolchain not every build has.
 pub fn hasUnityAsset(ex: Example) bool {
-    return !std.mem.endsWith(u8, ex.name, "-rs");
+    return ex.uasm == null and !std.mem.endsWith(u8, ex.name, "-rs");
 }
 
 /// Translate an example, check the output against the Udon Assembly rules,
@@ -395,8 +454,8 @@ pub fn run(gpa: std.mem.Allocator, ex: Example, options: wasdon.Options) !Result
     const a = arena.allocator();
 
     var text: std.Io.Writer.Allocating = .init(a);
-    const size = try wasdon.translateBytes(gpa, ex.wasm, &text.writer, options);
-    const uasm = text.written();
+    const size: ?wasdon.Stats = if (ex.uasm == null) try wasdon.translateBytes(gpa, ex.wasm, &text.writer, options) else null;
+    const uasm = ex.uasm orelse text.written();
 
     const prog = try a.create(udon.program.Program);
     prog.* = try udon.program.parse(gpa, uasm, null);
@@ -404,10 +463,10 @@ pub fn run(gpa: std.mem.Allocator, ex: Example, options: wasdon.Options) !Result
     var report = try udon.check.check(gpa, prog);
     errdefer report.deinit();
 
-    const vm = try Vm.init(gpa, prog, .{});
+    const vm = try Vm.init(gpa, prog, .{ .strict_stack = ex.uasm == null });
     errdefer vm.deinit();
     var result: Result = .{ .arena = arena, .uasm = uasm, .size = size, .report = report, .prog = prog, .vm = vm, .steps = &.{} };
-    if (!report.ok()) return result;
+    if (ex.uasm == null and !report.ok()) return result;
 
     if (ex.setup) |f| try f(vm);
     var steps: std.ArrayList(udon.vm.EventStat) = .empty;

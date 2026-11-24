@@ -1,0 +1,1873 @@
+.data_start
+    # wasdon-zig heap-size: 114
+    __G__memory: %SystemByteArray, null
+    __G__memory_size_pages: %SystemInt32, 17
+    __G__g0: %SystemInt32, 1048576
+    .export fibN
+    fibN: %SystemInt32, 20
+    .export fibResult
+    fibResult: %SystemInt32, 0
+    .export mandelResult
+    mandelResult: %SystemInt32, 0
+    .export strResult
+    strResult: %SystemInt32, 0
+    __Str_L0__: %SystemInt32, 0
+    __Mandel_L0__: %SystemInt32, 0
+    __Mandel_L1__: %SystemInt32, 0
+    __Mandel_L2__: %SystemInt32, 0
+    __Mandel_L3__: %SystemInt32, 0
+    __Mandel_L4__: %SystemInt32, 0
+    __Mandel_L5__: %SystemInt32, 0
+    __Mandel_L6__: %SystemInt32, 0
+    __Mandel_L7__: %SystemInt32, 0
+    __Mandel_L8__: %SystemInt32, 0
+    __main_fib_P0__: %SystemInt32, 0
+    __main_fib_L1__: %SystemInt32, 0
+    __main_fib_L2__: %SystemInt32, 0
+    __main_fib_L3__: %SystemBoolean, null
+    __main_fib_RA__: %SystemUInt32, 0
+    __Str_T1__: %SystemString, null
+    __utf8: %SystemObject, null
+    __c_i32_1049192: %SystemInt32, 1049192
+    __c_i32_0: %SystemInt32, 0
+    __Str_T2__: %SystemString, null
+    __c_i32_1049189: %SystemInt32, 1049189
+    __c_i32_3: %SystemInt32, 3
+    __Str_T3__: %SystemString, null
+    __Str_T4__: %SystemInt32, 0
+    __c_i32_192: %SystemInt32, 192
+    __Mandel_T1__: %SystemInt32, 0
+    __c_i32_n2048: %SystemInt32, -2048
+    __c_i32_1024: %SystemInt32, 1024
+    __c_i32_4096: %SystemInt32, 4096
+    __Mandel_T2__: %SystemBoolean, null
+    __c_i32_1: %SystemInt32, 1
+    __c_i32_n1024: %SystemInt32, -1024
+    __c_i32_24: %SystemInt32, 24
+    __c_i32_16: %SystemInt32, 16
+    __c_i32_n768: %SystemInt32, -768
+    __c_i32_n512: %SystemInt32, -512
+    __c_i32_n256: %SystemInt32, -256
+    __c_i32_4195327: %SystemInt32, 4195327
+    __c_i32_10: %SystemInt32, 10
+    __c_i32_2: %SystemInt32, 2
+    __c_i32_4: %SystemInt32, 4
+    __c_i32_5: %SystemInt32, 5
+    __c_i32_6: %SystemInt32, 6
+    __c_i32_7: %SystemInt32, 7
+    __c_i32_8: %SystemInt32, 8
+    __c_i32_9: %SystemInt32, 9
+    __c_i32_11: %SystemInt32, 11
+    __c_i32_12: %SystemInt32, 12
+    __c_i32_13: %SystemInt32, 13
+    __c_i32_14: %SystemInt32, 14
+    __c_i32_15: %SystemInt32, 15
+    __c_i32_17: %SystemInt32, 17
+    __c_i32_18: %SystemInt32, 18
+    __c_i32_19: %SystemInt32, 19
+    __c_i32_20: %SystemInt32, 20
+    __c_i32_21: %SystemInt32, 21
+    __c_i32_22: %SystemInt32, 22
+    __c_i32_23: %SystemInt32, 23
+    __c_i32_3072: %SystemInt32, 3072
+    __c_i32_256: %SystemInt32, 256
+    __c_i32_512: %SystemInt32, 512
+    __c_i32_768: %SystemInt32, 768
+    __ra_1: %SystemUInt32, 12688
+    __ret0_i32: %SystemInt32, 0
+    __main_fib_T1__: %SystemBoolean, null
+    __c_i32_n1: %SystemInt32, -1
+    __main_fib_T2__: %SystemInt32, 0
+    __frame_depth: %SystemInt32, 0
+    __frame0: %SystemObjectArray, null
+    __frame1: %SystemObjectArray, null
+    __frame2: %SystemObjectArray, null
+    __ra_2: %SystemUInt32, 13060
+    __derived0: %SystemInt32, 0
+    __c_i32_n2147483648: %SystemInt32, 0x80000000
+    __c_i32_n2147483644: %SystemInt32, -2147483644
+    __c_i32_n2: %SystemInt32, -2
+    __init_RA: %SystemUInt32, 0
+    __inited: %SystemBoolean, null
+    __ra_3: %SystemUInt32, 13408
+    __ra_4: %SystemUInt32, 13432
+    __ra_5: %SystemUInt32, 13456
+    __c_i32_1114112: %SystemInt32, 1114112
+    __data_0: %SystemString, "ewogICJ2ZXJzaW9uIjogMSwKICAiZmllbGRzIjogewogICAgImZpYk4iOiAgIHsgInNvdXJjZSI6IHsia2luZCI6ImltcG9ydCIsIm5hbWUiOiJiZW5jaC5maWJfbiJ9LCAidWRvbk5hbWUiOiJmaWJOIiwgInR5cGUiOiJpbnQiLCAiZXhwb3J0IjogdHJ1ZSwgImRlZmF1bHQiOiAyMCB9LAogICAgImZpYiI6ICAgIHsgInNvdXJjZSI6IHsia2luZCI6ImltcG9ydCIsIm5hbWUiOiJiZW5jaC5maWIiLCJzZXR0ZXIiOiJiZW5jaC5zZXRfZmliIn0sICJ1ZG9uTmFtZSI6ImZpYlJlc3VsdCIsICJ0eXBlIjoiaW50IiwgImV4cG9ydCI6IHRydWUgfSwKICAgICJtYW5kZWwiOiB7ICJzb3VyY2UiOiB7ImtpbmQiOiJpbXBvcnQiLCJuYW1lIjoiYmVuY2gubWFuZGVsIiwic2V0dGVyIjoiYmVuY2guc2V0X21hbmRlbCJ9LCAidWRvbk5hbWUiOiJtYW5kZWxSZXN1bHQiLCAidHlwZSI6ImludCIsICJleHBvcnQiOiB0cnVlIH0sCiAgICAic3RyIjogICAgeyAic291cmNlIjogeyJraW5kIjoiaW1wb3J0IiwibmFtZSI6ImJlbmNoLnN0ciIsInNldHRlciI6ImJlbmNoLnNldF9zdHIifSwgInVkb25OYW1lIjoic3RyUmVzdWx0IiwgInR5cGUiOiJpbnQiLCAiZXhwb3J0IjogdHJ1ZSB9CiAgfQp9AGFiYw=="
+    __data_bytes: %SystemByteArray, null
+    __c_i32_1048576: %SystemInt32, 1048576
+    __c_i32_616: %SystemInt32, 616
+.data_end
+
+.code_start
+        PUSH, __utf8
+        PUSH, __G__memory
+        PUSH, __c_i32_1049192
+        PUSH, __c_i32_0
+        PUSH, __Str_T1__
+        EXTERN, "SystemTextEncoding.__GetString__SystemByteArray_SystemInt32_SystemInt32__SystemString"
+        PUSH, __Str_T1__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Copy__SystemString__SystemString"
+        PUSH, __utf8
+        PUSH, __G__memory
+        PUSH, __c_i32_1049189
+        PUSH, __c_i32_3
+        PUSH, __Str_T1__
+        EXTERN, "SystemTextEncoding.__GetString__SystemByteArray_SystemInt32_SystemInt32__SystemString"
+        PUSH, __Str_T1__
+        PUSH, __Str_L0__
+        EXTERN, "SystemString.__Copy__SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, __Str_L0__
+        PUSH, __Str_T2__
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __Str_T2__
+        PUSH, strResult
+        EXTERN, "SystemString.__get_Length__SystemInt32"
+        JUMP, 0xFFFFFFFC
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L4__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L6__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L7__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L8__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L0__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L1__
+        COPY
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_192
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L3__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L4__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L5__
+        COPY
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_L6__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_L7__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L6__
+        PUSH, __Mandel_L7__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_4096
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00000A90
+        PUSH, __Mandel_L5__
+        PUSH, __Mandel_L8__
+        COPY
+        JUMP, 0x00000BB4
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n1024
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_24
+        PUSH, __Mandel_L8__
+        COPY
+        PUSH, __Mandel_L2__
+        PUSH, __Mandel_L7__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_L6__
+        PUSH, __Mandel_L3__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L5__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L5__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L5__
+        PUSH, __c_i32_24
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x000009A4
+        PUSH, __Mandel_L8__
+        PUSH, __Mandel_L0__
+        PUSH, __Mandel_L0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_16
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00000928
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L1__
+        COPY
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_192
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L3__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L4__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L5__
+        COPY
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_L6__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_L7__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L6__
+        PUSH, __Mandel_L7__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_4096
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00000DA0
+        PUSH, __Mandel_L5__
+        PUSH, __Mandel_L8__
+        COPY
+        JUMP, 0x00000EC4
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n768
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_24
+        PUSH, __Mandel_L8__
+        COPY
+        PUSH, __Mandel_L2__
+        PUSH, __Mandel_L7__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_L6__
+        PUSH, __Mandel_L3__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L5__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L5__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L5__
+        PUSH, __c_i32_24
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00000CB4
+        PUSH, __Mandel_L8__
+        PUSH, __Mandel_L0__
+        PUSH, __Mandel_L0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_16
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00000C38
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L1__
+        COPY
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_192
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L3__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L4__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L5__
+        COPY
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_L6__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_L7__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L6__
+        PUSH, __Mandel_L7__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_4096
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x000010B0
+        PUSH, __Mandel_L5__
+        PUSH, __Mandel_L8__
+        COPY
+        JUMP, 0x000011D4
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n512
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_24
+        PUSH, __Mandel_L8__
+        COPY
+        PUSH, __Mandel_L2__
+        PUSH, __Mandel_L7__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_L6__
+        PUSH, __Mandel_L3__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L5__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L5__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L5__
+        PUSH, __c_i32_24
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00000FC4
+        PUSH, __Mandel_L8__
+        PUSH, __Mandel_L0__
+        PUSH, __Mandel_L0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_16
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00000F48
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L1__
+        COPY
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_192
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L3__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L4__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L5__
+        COPY
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_L6__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_L7__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L6__
+        PUSH, __Mandel_L7__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_4096
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x000013C0
+        PUSH, __Mandel_L5__
+        PUSH, __Mandel_L8__
+        COPY
+        JUMP, 0x000014E4
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n256
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_24
+        PUSH, __Mandel_L8__
+        COPY
+        PUSH, __Mandel_L2__
+        PUSH, __Mandel_L7__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_L6__
+        PUSH, __Mandel_L3__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L5__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L5__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L5__
+        PUSH, __c_i32_24
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x000012D4
+        PUSH, __Mandel_L8__
+        PUSH, __Mandel_L0__
+        PUSH, __Mandel_L0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_16
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00001258
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L3__
+        COPY
+        PUSH, __Mandel_L3__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x000015F4
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_10
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x000016C0
+        PUSH, __c_i32_2
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x0000178C
+        PUSH, __c_i32_3
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00001858
+        PUSH, __c_i32_4
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00001924
+        PUSH, __c_i32_5
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x000019F0
+        PUSH, __c_i32_6
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00001ABC
+        PUSH, __c_i32_7
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00001B88
+        PUSH, __c_i32_8
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00001C54
+        PUSH, __c_i32_9
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00001D20
+        PUSH, __c_i32_10
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00001DEC
+        PUSH, __c_i32_11
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00001EB8
+        PUSH, __c_i32_12
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00001F84
+        PUSH, __c_i32_13
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00002050
+        PUSH, __c_i32_14
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x0000211C
+        PUSH, __c_i32_15
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x000021E8
+        PUSH, __c_i32_16
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x000022B4
+        PUSH, __c_i32_17
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00002380
+        PUSH, __c_i32_18
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x0000244C
+        PUSH, __c_i32_19
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00002518
+        PUSH, __c_i32_20
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x000025E4
+        PUSH, __c_i32_21
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x000026B0
+        PUSH, __c_i32_22
+        PUSH, __Mandel_L4__
+        COPY
+        JUMP, 0x000027A4
+        PUSH, __Mandel_L4__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_4195327
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x0000277C
+        PUSH, __c_i32_23
+        PUSH, __Mandel_T1__
+        COPY
+        JUMP, 0x00002790
+        PUSH, __c_i32_24
+        PUSH, __Mandel_T1__
+        COPY
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_L4__
+        COPY
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L0__
+        PUSH, __Mandel_L0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __c_i32_192
+        PUSH, __Mandel_L3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __c_i32_3072
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00001568
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L1__
+        COPY
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_192
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L3__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L4__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L5__
+        COPY
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_L6__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_L7__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L6__
+        PUSH, __Mandel_L7__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_4096
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00002990
+        PUSH, __Mandel_L5__
+        PUSH, __Mandel_L8__
+        COPY
+        JUMP, 0x00002AB4
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_256
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_24
+        PUSH, __Mandel_L8__
+        COPY
+        PUSH, __Mandel_L2__
+        PUSH, __Mandel_L7__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_L6__
+        PUSH, __Mandel_L3__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L5__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L5__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L5__
+        PUSH, __c_i32_24
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x000028A4
+        PUSH, __Mandel_L8__
+        PUSH, __Mandel_L0__
+        PUSH, __Mandel_L0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_16
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00002828
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L1__
+        COPY
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_192
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L3__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L4__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L5__
+        COPY
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_L6__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_L7__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L6__
+        PUSH, __Mandel_L7__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_4096
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00002CA0
+        PUSH, __Mandel_L5__
+        PUSH, __Mandel_L8__
+        COPY
+        JUMP, 0x00002DC4
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_512
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_24
+        PUSH, __Mandel_L8__
+        COPY
+        PUSH, __Mandel_L2__
+        PUSH, __Mandel_L7__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_L6__
+        PUSH, __Mandel_L3__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L5__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L5__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L5__
+        PUSH, __c_i32_24
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00002BB4
+        PUSH, __Mandel_L8__
+        PUSH, __Mandel_L0__
+        PUSH, __Mandel_L0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_16
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00002B38
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L1__
+        COPY
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_192
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_n2048
+        PUSH, __Mandel_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L3__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L4__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Mandel_L5__
+        COPY
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_L6__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_L7__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L6__
+        PUSH, __Mandel_L7__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_4096
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00002FB0
+        PUSH, __Mandel_L5__
+        PUSH, __Mandel_L8__
+        COPY
+        JUMP, 0x000030D4
+        PUSH, __Mandel_L4__
+        PUSH, __Mandel_L3__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1024
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __c_i32_768
+        PUSH, __Mandel_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_24
+        PUSH, __Mandel_L8__
+        COPY
+        PUSH, __Mandel_L2__
+        PUSH, __Mandel_L7__
+        PUSH, __Mandel_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_T1__
+        PUSH, __Mandel_L6__
+        PUSH, __Mandel_L3__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L5__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L5__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L5__
+        PUSH, __c_i32_24
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00002EC4
+        PUSH, __Mandel_L8__
+        PUSH, __Mandel_L0__
+        PUSH, __Mandel_L0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_1
+        PUSH, __Mandel_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Mandel_L1__
+        PUSH, __c_i32_16
+        PUSH, __Mandel_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Mandel_T2__
+        JUMP_IF_FALSE, 0x00002E48
+        PUSH, __Mandel_L0__
+        PUSH, mandelResult
+        COPY
+        JUMP, 0xFFFFFFFC
+        PUSH, fibN
+        PUSH, __main_fib_P0__
+        COPY
+        PUSH, __ra_1
+        PUSH, __main_fib_RA__
+        COPY
+        JUMP, 0x000031AC
+        PUSH, __ret0_i32
+        PUSH, fibResult
+        COPY
+        JUMP, 0xFFFFFFFC
+        PUSH, __c_i32_0
+        PUSH, __main_fib_L2__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __main_fib_L1__
+        COPY
+        PUSH, __main_fib_P0__
+        PUSH, __c_i32_2
+        PUSH, __main_fib_T1__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __main_fib_T1__
+        JUMP_IF_FALSE, 0x00003220
+        PUSH, __main_fib_P0__
+        PUSH, __main_fib_L2__
+        COPY
+        JUMP, 0x00003428
+        PUSH, __c_i32_0
+        PUSH, __main_fib_L1__
+        COPY
+        PUSH, __main_fib_P0__
+        PUSH, __c_i32_n1
+        PUSH, __main_fib_T2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __frame0
+        PUSH, __frame_depth
+        PUSH, __main_fib_P0__
+        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
+        PUSH, __frame1
+        PUSH, __frame_depth
+        PUSH, __main_fib_L1__
+        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
+        PUSH, __frame2
+        PUSH, __frame_depth
+        PUSH, __main_fib_RA__
+        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
+        PUSH, __frame_depth
+        PUSH, __c_i32_1
+        PUSH, __frame_depth
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __main_fib_T2__
+        PUSH, __main_fib_P0__
+        COPY
+        PUSH, __ra_2
+        PUSH, __main_fib_RA__
+        COPY
+        JUMP, 0x000031AC
+        PUSH, __frame_depth
+        PUSH, __c_i32_1
+        PUSH, __frame_depth
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __frame0
+        PUSH, __frame_depth
+        PUSH, __main_fib_P0__
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __frame1
+        PUSH, __frame_depth
+        PUSH, __main_fib_L1__
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __frame2
+        PUSH, __frame_depth
+        PUSH, __main_fib_RA__
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __ret0_i32
+        PUSH, __main_fib_L1__
+        PUSH, __main_fib_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __main_fib_P0__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __c_i32_n2147483644
+        PUSH, __main_fib_L3__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __main_fib_P0__
+        PUSH, __c_i32_n2
+        PUSH, __main_fib_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __main_fib_L2__
+        PUSH, __main_fib_P0__
+        COPY
+        PUSH, __main_fib_L3__
+        JUMP_IF_FALSE, 0x00003234
+        PUSH, __main_fib_L2__
+        PUSH, __main_fib_L1__
+        PUSH, __ret0_i32
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP_INDIRECT, __main_fib_RA__
+    .export Str
+    Str:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x00003498
+        JUMP, 0x00000000
+    .export Mandel
+    Mandel:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x000034B4
+        JUMP, 0x000008B0
+    .export Fib
+    Fib:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x000034D0
+        JUMP, 0x00003160
+        PUSH, __ra_3
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x000034E4
+        PUSH, __ra_4
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x000034E4
+        PUSH, __ra_5
+        PUSH, __init_RA
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __c_i32_0
+        PUSH, __inited
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __c_i32_1114112
+        PUSH, __G__memory
+        EXTERN, "SystemByteArray.__ctor__SystemInt32__SystemByteArray"
+        PUSH, __data_0
+        PUSH, __data_bytes
+        EXTERN, "SystemConvert.__FromBase64String__SystemString__SystemByteArray"
+        PUSH, __data_bytes
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1048576
+        PUSH, __c_i32_616
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __utf8
+        EXTERN, "SystemTextEncoding.__get_UTF8__SystemTextEncoding"
+        PUSH, __c_i32_1024
+        PUSH, __frame0
+        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
+        PUSH, __c_i32_1024
+        PUSH, __frame1
+        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
+        PUSH, __c_i32_1024
+        PUSH, __frame2
+        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
+        JUMP_INDIRECT, __init_RA
+.code_end

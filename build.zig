@@ -8,6 +8,8 @@ const zig_examples = [_]struct {
     /// A pure-Zig file holding the example's logic. The tests compile it
     /// natively and use it as the reference the Udon run is compared with.
     core: ?[]const u8 = null,
+    /// Size by default; speed where the example is a benchmark.
+    optimize: std.builtin.OptimizeMode = .ReleaseSmall,
 }{
     .{ .name = "wasm-bench", .root = "examples/wasm-bench/main.zig" },
     .{ .name = "udon-orbit", .root = "examples/udon-orbit/main.zig" },
@@ -16,6 +18,7 @@ const zig_examples = [_]struct {
     .{ .name = "image-codec", .root = "examples/image-codec/main.zig", .core = "examples/image-codec/core.zig" },
     .{ .name = "ragdoll", .root = "examples/ragdoll/main.zig", .core = "examples/ragdoll/core.zig" },
     .{ .name = "blockfall", .root = "examples/blockfall/main.zig", .core = "examples/blockfall/core.zig" },
+    .{ .name = "bench-zig", .root = "examples/bench/zig/main.zig", .optimize = .ReleaseFast },
 };
 
 /// Rust examples (Cargo workspace members). Only built with `-Drust`.
@@ -90,6 +93,8 @@ pub fn build(b: *std.Build) void {
     const options = b.addOptions();
     options.addOption(bool, "with_rust", with_rust);
     fixtures.addOptions("build_options", options);
+    // The UdonSharp side of the benchmark is Udon Assembly already.
+    fixtures.addAnonymousImport("bench-usharp.uasm", .{ .root_source_file = b.path("examples/bench/usharp/UdonBench.uasm") });
 
     // Udon bindings shared by the examples.
     const udon_api = b.createModule(.{ .root_source_file = b.path("examples/udon/udon.zig"), .target = wasm_target, .optimize = .ReleaseSmall });
@@ -100,7 +105,7 @@ pub fn build(b: *std.Build) void {
             .root_module = b.createModule(.{
                 .root_source_file = b.path(ex.root),
                 .target = wasm_target,
-                .optimize = .ReleaseSmall,
+                .optimize = ex.optimize,
                 .imports = &.{.{ .name = "udon", .module = udon_api }},
             }),
         });

@@ -1,5 +1,5 @@
 .data_start
-    # wasdon-zig heap-size: 711
+    # wasdon-zig heap-size: 712
     _memory: %SystemByteArray, null
     _memory_size_pages: %SystemInt32, 17
     __G__g0: %SystemInt32, 1048576
@@ -497,10 +497,12 @@
     __ra_101: %SystemUInt32, 58456
     __f11_T1__: %SystemBoolean, null
     __f11_T2__: %SystemInt32, 0
-    __call_stack: %SystemObjectArray, null
-    __call_stack_top: %SystemInt32, 0
-    __ra_102: %SystemUInt32, 58948
-    __ra_103: %SystemUInt32, 59300
+    __frame_depth: %SystemInt32, 0
+    __frame0: %SystemObjectArray, null
+    __frame1: %SystemObjectArray, null
+    __frame2: %SystemObjectArray, null
+    __ra_102: %SystemUInt32, 58884
+    __ra_103: %SystemUInt32, 59172
     __f13_T1__: %SystemInt64, null
     __c_i64_802386f26fc10000: %SystemInt64, null
     __f13_T2__: %SystemBoolean, null
@@ -532,29 +534,29 @@
     __f14_T10__: %SystemInt64, null
     __f15_T1__: %SystemBoolean, null
     __f15_T2__: %SystemInt32, 0
-    __ra_104: %SystemUInt32, 64644
-    __ra_105: %SystemUInt32, 64832
+    __ra_104: %SystemUInt32, 64516
+    __ra_105: %SystemUInt32, 64704
     __c_i32_2147483647: %SystemInt32, 2147483647
-    __ra_106: %SystemUInt32, 64972
-    __ra_107: %SystemUInt32, 65160
-    __ra_108: %SystemUInt32, 65424
-    __ra_109: %SystemUInt32, 65520
-    __ra_110: %SystemUInt32, 65708
+    __ra_106: %SystemUInt32, 64844
+    __ra_107: %SystemUInt32, 65032
+    __ra_108: %SystemUInt32, 65296
+    __ra_109: %SystemUInt32, 65392
+    __ra_110: %SystemUInt32, 65580
     __f16_T1__: %SystemInt32, 0
     __f16_T2__: %SystemBoolean, null
     __f16_T3__: %SystemInt32, 0
-    __ra_111: %SystemUInt32, 66408
+    __ra_111: %SystemUInt32, 66280
     __c_i32_264: %SystemInt32, 264
     __f16_T4__: %SystemInt32, 0
     __f16_T5__: %SystemUInt32, 0
-    __ra_112: %SystemUInt32, 67236
+    __ra_112: %SystemUInt32, 67108
     __f16_T6__: %SystemInt64, null
     __f20_T1__: %SystemBoolean, null
     __f20_T2__: %SystemInt32, 0
     __derived3: %SystemInt32, 0
     __derived4: %SystemInt32, 0
     __f20_T3__: %SystemByte, null
-    __ra_113: %SystemUInt32, 69412
+    __ra_113: %SystemUInt32, 69284
     __c_i64_200000000: %SystemInt64, null
     __c_i32_1053360: %SystemInt32, 1053360
     __on_update_T1__: %SystemInt32, 0
@@ -569,12 +571,12 @@
     __c_i32_1050467: %SystemInt32, 1050467
     __c_i32_1053364: %SystemInt32, 1053364
     __c_i32_276: %SystemInt32, 276
-    __ra_114: %SystemUInt32, 71156
-    __ra_115: %SystemUInt32, 71224
+    __ra_114: %SystemUInt32, 71028
+    __ra_115: %SystemUInt32, 71096
     __c_i32_1049780: %SystemInt32, 1049780
     __c_i32_1050489: %SystemInt32, 1050489
-    __ra_116: %SystemUInt32, 71664
-    __ra_117: %SystemUInt32, 71752
+    __ra_116: %SystemUInt32, 71536
+    __ra_117: %SystemUInt32, 71624
     __on_start_T3__: %SystemInt32, 0
     __c_i32_1049801: %SystemInt32, 1049801
     __c_i32_1050565: %SystemInt32, 1050565
@@ -583,21 +585,21 @@
     __c_i32_1050340: %SystemInt32, 1050340
     __c_i32_280: %SystemInt32, 280
     __c_i32_1051268: %SystemInt32, 1051268
-    __ra_118: %SystemUInt32, 72656
+    __ra_118: %SystemUInt32, 72528
     __on_start_T4__: %SystemBoolean, null
     __c_i32_1049914: %SystemInt32, 1049914
     __c_i32_1049621: %SystemInt32, 1049621
     __c_i32_1050217: %SystemInt32, 1050217
     __c_i32_1051266: %SystemInt32, 1051266
-    __ra_119: %SystemUInt32, 73520
+    __ra_119: %SystemUInt32, 73392
     __c_i32_1049557: %SystemInt32, 1049557
-    __ra_120: %SystemUInt32, 73720
+    __ra_120: %SystemUInt32, 73592
     __c_i32_1049902: %SystemInt32, 1049902
     __c_i32_1049590: %SystemInt32, 1049590
     __c_i32_1050249: %SystemInt32, 1050249
     __c_i32_1051264: %SystemInt32, 1051264
-    __ra_121: %SystemUInt32, 74584
-    __ra_122: %SystemUInt32, 74764
+    __ra_121: %SystemUInt32, 74456
+    __ra_122: %SystemUInt32, 74636
     __c_i32_1049890: %SystemInt32, 1049890
     __c_i32_1049559: %SystemInt32, 1049559
     __c_i32_1049736: %SystemInt32, 1049736
@@ -614,9 +616,9 @@
     __c_i32_1049964: %SystemInt32, 1049964
     __init_RA: %SystemUInt32, 0
     __inited: %SystemBoolean, null
-    __ra_123: %SystemUInt32, 76936
-    __ra_124: %SystemUInt32, 76960
-    __ra_125: %SystemUInt32, 76984
+    __ra_123: %SystemUInt32, 76808
+    __ra_124: %SystemUInt32, 76832
+    __ra_125: %SystemUInt32, 76856
     __c_i32_1114112: %SystemInt32, 1114112
     __data_0: %SystemString, "ewogICJ2ZXJzaW9uIjogMSwKICAiYmVoYXZpb3VyIjogeyAic3luY01vZGUiOiAibWFudWFsIiB9LAogICJmdW5jdGlvbnMiOiB7CiAgICAic3RhcnQiOiAgICB7ICJzb3VyY2UiOiB7ImtpbmQiOiJleHBvcnQiLCJuYW1lIjoib25fc3RhcnQifSwgICAgImxhYmVsIjoiX3N0YXJ0IiwgICAgImV4cG9ydCI6IHRydWUsICJldmVudCI6IlN0YXJ0IiAgICB9LAogICAgInVwZGF0ZSI6ICAgeyAic291cmNlIjogeyJraW5kIjoiZXhwb3J0IiwibmFtZSI6Im9uX3VwZGF0ZSJ9LCAgICJsYWJlbCI6Il91cGRhdGUiLCAgICJleHBvcnQiOiB0cnVlLCAiZXZlbnQiOiJVcGRhdGUiICAgfSwKICAgICJpbnRlcmFjdCI6IHsgInNvdXJjZSI6IHsia2luZCI6ImV4cG9ydCIsIm5hbWUiOiJvbl9pbnRlcmFjdCJ9LCAibGFiZWwiOiJfaW50ZXJhY3QiLCAiZXhwb3J0IjogdHJ1ZSwgImV2ZW50IjoiSW50ZXJhY3QiIH0KICB9LAogICJmaWVsZHMiOiB7CiAgICAiY291bnRlciI6ICAgICB7ICJzb3VyY2UiOiB7ImtpbmQiOiJnbG9iYWwiLCJuYW1lIjoiY291bnRlciJ9LCAgICAgInVkb25OYW1lIjoiX2NvdW50ZXIiLCAgICAgInR5cGUiOiJpbnQiLCAgImV4cG9ydCI6IHRydWUgfSwKICAgICJhY2N1bSI6ICAgICAgIHsgInNvdXJjZSI6IHsia2luZCI6Imdsb2JhbCIsIm5hbWUiOiJhY2N1bSJ9LCAgICAgICAidWRvbk5hbWUiOiJfYWNjdW0iLCAgICAgICAidHlwZSI6ImludCIgfSwKICAgICJ1cGRhdGVfdGljayI6IHsgInNvdXJjZSI6IHsia2luZCI6Imdsb2JhbCIsIm5hbWUiOiJ1cGRhdGVfdGljayJ9LCAidWRvbk5hbWUiOiJfdXBkYXRlVGljayIsICAidHlwZSI6ImludCIgfQogIH0sCiAgIm9wdGlvbnMiOiB7CiAgICAic3RyaWN0IjogZmFsc2UsCiAgICAicmVjdXJzaW9uIjogInN0YWNrIiwKICAgICJtZW1vcnkiOiB7ICJpbml0aWFsUGFnZXMiOiAxLCAibWF4UGFnZXMiOiAyNCwgInVkb25OYW1lIjogIl9tZW1vcnkiIH0KICB9Cn0AeQBzdGFnZTQgYnVmUHJpbnQgcmV0dXJuZWQgZXJyb3IAc3RhZ2UzIGJ1ZlByaW50IHJldHVybmVkIGVycm9yAHN0YWdlMiBidWZQcmludCByZXR1cm5lZCBlcnJvcgBsaXRlcmFsIHR3bwBoaQBhYmNkZWZnAHdsIHNsaWNlIG1lbWNweSBkb25lAHZ0YWJsZSBpbmRpcmVjdCBkb25lAG1lbWNweSBkaXJlY3QgZG9uZQByZWFsIGxvZ2YgYWxsIHN0YWdlcyBkb25lAHdsIHNsaWNlIGVyciBkb25lAG1hbnVhbCBmYXN0cGF0aCBkb25lAHdsIHNsaWNlIHdyaXRlIGRvbmUAbm9mbXRfc2ltcGxlIGRvbmUAZm10X3NpbmdsZSBkb25lAHdyaXRlci1saWtlIGRvbmUAZm10X2ludF9oYW5kIGRvbmUAc3RhZ2U0IGRvbmUAc3RhZ2UzIGRvbmUAc3RhZ2UyIGRvbmUAc3RhZ2UxIGRvbmUAbGl0ZXJhbCBvbmUAbGl0ZXJhbCB0aHJlZQBXTFMgRkFTVCBQQVRIIEZBSUxFRABXTFNNIEZBU1QgUEFUSCBGQUlMRUQAV0wgRkFTVCBQQVRIIEZBSUxFRAA9PT0gb25fc3RhcnQgYmVnaW4gPT09AD09PSBvbl9zdGFydCBlbmQgPT09AD09IG1lbW9yeSA9PQA9PSBjb250cm9sX2Zsb3cgPT0APT0gc3RydWN0ID09AD09IGNhbGxfaW5kaXJlY3QgPT0APT0gNjRiaXRfYW5kX2Zsb2F0ID09AD09IGdsb2JhbHMgPT0APT0gcmVjdXJzaW9uID09AD09IGFyaXRobWV0aWMgPT0AeCA+IDUAdGFnPTIALS0gc3RhZ2UzOiBidWZQcmludCB3aXRoIHtzfSAtLQAtLSBzdGFnZTQ6IGJ1ZlByaW50IHdpdGgge2R9IC0tAC0tIHdsIHNsaWNlIG1lbWNweSAtLQAtLSBzdGFnZTE6IFdyaXRlci5maXhlZCBpbml0IG9ubHkgLS0ALS0gc3RhZ2UyOiBidWZQcmludCB3aXRoIGxpdGVyYWwgb25seSAtLQAtLSB3cml0ZXItbGlrZSBzdHJ1Y3QgLS0ALS0gdnRhYmxlIGluZGlyZWN0IC0tAC0tIG1lbWNweSBkaXJlY3QgLS0ALS0gd2wgc2xpY2UgZXJyIC0tAC0tIG1hbnVhbCBmYXN0cGF0aCAtLQAtLSB3bCBzbGljZSB3cml0ZSAtLQAtLSBub2ZtdF9zaW1wbGUgLS0ALS0gZm10X3NpbmdsZSAtLQAtLSBmbXRfaW50X2hhbmQgLS0ALS0gcmVhbCBsb2dmIChzdGFnZWQpIC0tAChmbG9hdCkAKG5vIG1vcmUgc3RlcHMpAHBsYWluOiAAcG9pbnRzWzFdIGFmdGVyIHRyYW5zbGF0ZSA9ICgAAAAAAAAAAAAAAAAAAAAAAAAAAAACIAAALCApZmxvb3IobSAqIDEwMCkgPSABAAAAAgAAAAMAAAAEAAAAc3VtIG9mIGFyZWFzID0gZ19yZWN0LnRhZyBhZnRlciBpbmMgPSAweGdfcmVjdC50YWcgPSAweHJlY3Rfd2lkdGgoZ19yZWN0KSA9IHEgYWZ0ZXIgdHJhbnNsYXRlID0gKHBvaW50X2FyZWEoezYsN30pID0gMy4xNCAqIDIuMCA9ICgweDEwMDAwMDAwMCArIDUpIGxvMzIgPSAoMHgxMDAwMDAwMDAgKyA1KSBoaTMyID0gYWRkX29uZSg5OSkgPSBtZW1vcnkuc2l6ZSBhZnRlciAgPSAgcGFnZXNtZW1vcnkuZ3JvdyByZXR1cm5lZCA9IG1lbW9yeS5zaXplIGJlZm9yZSA9IHNjcmF0Y2hbMl0gKExFIGJ5dGUgYXNzZW1ibGUpID0gMHhzY3JhdGNoWzFdID0gc2NyYXRjaFswXSA9IDB4bmVnYXRlX2l0KDcpID0gZG91YmxlX2l0KDIxKSA9IGZpYigxMCkgPSBhY2N1bSA9IGNvdW50ZXIgPSBmYWN0b3JpYWwoNSkgPSBzdW0gb2Ygb2RkIDEuLjEwID0gaSA9IDB4QUJDRCBeIDB4MDBGRiA9IDB4cGxhaW46IDB4N0YwMCB8IDB4MDBGRiA9IDB4MSA8PCAxMCA9IDE3ICUgNSA9IC01MCAvIDcgPSAxMDAgKiAyMDAgPSAxICsgMiA9IAAAAACwDhAAAAIAAAAAAAAAAAAAAAAAAAACAAAAAAAAbj14PWFiYw=="
     __data_bytes: %SystemByteArray, null
@@ -647,8 +649,7 @@
     __c_i32_248: %SystemInt32, 248
     __c_i32_256: %SystemInt32, 256
     __c_i32_268: %SystemInt32, 268
-    __c_i32_4096: %SystemInt32, 4096
-    __table_b64: %SystemString, "5DEBAPgrAQDkMQEA5DEBAOQxAQA="
+    __table_b64: %SystemString, "lDEBAHgrAQCUMQEAlDEBAJQxAQA="
     __table_bytes: %SystemByteArray, null
     __trap_msg: %SystemString, "wasdon: WebAssembly trap (unreachable executed or null function reference)"
     __rt_9: %SystemInt32, 0
@@ -3196,7 +3197,7 @@
         PUSH, __ra_44
         PUSH, __rt_1
         COPY
-        JUMP, 0x000131FC
+        JUMP, 0x000131AC
         PUSH, __ret0_i32
         PUSH, __on_interact_L2__
         COPY
@@ -4372,7 +4373,7 @@
         PUSH, __ra_69
         PUSH, __f12_RA__
         COPY
-        JUMP, 0x0000E74C
+        JUMP, 0x0000E6CC
         PUSH, __ret0_i32
         PUSH, __c_i32_65535
         PUSH, __on_interact_T4__
@@ -4495,7 +4496,7 @@
         PUSH, __ra_71
         PUSH, __f12_RA__
         COPY
-        JUMP, 0x0000E74C
+        JUMP, 0x0000E6CC
         PUSH, __ret0_i32
         PUSH, __c_i32_65535
         PUSH, __on_interact_T1__
@@ -5704,7 +5705,7 @@
         PUSH, __ra_85
         PUSH, __f14_RA__
         COPY
-        JUMP, 0x0000EE9C
+        JUMP, 0x0000EE1C
         PUSH, __on_interact_L0__
         PUSH, __c_i32_64
         PUSH, __on_interact_T4__
@@ -6305,7 +6306,7 @@
         PUSH, __ra_86
         PUSH, __f13_RA__
         COPY
-        JUMP, 0x0000E7AC
+        JUMP, 0x0000E72C
         PUSH, __ret0_i32
         PUSH, __on_interact_L3__
         COPY
@@ -6434,7 +6435,7 @@
         PUSH, __ra_87
         PUSH, __rt_5
         COPY
-        JUMP, 0x00013364
+        JUMP, 0x00013314
         PUSH, __on_interact_L0__
         PUSH, __c_i32_64
         PUSH, __on_interact_T4__
@@ -6471,7 +6472,7 @@
         PUSH, __ra_88
         PUSH, __f14_RA__
         COPY
-        JUMP, 0x0000EE9C
+        JUMP, 0x0000EE1C
         PUSH, __on_interact_L13__
         PUSH, __on_interact_L1__
         PUSH, __on_interact_T1__
@@ -6511,7 +6512,7 @@
         PUSH, __ra_89
         PUSH, __f14_RA__
         COPY
-        JUMP, 0x0000EE9C
+        JUMP, 0x0000EE1C
         PUSH, __on_interact_L1__
         PUSH, __c_i32_n17
         PUSH, __on_interact_L2__
@@ -6538,7 +6539,7 @@
         PUSH, __ra_90
         PUSH, __rt_5
         COPY
-        JUMP, 0x00013364
+        JUMP, 0x00013314
         PUSH, __on_interact_L3__
         PUSH, __on_interact_L13__
         PUSH, __on_interact_T1__
@@ -6581,7 +6582,7 @@
         PUSH, __ra_91
         PUSH, __f14_RA__
         COPY
-        JUMP, 0x0000EE9C
+        JUMP, 0x0000EE1C
         PUSH, __on_interact_L5__
         PUSH, __c_i32_n17
         PUSH, __on_interact_T1__
@@ -6608,7 +6609,7 @@
         PUSH, __ra_92
         PUSH, __f14_RA__
         COPY
-        JUMP, 0x0000EE9C
+        JUMP, 0x0000EE1C
         PUSH, __on_interact_L3__
         PUSH, __on_interact_L13__
         PUSH, __on_interact_T1__
@@ -6642,7 +6643,7 @@
         PUSH, __ra_93
         PUSH, __f15_RA__
         COPY
-        JUMP, 0x0000FA78
+        JUMP, 0x0000F9F8
         PUSH, __ret0_i32
         PUSH, __c_i32_65535
         PUSH, __on_interact_T1__
@@ -7418,7 +7419,7 @@
         PUSH, __ra_97
         PUSH, __f15_RA__
         COPY
-        JUMP, 0x0000FA78
+        JUMP, 0x0000F9F8
         JUMP_INDIRECT, __f6_RA__
         PUSH, __c_i32_0
         PUSH, __f7_L5__
@@ -8232,29 +8233,21 @@
         PUSH, __c_i32_n1
         PUSH, __f11_T2__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __call_stack
-        PUSH, __call_stack_top
+        PUSH, __frame0
+        PUSH, __frame_depth
         PUSH, __f11_P0__
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __call_stack_top
-        PUSH, __c_i32_1
-        PUSH, __call_stack_top
-        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __call_stack
-        PUSH, __call_stack_top
+        PUSH, __frame1
+        PUSH, __frame_depth
         PUSH, __f11_L1__
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __call_stack_top
-        PUSH, __c_i32_1
-        PUSH, __call_stack_top
-        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __call_stack
-        PUSH, __call_stack_top
+        PUSH, __frame2
+        PUSH, __frame_depth
         PUSH, __f11_RA__
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __call_stack_top
+        PUSH, __frame_depth
         PUSH, __c_i32_1
-        PUSH, __call_stack_top
+        PUSH, __frame_depth
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __f11_T2__
         PUSH, __f11_P0__
@@ -8263,29 +8256,21 @@
         PUSH, __f11_RA__
         COPY
         JUMP, 0x0000E4A8
-        PUSH, __call_stack_top
+        PUSH, __frame_depth
         PUSH, __c_i32_1
-        PUSH, __call_stack_top
+        PUSH, __frame_depth
         EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __call_stack
-        PUSH, __call_stack_top
-        PUSH, __f11_RA__
+        PUSH, __frame0
+        PUSH, __frame_depth
+        PUSH, __f11_P0__
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
-        PUSH, __call_stack_top
-        PUSH, __c_i32_1
-        PUSH, __call_stack_top
-        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __call_stack
-        PUSH, __call_stack_top
+        PUSH, __frame1
+        PUSH, __frame_depth
         PUSH, __f11_L1__
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
-        PUSH, __call_stack_top
-        PUSH, __c_i32_1
-        PUSH, __call_stack_top
-        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __call_stack
-        PUSH, __call_stack_top
-        PUSH, __f11_P0__
+        PUSH, __frame2
+        PUSH, __frame_depth
+        PUSH, __f11_RA__
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __ret0_i32
         PUSH, __f11_L1__
@@ -8319,7 +8304,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThanOrEqual__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000E818
+        JUMP_IF_FALSE, 0x0000E798
         PUSH, __c_i32_17
         PUSH, __ret0_i32
         COPY
@@ -8333,7 +8318,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000E884
+        JUMP_IF_FALSE, 0x0000E804
         PUSH, __c_i32_16
         PUSH, __ret0_i32
         COPY
@@ -8347,7 +8332,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000E8F0
+        JUMP_IF_FALSE, 0x0000E870
         PUSH, __c_i32_15
         PUSH, __ret0_i32
         COPY
@@ -8361,7 +8346,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000E95C
+        JUMP_IF_FALSE, 0x0000E8DC
         PUSH, __c_i32_14
         PUSH, __ret0_i32
         COPY
@@ -8375,7 +8360,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000E9C8
+        JUMP_IF_FALSE, 0x0000E948
         PUSH, __c_i32_13
         PUSH, __ret0_i32
         COPY
@@ -8389,7 +8374,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000EA34
+        JUMP_IF_FALSE, 0x0000E9B4
         PUSH, __c_i32_12
         PUSH, __ret0_i32
         COPY
@@ -8403,7 +8388,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000EAA0
+        JUMP_IF_FALSE, 0x0000EA20
         PUSH, __c_i32_11
         PUSH, __ret0_i32
         COPY
@@ -8417,7 +8402,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000EB0C
+        JUMP_IF_FALSE, 0x0000EA8C
         PUSH, __c_i32_10
         PUSH, __ret0_i32
         COPY
@@ -8431,7 +8416,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000EB78
+        JUMP_IF_FALSE, 0x0000EAF8
         PUSH, __c_i32_9
         PUSH, __ret0_i32
         COPY
@@ -8445,7 +8430,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000EBE4
+        JUMP_IF_FALSE, 0x0000EB64
         PUSH, __c_i32_8
         PUSH, __ret0_i32
         COPY
@@ -8459,7 +8444,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000EC50
+        JUMP_IF_FALSE, 0x0000EBD0
         PUSH, __c_i32_7
         PUSH, __ret0_i32
         COPY
@@ -8473,7 +8458,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000ECBC
+        JUMP_IF_FALSE, 0x0000EC3C
         PUSH, __c_i32_6
         PUSH, __ret0_i32
         COPY
@@ -8487,7 +8472,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000ED28
+        JUMP_IF_FALSE, 0x0000ECA8
         PUSH, __c_i32_5
         PUSH, __ret0_i32
         COPY
@@ -8501,7 +8486,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000ED94
+        JUMP_IF_FALSE, 0x0000ED14
         PUSH, __c_i32_4
         PUSH, __ret0_i32
         COPY
@@ -8515,7 +8500,7 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000EE00
+        JUMP_IF_FALSE, 0x0000ED80
         PUSH, __c_i32_3
         PUSH, __ret0_i32
         COPY
@@ -8529,11 +8514,11 @@
         PUSH, __f13_T2__
         EXTERN, "SystemInt64.__op_GreaterThan__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f13_T2__
-        JUMP_IF_FALSE, 0x0000EE6C
+        JUMP_IF_FALSE, 0x0000EDEC
         PUSH, __c_i32_2
         PUSH, __f13_T3__
         COPY
-        JUMP, 0x0000EE80
+        JUMP, 0x0000EE00
         PUSH, __c_i32_1
         PUSH, __f13_T3__
         COPY
@@ -8572,7 +8557,7 @@
         PUSH, __f14_T2__
         EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f14_T2__
-        JUMP_IF_FALSE, 0x0000F4C0
+        JUMP_IF_FALSE, 0x0000F440
         PUSH, __f14_L3__
         PUSH, __c_i32_n2147483648
         PUSH, __derived0
@@ -8586,7 +8571,7 @@
         PUSH, __f14_T2__
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f14_T2__
-        JUMP_IF_FALSE, 0x0000F4B8
+        JUMP_IF_FALSE, 0x0000F438
         PUSH, _memory
         PUSH, __f14_P1__
         PUSH, __f14_L5__
@@ -8605,7 +8590,7 @@
         PUSH, __f14_T1__
         COPY
         PUSH, __f14_T2__
-        JUMP_IF_FALSE, 0x0000F128
+        JUMP_IF_FALSE, 0x0000F0A8
         PUSH, __f14_T4__
         PUSH, __c_i64_8000000000000000
         PUSH, __f14_T5__
@@ -8624,18 +8609,18 @@
         PUSH, __f14_T7__
         PUSH, __f14_T5__
         EXTERN, "SystemConvert.__ToInt64__SystemInt32__SystemInt64"
-        JUMP, 0x0000F304
+        JUMP, 0x0000F284
         PUSH, __f14_T4__
         PUSH, __c_i64_0
         PUSH, __f14_T2__
         EXTERN, "SystemInt64.__op_GreaterThanOrEqual__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f14_T2__
-        JUMP_IF_FALSE, 0x0000F180
+        JUMP_IF_FALSE, 0x0000F100
         PUSH, __f14_T4__
         PUSH, __f14_T3__
         PUSH, __f14_T8__
         EXTERN, "SystemInt64.__op_Division__SystemInt64_SystemInt64__SystemInt64"
-        JUMP, 0x0000F2F0
+        JUMP, 0x0000F270
         PUSH, __f14_T4__
         PUSH, __c_i32_1
         PUSH, __f14_T6__
@@ -8739,7 +8724,7 @@
         PUSH, __c_i32_1
         PUSH, __f14_L3__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        JUMP, 0x0000EF94
+        JUMP, 0x0000EF14
         JUMP_INDIRECT, __f14_RA__
         PUSH, _memory
         PUSH, __f14_P1__
@@ -8759,7 +8744,7 @@
         PUSH, __f14_T1__
         COPY
         PUSH, __f14_T2__
-        JUMP_IF_FALSE, 0x0000F5E4
+        JUMP_IF_FALSE, 0x0000F564
         PUSH, __f14_T4__
         PUSH, __c_i64_8000000000000000
         PUSH, __f14_T5__
@@ -8778,18 +8763,18 @@
         PUSH, __f14_T7__
         PUSH, __f14_T5__
         EXTERN, "SystemConvert.__ToInt64__SystemInt32__SystemInt64"
-        JUMP, 0x0000F7C0
+        JUMP, 0x0000F740
         PUSH, __f14_T4__
         PUSH, __c_i64_0
         PUSH, __f14_T2__
         EXTERN, "SystemInt64.__op_GreaterThanOrEqual__SystemInt64_SystemInt64__SystemBoolean"
         PUSH, __f14_T2__
-        JUMP_IF_FALSE, 0x0000F63C
+        JUMP_IF_FALSE, 0x0000F5BC
         PUSH, __f14_T4__
         PUSH, __f14_T3__
         PUSH, __f14_T10__
         EXTERN, "SystemInt64.__op_Division__SystemInt64_SystemInt64__SystemInt64"
-        JUMP, 0x0000F7AC
+        JUMP, 0x0000F72C
         PUSH, __f14_T4__
         PUSH, __c_i32_1
         PUSH, __f14_T8__
@@ -8926,7 +8911,7 @@
         PUSH, __f14_L4__
         PUSH, __f14_L3__
         COPY
-        JUMP, 0x0000EF04
+        JUMP, 0x0000EE84
         PUSH, __f15_P3__
         PUSH, __c_i32_n2147483648
         PUSH, __derived0
@@ -8940,7 +8925,7 @@
         PUSH, __f15_T1__
         EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f15_T1__
-        JUMP_IF_FALSE, 0x00010054
+        JUMP_IF_FALSE, 0x0000FFD4
         PUSH, __f15_P3__
         PUSH, __f15_P2__
         PUSH, __f15_L6__
@@ -8954,11 +8939,11 @@
         PUSH, __f15_T1__
         EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f15_T1__
-        JUMP_IF_FALSE, 0x0000FB74
+        JUMP_IF_FALSE, 0x0000FAF4
         PUSH, __c_i32_0
         PUSH, __f15_T2__
         COPY
-        JUMP, 0x0000FB88
+        JUMP, 0x0000FB08
         PUSH, __f15_L6__
         PUSH, __f15_T2__
         COPY
@@ -8974,15 +8959,15 @@
         PUSH, __f15_T1__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f15_T1__
-        JUMP_IF_FALSE, 0x0000FBF4
-        JUMP, 0x0000FD48
+        JUMP_IF_FALSE, 0x0000FB74
+        JUMP, 0x0000FCC8
         PUSH, __f15_T2__
         PUSH, __c_i32_2
         PUSH, __f15_T1__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f15_T1__
-        JUMP_IF_FALSE, 0x0000FC2C
-        JUMP, 0x0000FF98
+        JUMP_IF_FALSE, 0x0000FBAC
+        JUMP, 0x0000FF18
         PUSH, __f15_P2__
         PUSH, __f5_P2__
         COPY
@@ -9008,7 +8993,7 @@
         PUSH, __f15_T1__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f15_T1__
-        JUMP_IF_FALSE, 0x000100C0
+        JUMP_IF_FALSE, 0x00010040
         PUSH, __f15_L6__
         PUSH, __f16_P2__
         COPY
@@ -9021,7 +9006,7 @@
         PUSH, __ra_105
         PUSH, __f16_RA__
         COPY
-        JUMP, 0x000100DC
+        JUMP, 0x0001005C
         JUMP_INDIRECT, __f15_RA__
         PUSH, __f15_L6__
         PUSH, __c_i32_1
@@ -9040,7 +9025,7 @@
         PUSH, __ra_106
         PUSH, __f16_RA__
         COPY
-        JUMP, 0x000100DC
+        JUMP, 0x0001005C
         PUSH, __ret0_i32
         PUSH, __f15_P3__
         COPY
@@ -9053,7 +9038,7 @@
         PUSH, __f15_T1__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f15_T1__
-        JUMP_IF_FALSE, 0x000100C0
+        JUMP_IF_FALSE, 0x00010040
         PUSH, __f15_P2__
         PUSH, __f5_P2__
         COPY
@@ -9079,7 +9064,7 @@
         PUSH, __f15_T1__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f15_T1__
-        JUMP_IF_FALSE, 0x000100C0
+        JUMP_IF_FALSE, 0x00010040
         PUSH, __f15_L6__
         PUSH, __c_i32_1
         PUSH, __f15_T2__
@@ -9101,7 +9086,7 @@
         PUSH, __ra_108
         PUSH, __f16_RA__
         COPY
-        JUMP, 0x000100DC
+        JUMP, 0x0001005C
         JUMP_INDIRECT, __f15_RA__
         PUSH, __f15_L6__
         PUSH, __f16_P2__
@@ -9115,7 +9100,7 @@
         PUSH, __ra_109
         PUSH, __f16_RA__
         COPY
-        JUMP, 0x000100DC
+        JUMP, 0x0001005C
         PUSH, __ret0_i32
         PUSH, __f15_P3__
         COPY
@@ -9128,7 +9113,7 @@
         PUSH, __f15_T1__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f15_T1__
-        JUMP_IF_FALSE, 0x000100C0
+        JUMP_IF_FALSE, 0x00010040
         PUSH, __f15_P2__
         PUSH, __f5_P2__
         COPY
@@ -9164,11 +9149,11 @@
         PUSH, __f16_T2__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f16_T2__
-        JUMP_IF_FALSE, 0x00010170
+        JUMP_IF_FALSE, 0x000100F0
         PUSH, __c_i32_0
         PUSH, __f16_L4__
         COPY
-        JUMP, 0x0001084C
+        JUMP, 0x000107CC
         PUSH, __f16_P0__
         PUSH, __c_i32_12
         PUSH, __derived0
@@ -9202,13 +9187,13 @@
         PUSH, __f16_T2__
         EXTERN, "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f16_T2__
-        JUMP_IF_FALSE, 0x00010434
+        JUMP_IF_FALSE, 0x000103B4
         PUSH, __f16_P2__
         PUSH, __c_i32_0
         PUSH, __f16_T2__
         EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f16_T2__
-        JUMP_IF_FALSE, 0x00010368
+        JUMP_IF_FALSE, 0x000102E8
         PUSH, __f16_P0__
         PUSH, __c_i32_4
         PUSH, __derived2
@@ -9233,7 +9218,7 @@
         PUSH, __ra_111
         PUSH, __rt_5
         COPY
-        JUMP, 0x00013364
+        JUMP, 0x00013314
         PUSH, __f16_P0__
         PUSH, __c_i32_12
         PUSH, __derived0
@@ -9259,7 +9244,7 @@
         PUSH, __f16_P2__
         PUSH, __f16_L4__
         COPY
-        JUMP, 0x00010824
+        JUMP, 0x000107A4
         PUSH, __f16_L3__
         PUSH, __c_i32_20
         PUSH, __derived0
@@ -9377,7 +9362,7 @@
         PUSH, __f16_T2__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f16_T2__
-        JUMP_IF_FALSE, 0x0001084C
+        JUMP_IF_FALSE, 0x000107CC
         PUSH, __f16_L5__
         PUSH, __c_i32_32
         PUSH, __f16_T6__
@@ -9393,7 +9378,7 @@
         PUSH, __f16_L4__
         PUSH, __f16_P2__
         EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
-        JUMP, 0x00010124
+        JUMP, 0x000100A4
         PUSH, __f16_L3__
         PUSH, __c_i32_32
         PUSH, __G__g0
@@ -9422,7 +9407,7 @@
         PUSH, __f20_T1__
         EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f20_T1__
-        JUMP_IF_FALSE, 0x0001129C
+        JUMP_IF_FALSE, 0x0001121C
         PUSH, __f20_P3__
         PUSH, __c_i32_n1
         PUSH, __f20_L6__
@@ -9471,7 +9456,7 @@
         PUSH, __f20_T1__
         EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f20_T1__
-        JUMP_IF_FALSE, 0x00010D5C
+        JUMP_IF_FALSE, 0x00010CDC
         PUSH, __f20_L7__
         PUSH, __c_i32_4
         PUSH, __f20_T2__
@@ -9493,11 +9478,11 @@
         PUSH, __f20_T1__
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f20_T1__
-        JUMP_IF_FALSE, 0x00010B6C
+        JUMP_IF_FALSE, 0x00010AEC
         PUSH, __f20_L8__
         PUSH, __f20_T2__
         COPY
-        JUMP, 0x00010B80
+        JUMP, 0x00010B00
         PUSH, __f20_L9__
         PUSH, __f20_T2__
         COPY
@@ -9509,7 +9494,7 @@
         PUSH, __f20_T1__
         EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f20_T1__
-        JUMP_IF_FALSE, 0x00010C14
+        JUMP_IF_FALSE, 0x00010B94
         PUSH, _memory
         PUSH, __f20_L7__
         PUSH, __f20_T2__
@@ -9559,8 +9544,8 @@
         PUSH, __f20_T1__
         EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f20_T1__
-        JUMP_IF_FALSE, 0x00010950
-        JUMP, 0x00011288
+        JUMP_IF_FALSE, 0x000108D0
+        JUMP, 0x00011208
         PUSH, __f20_L6__
         PUSH, __c_i32_3
         PUSH, __f20_T2__
@@ -9586,20 +9571,20 @@
         PUSH, __f20_T1__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f20_T1__
-        JUMP_IF_FALSE, 0x00010E34
-        JUMP, 0x0001129C
+        JUMP_IF_FALSE, 0x00010DB4
+        JUMP, 0x0001121C
         PUSH, __f20_L7__
         PUSH, __c_i32_1
         PUSH, __f20_T1__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f20_T1__
-        JUMP_IF_FALSE, 0x00010FDC
+        JUMP_IF_FALSE, 0x00010F5C
         PUSH, __f20_L9__
         PUSH, __c_i32_0
         PUSH, __f20_T1__
         EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f20_T1__
-        JUMP_IF_FALSE, 0x00010F24
+        JUMP_IF_FALSE, 0x00010EA4
         PUSH, _memory
         PUSH, __f20_L11__
         PUSH, __f20_T3__
@@ -9619,7 +9604,7 @@
         PUSH, __ra_113
         PUSH, __rt_5
         COPY
-        JUMP, 0x00013364
+        JUMP, 0x00013314
         PUSH, __f20_P1__
         PUSH, __c_i32_12
         PUSH, __derived0
@@ -9642,7 +9627,7 @@
         PUSH, __derived0
         PUSH, __c_i32_4
         EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
-        JUMP, 0x00011288
+        JUMP, 0x00011208
         PUSH, __f20_L9__
         PUSH, __c_i32_n2147483648
         PUSH, __derived0
@@ -9656,11 +9641,11 @@
         PUSH, __f20_T1__
         EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f20_T1__
-        JUMP_IF_FALSE, 0x00011068
+        JUMP_IF_FALSE, 0x00010FE8
         PUSH, __f20_L7__
         PUSH, __f20_T2__
         COPY
-        JUMP, 0x0001107C
+        JUMP, 0x00010FFC
         PUSH, __f20_L9__
         PUSH, __f20_T2__
         COPY
@@ -9672,7 +9657,7 @@
         PUSH, __f20_T1__
         EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f20_T1__
-        JUMP_IF_FALSE, 0x000110F0
+        JUMP_IF_FALSE, 0x00011070
         PUSH, _memory
         PUSH, __f20_L11__
         PUSH, _memory
@@ -9729,7 +9714,7 @@
         PUSH, __f20_T1__
         EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f20_T1__
-        JUMP_IF_FALSE, 0x00010FDC
+        JUMP_IF_FALSE, 0x00010F5C
         PUSH, __c_i64_200000000
         PUSH, __f20_L5__
         COPY
@@ -9841,7 +9826,7 @@
         PUSH, __ra_114
         PUSH, __f23_RA__
         COPY
-        JUMP, 0x0001264C
+        JUMP, 0x000125CC
         PUSH, __c_i32_2
         PUSH, __f23_P1__
         COPY
@@ -9851,7 +9836,7 @@
         PUSH, __ra_115
         PUSH, __f23_RA__
         COPY
-        JUMP, 0x0001264C
+        JUMP, 0x000125CC
         PUSH, _memory
         PUSH, __c_i32_1053364
         PUSH, __on_start_T1__
@@ -9908,7 +9893,7 @@
         PUSH, __ra_116
         PUSH, __f24_RA__
         COPY
-        JUMP, 0x00012878
+        JUMP, 0x000127F8
         PUSH, __c_i32_2
         PUSH, __f24_P2__
         COPY
@@ -9921,7 +9906,7 @@
         PUSH, __ra_117
         PUSH, __f24_RA__
         COPY
-        JUMP, 0x00012878
+        JUMP, 0x000127F8
         PUSH, __on_start_L0__
         PUSH, __c_i32_4
         PUSH, __derived0
@@ -10046,7 +10031,7 @@
         PUSH, __on_start_T4__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __on_start_T4__
-        JUMP_IF_FALSE, 0x00011D28
+        JUMP_IF_FALSE, 0x00011CA8
         PUSH, __on_start_L0__
         PUSH, __c_i32_36
         PUSH, __derived0
@@ -10079,7 +10064,7 @@
         EXTERN, "SystemTextEncoding.__GetString__SystemByteArray_SystemInt32_SystemInt32__SystemString"
         PUSH, __on_start_T2__
         EXTERN, "UnityEngineDebug.__Log__SystemObject__SystemVoid"
-        JUMP, 0x00011D68
+        JUMP, 0x00011CE8
         PUSH, __utf8
         PUSH, _memory
         PUSH, __c_i32_1049621
@@ -10156,7 +10141,7 @@
         PUSH, __on_start_T4__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __on_start_T4__
-        JUMP_IF_FALSE, 0x00012150
+        JUMP_IF_FALSE, 0x000120D0
         PUSH, __on_start_L0__
         PUSH, __c_i32_32
         PUSH, __on_start_T1__
@@ -10183,7 +10168,7 @@
         PUSH, __on_start_T4__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __on_start_T4__
-        JUMP_IF_FALSE, 0x00012150
+        JUMP_IF_FALSE, 0x000120D0
         PUSH, __on_start_L0__
         PUSH, __c_i32_36
         PUSH, __derived0
@@ -10216,7 +10201,7 @@
         EXTERN, "SystemTextEncoding.__GetString__SystemByteArray_SystemInt32_SystemInt32__SystemString"
         PUSH, __on_start_T2__
         EXTERN, "UnityEngineDebug.__Log__SystemObject__SystemVoid"
-        JUMP, 0x00012190
+        JUMP, 0x00012110
         PUSH, __utf8
         PUSH, _memory
         PUSH, __c_i32_1049590
@@ -10293,7 +10278,7 @@
         PUSH, __on_start_T4__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __on_start_T4__
-        JUMP_IF_FALSE, 0x00012564
+        JUMP_IF_FALSE, 0x000124E4
         PUSH, __on_start_L0__
         PUSH, __c_i32_32
         PUSH, __on_start_T3__
@@ -10317,7 +10302,7 @@
         PUSH, __on_start_T4__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __on_start_T4__
-        JUMP_IF_FALSE, 0x00012564
+        JUMP_IF_FALSE, 0x000124E4
         PUSH, __on_start_L0__
         PUSH, __c_i32_36
         PUSH, __derived0
@@ -10350,7 +10335,7 @@
         EXTERN, "SystemTextEncoding.__GetString__SystemByteArray_SystemInt32_SystemInt32__SystemString"
         PUSH, __on_start_T2__
         EXTERN, "UnityEngineDebug.__Log__SystemObject__SystemVoid"
-        JUMP, 0x000125A4
+        JUMP, 0x00012524
         PUSH, __utf8
         PUSH, _memory
         PUSH, __c_i32_1049559
@@ -10400,7 +10385,7 @@
         PUSH, __f23_T2__
         EXTERN, "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f23_T2__
-        JUMP_IF_FALSE, 0x000127D8
+        JUMP_IF_FALSE, 0x00012758
         PUSH, __f23_L2__
         PUSH, __c_i32_1052336
         PUSH, __f23_L2__
@@ -10410,7 +10395,7 @@
         PUSH, __f23_T2__
         EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f23_T2__
-        JUMP_IF_FALSE, 0x00012820
+        JUMP_IF_FALSE, 0x000127A0
         PUSH, _memory
         PUSH, __f23_P0__
         PUSH, _memory
@@ -10429,7 +10414,7 @@
         PUSH, __c_i32_n1
         PUSH, __f23_P1__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        JUMP, 0x00012710
+        JUMP, 0x00012690
         PUSH, __utf8
         PUSH, _memory
         PUSH, __c_i32_1050010
@@ -10486,7 +10471,7 @@
         PUSH, __f24_T3__
         EXTERN, "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f24_T3__
-        JUMP_IF_FALSE, 0x00012BB0
+        JUMP_IF_FALSE, 0x00012B30
         PUSH, __c_i32_0
         PUSH, __f24_L3__
         COPY
@@ -10503,7 +10488,7 @@
         PUSH, __f24_T3__
         EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f24_T3__
-        JUMP_IF_FALSE, 0x00012B18
+        JUMP_IF_FALSE, 0x00012A98
         PUSH, __f24_P0__
         PUSH, __c_i32_4
         PUSH, __derived1
@@ -10534,7 +10519,7 @@
         PUSH, __c_i32_1
         PUSH, __f24_L3__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        JUMP, 0x000129B0
+        JUMP, 0x00012930
         PUSH, __f24_L4__
         PUSH, __f24_P2__
         PUSH, __f24_T2__
@@ -10581,30 +10566,30 @@
         PUSH, __ind_RA
         PUSH, __f20_RA__
         COPY
-        JUMP, 0x00010888
+        JUMP, 0x00010808
     .export _start
     _start:
         PUSH, __inited
-        JUMP_IF_FALSE, 0x00012CC0
-        JUMP, 0x0001138C
+        JUMP_IF_FALSE, 0x00012C40
+        JUMP, 0x0001130C
     .export _update
     _update:
         PUSH, __inited
-        JUMP_IF_FALSE, 0x00012CDC
-        JUMP, 0x000112F4
+        JUMP_IF_FALSE, 0x00012C5C
+        JUMP, 0x00011274
     .export _interact
     _interact:
         PUSH, __inited
-        JUMP_IF_FALSE, 0x00012CF8
+        JUMP_IF_FALSE, 0x00012C78
         JUMP, 0x00000000
         PUSH, __ra_123
         PUSH, __init_RA
         COPY
-        JUMP, 0x00012D0C
+        JUMP, 0x00012C8C
         PUSH, __ra_124
         PUSH, __init_RA
         COPY
-        JUMP, 0x00012D0C
+        JUMP, 0x00012C8C
         PUSH, __ra_125
         PUSH, __init_RA
         COPY
@@ -10747,8 +10732,14 @@
         EXTERN, "SystemInt64Array.__ctor__SystemInt32__SystemInt64Array"
         PUSH, __utf8
         EXTERN, "SystemTextEncoding.__get_UTF8__SystemTextEncoding"
-        PUSH, __c_i32_4096
-        PUSH, __call_stack
+        PUSH, __c_i32_1024
+        PUSH, __frame0
+        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
+        PUSH, __c_i32_1024
+        PUSH, __frame1
+        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
+        PUSH, __c_i32_1024
+        PUSH, __frame2
         EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
         PUSH, __table_b64
         PUSH, __table_bytes
@@ -10775,13 +10766,13 @@
         PUSH, __rt_11
         EXTERN, "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __rt_11
-        JUMP_IF_FALSE, 0x00013348
+        JUMP_IF_FALSE, 0x000132F8
         PUSH, __rt_9
         PUSH, _memory_size_pages
         PUSH, __rt_11
         EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __rt_11
-        JUMP_IF_FALSE, 0x00013348
+        JUMP_IF_FALSE, 0x000132F8
         PUSH, __rt_9
         PUSH, __c_i32_16
         PUSH, __rt_10
@@ -10818,7 +10809,7 @@
         PUSH, __rt_16
         EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __rt_16
-        JUMP_IF_FALSE, 0x000134E0
+        JUMP_IF_FALSE, 0x00013490
         PUSH, __st_i32
         PUSH, __c_i32_0
         PUSH, __rt_7
@@ -10837,7 +10828,7 @@
         PUSH, __rt_16
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __rt_16
-        JUMP_IF_FALSE, 0x000134E0
+        JUMP_IF_FALSE, 0x00013490
         PUSH, __rt_8
         PUSH, __rt_13
         PUSH, __rt_14
@@ -10860,6 +10851,6 @@
         PUSH, __rt_14
         PUSH, __rt_13
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        JUMP, 0x000133F8
+        JUMP, 0x000133A8
         JUMP_INDIRECT, __rt_5
 .code_end

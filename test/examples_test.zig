@@ -12,7 +12,7 @@ fn expectRuns(ex: fixtures.Example) !void {
     var r = try fixtures.run(testing.allocator, ex, .{});
     defer r.deinit();
 
-    if (!r.report.ok()) {
+    if (ex.uasm == null and !r.report.ok()) {
         std.debug.print("{s}: the translation violates the Udon Assembly rules:\n", .{ex.name});
         for (r.report.errors[0..@min(r.report.errors.len, 20)]) |e| std.debug.print("  line {d}: {s}\n", .{ e.line, e.message });
         return error.TestUnexpectedResult;
@@ -23,9 +23,11 @@ fn expectRuns(ex: fixtures.Example) !void {
     }
     // What the translator says the program needs is what the assembler
     // will allocate.
-    try testing.expectEqual(r.size.heapSize(), r.report.heap_size);
-    try testing.expectEqual(r.size.instructions, r.report.instructions);
-    try testing.expectEqual(r.size.code_bytes, r.report.code_bytes);
+    if (r.size) |size| {
+        try testing.expectEqual(size.heapSize(), r.report.heap_size);
+        try testing.expectEqual(size.instructions, r.report.instructions);
+        try testing.expectEqual(size.code_bytes, r.report.code_bytes);
+    }
 
     for (r.steps) |s| {
         if (!s.found) {
@@ -47,7 +49,7 @@ test "every example translates to valid Udon Assembly and behaves as expected" {
 }
 
 test "the Unity assets hold what the translator produces now" {
-    inline for (.{ "wasm-bench", "udon-orbit", "pi", "mandelbrot", "image-codec", "ragdoll", "blockfall" }) |name| {
+    inline for (.{ "wasm-bench", "udon-orbit", "pi", "mandelbrot", "image-codec", "ragdoll", "blockfall", "bench-zig" }) |name| {
         const ex = fixtures.find(name).?;
         try testing.expect(fixtures.hasUnityAsset(ex));
         var fresh: std.Io.Writer.Allocating = .init(testing.allocator);
@@ -61,7 +63,7 @@ test "the Unity assets hold what the translator produces now" {
     // Every example with an asset is in the list above.
     var with_asset: usize = 0;
     for (fixtures.examples) |ex| with_asset += @intFromBool(fixtures.hasUnityAsset(ex));
-    try testing.expectEqual(@as(usize, 7), with_asset);
+    try testing.expectEqual(@as(usize, 8), with_asset);
 }
 
 test "the bench fixture parses as a WASM module" {

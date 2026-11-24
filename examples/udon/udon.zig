@@ -145,6 +145,38 @@ pub const math = struct {
 };
 
 // ---------------------------------------------------------------------
+//  Udon strings
+// ---------------------------------------------------------------------
+
+extern "env" fn @"SystemString.__Copy__SystemString__SystemString"(ptr: [*]const u8, len: usize) String;
+extern "env" fn @"SystemString.__Concat__SystemString_SystemString__SystemString"(a: String, b: String) String;
+extern "env" fn @"SystemString.__get_Length__SystemInt32"(self: String) i32;
+extern "env" fn @"SystemInt32.__ToString__SystemString"(self: i32) String;
+extern "env" fn @"UnityEngineDebug.__Log__SystemObject__SystemVoid"(message: String) void;
+
+/// .NET strings, used through handles. Text that Udon will consume anyway
+/// — a label, a log line — is cheaper to build here than in linear
+/// memory: one extern concatenates, however long the operands are.
+pub const str = struct {
+    /// A .NET string holding the UTF-8 bytes `text`.
+    pub fn from(text: []const u8) String {
+        return @"SystemString.__Copy__SystemString__SystemString"(text.ptr, text.len);
+    }
+    pub fn concat(a: String, b: String) String {
+        return @"SystemString.__Concat__SystemString_SystemString__SystemString"(a, b);
+    }
+    pub fn len(s: String) usize {
+        return @intCast(@"SystemString.__get_Length__SystemInt32"(s));
+    }
+    pub fn fromInt(value: i32) String {
+        return @"SystemInt32.__ToString__SystemString"(value);
+    }
+    pub fn log(s: String) void {
+        @"UnityEngineDebug.__Log__SystemObject__SystemVoid"(s);
+    }
+};
+
+// ---------------------------------------------------------------------
 //  Linear memory as an Udon byte[]
 // ---------------------------------------------------------------------
 

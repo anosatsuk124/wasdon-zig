@@ -210,6 +210,10 @@ const Lowerer = struct {
     pools: std.ArrayList(Pool) = .empty,
     temp_count: u32 = 0,
     scratch: [scratch_types.len]?Sym = @splat(null),
+    /// Which locals are live after each call (`liveness.zig`).
+    live: @import("liveness.zig").Liveness = .{},
+    /// The instruction being lowered.
+    current: ?*const Instruction = null,
     /// Per local: its current value is known to be ≥ 0. Tracked along
     /// straight-line code only; a label forgets everything.
     local_nonneg: []bool = &.{},
@@ -241,8 +245,11 @@ const Lowerer = struct {
         @memset(assigned[0..n_params], true);
         scanInit(code.body, assigned, needs_init);
         for (needs_init, 0..) |need, i| {
-            if (need) try self.a.copy(try self.t.constSym(self.f.local_types[i], 0), self.f.locals[i]);
+            if (!need) continue;
+            const zero = if (self.f.bool_locals[i]) try self.t.constBool(false) else try self.t.constSym(self.f.local_types[i], 0);
+            try self.a.copy(zero, self.f.locals[i]);
         }
+        self.live = try @import("liveness.zig").analyze(self.t.arena(), self.f.locals.len, code.body);
 
         // Declared locals start at zero; parameters can be anything.
         self.local_nonneg = try self.t.arena().alloc(bool, self.f.locals.len);
@@ -556,9 +563,11 @@ const Lowerer = struct {
 
     /// Detach every pending reference to local `i` before it is overwritten.
     fn flushLocal(self: *Lowerer, i: u32) Error!void {
+        const slot = if (self.isBoolLocal(i)) try self.localSym(i) else null;
         for (self.stack.items) |*e| {
             if (e.kind == .local and e.local == i) try self.materialize(e);
             if (e.kind == .mem and e.base == .local and e.local == i) try self.loadNow(e);
+            if (e.kind == .cond and !e.owned and e.sym == slot) try self.materialize(e);
         }
         for (&self.derived) |*d| if (d.local == i) {
             d.op = .none;
@@ -597,6 +606,28 @@ const Lowerer = struct {
         self.a.bind(label);
         self.forgetDerived();
         @memset(self.local_nonneg, false);
+    }
+
+    fn isBoolLocal(self: *const Lowerer, i: u32) bool {
+        return i < self.f.bool_locals.len and self.f.bool_locals[i];
+    }
+
+    /// `local.set` of a local kept as a `SystemBoolean`.
+    fn setBoolLocal(self: *Lowerer, i: u32) Error!bool {
+        var v = try self.pop();
+        const dst = try self.localSym(i);
+        try self.flushLocal(i);
+        if (v.kind == .konst) {
+            try self.a.copy(try self.t.constBool(v.bits != 0), dst);
+            return true;
+        }
+        const b = try self.condBool(&v, true);
+        // A comparison that has just been emitted writes the local itself.
+        if (v.owned and v.def != no_def and v.def_end == self.a.here()) {
+            self.a.code.items[v.def].arg = dst;
+        } else if (b != dst) try self.a.copy(b, dst);
+        try self.release(v);
+        return true;
     }
 
     fn localNonneg(self: *const Lowerer, i: u32) bool {
@@ -691,8 +722,9 @@ const Lowerer = struct {
 
     /// Lower a block body. Returns whether control can reach its end.
     fn lowerBody(self: *Lowerer, body: []const Instruction) Error!bool {
-        for (body) |ins| {
-            if (!try self.lowerInstr(ins)) return false;
+        for (body) |*ins| {
+            self.current = ins;
+            if (!try self.lowerInstr(ins.*)) return false;
         }
         return true;
     }
@@ -911,8 +943,13 @@ const Lowerer = struct {
             .drop => try self.release(try self.pop()),
             .select => try self.lowerSelect(),
 
-            .local_get => |i| try self.push(.{ .ty = try self.localType(i), .kind = .local, .sym = try self.localSym(i), .local = i, .nonneg = self.localNonneg(i) }),
+            .local_get => |i| if (self.isBoolLocal(i)) {
+                // The slot is the condition itself; like a global, it is
+                // copied out before anything overwrites it.
+                try self.push(.{ .ty = .i32, .kind = .cond, .sym = try self.localSym(i), .nonneg = true });
+            } else try self.push(.{ .ty = try self.localType(i), .kind = .local, .sym = try self.localSym(i), .local = i, .nonneg = self.localNonneg(i) }),
             .local_set, .local_tee => |i| {
+                if (self.isBoolLocal(i)) return self.setBoolLocal(i);
                 const v = try self.pop();
                 const nonneg = v.nonneg;
                 try self.flushLocal(i);
@@ -1787,38 +1824,37 @@ const Lowerer = struct {
     /// Slots of this function that hold live values across a call: its
     /// parameters and locals, the temporaries of operands still on the
     /// stack below the arguments, and its return address.
+    /// What a call that may re-enter this function has to preserve: the
+    /// locals still read afterwards, the operands waiting below the call's
+    /// arguments, and the return address. Block result slots and scratch
+    /// slots are never live across a call.
     fn frameSlots(self: *Lowerer, below: usize) Error![]Sym {
         var list: std.ArrayList(Sym) = .empty;
         const a = self.t.arena();
-        try list.appendSlice(a, self.f.locals);
-        for (self.scratch) |s| if (s) |sym| try list.append(a, sym);
+        const call = self.current.?;
+        for (self.f.locals, 0..) |sym, i| if (self.live.liveAfter(call, i)) try list.append(a, sym);
         for (self.stack.items[0..below]) |e| if (e.owned) try list.append(a, e.sym);
-        for (self.ctrl.items) |c| try list.appendSlice(a, c.results);
         if (self.f.ret == .indirect) try list.append(a, self.f.ra);
         return list.items;
     }
 
+    /// Slot *k* goes to column *k* at the current depth: one extern per
+    /// slot and one for the depth, whatever the frame's size.
     fn saveFrame(self: *Lowerer, slots: []const Sym) Error!void {
         if (slots.len == 0) return;
-        const cs = try self.t.callStack();
-        const top = self.t.call_stack_top;
-        const c1 = try self.t.constI32(1);
-        for (slots) |s| {
-            try self.a.call("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid", &.{ cs, top, s });
-            try self.a.call(binSig(.i32, .add), &.{ top, c1, top });
+        const depth = try self.t.frameDepth();
+        for (slots, 0..) |s, k| {
+            try self.a.call("SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid", &.{ try self.t.frameColumn(k), depth, s });
         }
+        try self.a.call(binSig(.i32, .add), &.{ depth, try self.t.constI32(1), depth });
     }
 
     fn restoreFrame(self: *Lowerer, slots: []const Sym) Error!void {
         if (slots.len == 0) return;
-        const cs = try self.t.callStack();
-        const top = self.t.call_stack_top;
-        const c1 = try self.t.constI32(1);
-        var k = slots.len;
-        while (k > 0) {
-            k -= 1;
-            try self.a.call(binSig(.i32, .sub), &.{ top, c1, top });
-            try self.a.call("SystemObjectArray.__Get__SystemInt32__SystemObject", &.{ cs, top, slots[k] });
+        const depth = try self.t.frameDepth();
+        try self.a.call(binSig(.i32, .sub), &.{ depth, try self.t.constI32(1), depth });
+        for (slots, 0..) |s, k| {
+            try self.a.call("SystemObjectArray.__Get__SystemInt32__SystemObject", &.{ try self.t.frameColumn(k), depth, s });
         }
     }
 

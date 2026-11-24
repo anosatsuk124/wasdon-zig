@@ -1145,7 +1145,7 @@ test "recursion keeps operands and locals live across the call" {
     try testing.expectEqual(Value{ .int32 = 720 }, p.global("__G__g1"));
     try testing.expectEqual(Value{ .int32 = 1 }, p.global("__G__g2"));
     // The frame stack is back where it started.
-    try testing.expectEqual(Value{ .int32 = 0 }, p.global("__call_stack_top"));
+    try testing.expectEqual(Value{ .int32 = 0 }, p.global("__frame_depth"));
 }
 
 test "a self call may pass its own parameters in a different order" {

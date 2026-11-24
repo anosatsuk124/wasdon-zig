@@ -1,0 +1,478 @@
+# UdonBench.cs as UdonSharp 1.x compiles it.
+#
+# Reproduced, not exported: this file is written by emit_usharp.py, which
+# follows the emit routines of the UdonSharp compiler one for one (see the
+# README next to this file for the rules and how to replace this with the
+# assembly Unity shows for the real compiler). UdonSharp sets non-literal
+# heap defaults — here the recursive-method stack, `new object[2]` —
+# directly on the heap; whatever runs this file has to do the same.
+.data_start
+    .export fibN
+    .export fibResult
+    .export mandelResult
+    .export strResult
+    fibN: %SystemInt32, 20
+    fibResult: %SystemInt32, 0
+    mandelResult: %SystemInt32, 0
+    strResult: %SystemInt32, 0
+    __gintnl_SystemObjectArray_0: %SystemObjectArray, null
+    __gintnl_SystemInt32_0: %SystemInt32, 0
+    __const_SystemUInt32_0: %SystemUInt32, 0xFFFFFFFF
+    __0_n__param: %SystemInt32, 0
+    __0_FibRec__ret: %SystemInt32, 0
+    __gintnl_SystemUInt32_0: %SystemUInt32, 0x0000002C
+    __intnl_returnJump_SystemUInt32_0: %SystemUInt32, 0
+    __intnl_SystemBoolean_0: %SystemBoolean, null
+    __const_SystemInt32_2: %SystemInt32, 2
+    __gintnl_SystemUInt32_1: %SystemUInt32, 0x0000020C
+    __intnl_SystemInt32_0: %SystemInt32, 0
+    __const_SystemInt32_1: %SystemInt32, 1
+    __intnl_SystemInt32_1: %SystemInt32, 0
+    __intnl_SystemInt32_2: %SystemInt32, 0
+    __intnl_SystemBoolean_1: %SystemBoolean, null
+    __intnl_SystemInt32_3: %SystemInt32, 0
+    __intnl_SystemObjectArray_0: %SystemObjectArray, null
+    __intnl_SystemInt32_4: %SystemInt32, 0
+    __gintnl_SystemUInt32_2: %SystemUInt32, 0x000003F8
+    __intnl_SystemInt32_5: %SystemInt32, 0
+    __intnl_SystemInt32_6: %SystemInt32, 0
+    __intnl_SystemInt32_7: %SystemInt32, 0
+    __intnl_SystemBoolean_2: %SystemBoolean, null
+    __intnl_SystemInt32_8: %SystemInt32, 0
+    __intnl_SystemObjectArray_1: %SystemObjectArray, null
+    __intnl_SystemInt32_9: %SystemInt32, 0
+    __0_total__local: %SystemInt32, 0
+    __0_h__local: %SystemInt32, 0
+    __0_w__local: %SystemInt32, 0
+    __0_maxIter__local: %SystemInt32, 0
+    __0_py__local: %SystemInt32, 0
+    __0_px__local: %SystemInt32, 0
+    __0_x0__local: %SystemInt32, 0
+    __0_y0__local: %SystemInt32, 0
+    __0_x__local: %SystemInt32, 0
+    __0_y__local: %SystemInt32, 0
+    __0_it__local: %SystemInt32, 0
+    __0_xx__local: %SystemInt32, 0
+    __0_yy__local: %SystemInt32, 0
+    __0_xy__local: %SystemInt32, 0
+    __const_SystemInt32_0: %SystemInt32, 0
+    __const_SystemInt32_8: %SystemInt32, 8
+    __const_SystemInt32_16: %SystemInt32, 16
+    __const_SystemInt32_24: %SystemInt32, 24
+    __intnl_SystemBoolean_3: %SystemBoolean, null
+    __intnl_SystemBoolean_4: %SystemBoolean, null
+    __const_SystemInt32_3072: %SystemInt32, 3072
+    __intnl_SystemInt32_10: %SystemInt32, 0
+    __intnl_SystemInt32_11: %SystemInt32, 0
+    __const_SystemInt32_2048: %SystemInt32, 2048
+    __intnl_SystemInt32_12: %SystemInt32, 0
+    __intnl_SystemInt32_13: %SystemInt32, 0
+    __const_SystemInt32_1024: %SystemInt32, 1024
+    __intnl_SystemBoolean_5: %SystemBoolean, null
+    __intnl_SystemInt32_14: %SystemInt32, 0
+    __intnl_SystemInt32_15: %SystemInt32, 0
+    __intnl_SystemInt32_16: %SystemInt32, 0
+    __const_SystemInt32_4096: %SystemInt32, 4096
+    __intnl_SystemBoolean_6: %SystemBoolean, null
+    __intnl_SystemInt32_17: %SystemInt32, 0
+    __intnl_SystemInt32_18: %SystemInt32, 0
+    __intnl_SystemInt32_19: %SystemInt32, 0
+    __0_s__local: %SystemString, null
+    __0_i__local: %SystemInt32, 0
+    __const_SystemString_0: %SystemString, ""
+    __const_SystemInt32_64: %SystemInt32, 64
+    __intnl_SystemBoolean_7: %SystemBoolean, null
+    __const_SystemString_1: %SystemString, "abc"
+.data_end
+.code_start
+    .export Fib
+    Fib:
+        PUSH, __const_SystemUInt32_0
+    Fib__body:
+        # fibResult = FibRec(fibN);
+        PUSH, __gintnl_SystemUInt32_0
+        PUSH, fibN
+        PUSH, __0_n__param
+        COPY
+        JUMP, 0x0000005C
+    ret___gintnl_SystemUInt32_0:
+        PUSH, __0_FibRec__ret
+        PUSH, fibResult
+        COPY
+        PUSH, __intnl_returnJump_SystemUInt32_0
+        COPY
+        JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
+        PUSH, __const_SystemUInt32_0
+    FibRec__body:
+        # if (n < 2) return n;
+        PUSH, __0_n__param
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemBoolean_0
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_0
+        JUMP_IF_FALSE, 0x000000B4
+        PUSH, __0_n__param
+        PUSH, __0_FibRec__ret
+        COPY
+        PUSH, __intnl_returnJump_SystemUInt32_0
+        COPY
+        JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
+    fib_recurse:
+        # return FibRec(n - 1) + FibRec(n - 2);
+        PUSH, __gintnl_SystemUInt32_1
+        PUSH, __0_n__param
+        PUSH, __const_SystemInt32_1
+        PUSH, __intnl_SystemInt32_0
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        # stack size check
+        PUSH, __gintnl_SystemObjectArray_0
+        PUSH, __intnl_SystemInt32_1
+        EXTERN, "SystemArray.__get_Length__SystemInt32"
+        PUSH, __gintnl_SystemInt32_0
+        PUSH, __const_SystemInt32_1
+        PUSH, __intnl_SystemInt32_2
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_2
+        PUSH, __intnl_SystemInt32_1
+        PUSH, __intnl_SystemBoolean_1
+        EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_1
+        JUMP_IF_FALSE, 0x000001B0
+        PUSH, __intnl_SystemInt32_1
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemInt32_3
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_3
+        PUSH, __intnl_SystemObjectArray_0
+        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
+        PUSH, __gintnl_SystemObjectArray_0
+        PUSH, __intnl_SystemObjectArray_0
+        PUSH, __intnl_SystemInt32_1
+        EXTERN, "SystemArray.__Copy__SystemArray_SystemArray_SystemInt32__SystemVoid"
+        PUSH, __intnl_SystemObjectArray_0
+        PUSH, __gintnl_SystemObjectArray_0
+        COPY
+    skip_resize_308:
+        # recursive stack push
+        PUSH, __gintnl_SystemObjectArray_0
+        PUSH, __gintnl_SystemInt32_0
+        PUSH, __0_n__param
+        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
+        PUSH, __gintnl_SystemInt32_0
+        PUSH, __const_SystemInt32_1
+        PUSH, __gintnl_SystemInt32_0
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_0
+        PUSH, __0_n__param
+        COPY
+        # recursive stack push
+        JUMP, 0x0000005C
+    ret___gintnl_SystemUInt32_1:
+        PUSH, __0_FibRec__ret
+        PUSH, __intnl_SystemInt32_4
+        COPY
+        # recursive stack pop
+        PUSH, __gintnl_SystemInt32_0
+        PUSH, __const_SystemInt32_1
+        PUSH, __gintnl_SystemInt32_0
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __gintnl_SystemObjectArray_0
+        PUSH, __gintnl_SystemInt32_0
+        PUSH, __0_n__param
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __gintnl_SystemUInt32_2
+        PUSH, __0_n__param
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemInt32_5
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        # stack size check
+        PUSH, __gintnl_SystemObjectArray_0
+        PUSH, __intnl_SystemInt32_6
+        EXTERN, "SystemArray.__get_Length__SystemInt32"
+        PUSH, __gintnl_SystemInt32_0
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemInt32_7
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_7
+        PUSH, __intnl_SystemInt32_6
+        PUSH, __intnl_SystemBoolean_2
+        EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_2
+        JUMP_IF_FALSE, 0x0000035C
+        PUSH, __intnl_SystemInt32_6
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemInt32_8
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_8
+        PUSH, __intnl_SystemObjectArray_1
+        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
+        PUSH, __gintnl_SystemObjectArray_0
+        PUSH, __intnl_SystemObjectArray_1
+        PUSH, __intnl_SystemInt32_6
+        EXTERN, "SystemArray.__Copy__SystemArray_SystemArray_SystemInt32__SystemVoid"
+        PUSH, __intnl_SystemObjectArray_1
+        PUSH, __gintnl_SystemObjectArray_0
+        COPY
+    skip_resize_736:
+        # recursive stack push
+        PUSH, __gintnl_SystemObjectArray_0
+        PUSH, __gintnl_SystemInt32_0
+        PUSH, __0_n__param
+        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
+        PUSH, __gintnl_SystemInt32_0
+        PUSH, __const_SystemInt32_1
+        PUSH, __gintnl_SystemInt32_0
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_5
+        PUSH, __0_n__param
+        COPY
+        # recursive stack push
+        PUSH, __gintnl_SystemObjectArray_0
+        PUSH, __gintnl_SystemInt32_0
+        PUSH, __intnl_SystemInt32_4
+        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
+        PUSH, __gintnl_SystemInt32_0
+        PUSH, __const_SystemInt32_1
+        PUSH, __gintnl_SystemInt32_0
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x0000005C
+    ret___gintnl_SystemUInt32_2:
+        PUSH, __0_FibRec__ret
+        PUSH, __intnl_SystemInt32_9
+        COPY
+        # recursive stack pop
+        PUSH, __gintnl_SystemInt32_0
+        PUSH, __const_SystemInt32_1
+        PUSH, __gintnl_SystemInt32_0
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __gintnl_SystemObjectArray_0
+        PUSH, __gintnl_SystemInt32_0
+        PUSH, __intnl_SystemInt32_4
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __gintnl_SystemInt32_0
+        PUSH, __const_SystemInt32_1
+        PUSH, __gintnl_SystemInt32_0
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __gintnl_SystemObjectArray_0
+        PUSH, __gintnl_SystemInt32_0
+        PUSH, __0_n__param
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __intnl_SystemInt32_4
+        PUSH, __intnl_SystemInt32_9
+        PUSH, __0_FibRec__ret
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_returnJump_SystemUInt32_0
+        COPY
+        JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
+    .export Mandel
+    Mandel:
+        PUSH, __const_SystemUInt32_0
+    Mandel__body:
+        # int total = 0; int h = 8; int w = 16; int maxIter = 24; int py = 0;
+        PUSH, __const_SystemInt32_0
+        PUSH, __0_total__local
+        COPY
+        PUSH, __const_SystemInt32_8
+        PUSH, __0_h__local
+        COPY
+        PUSH, __const_SystemInt32_16
+        PUSH, __0_w__local
+        COPY
+        PUSH, __const_SystemInt32_24
+        PUSH, __0_maxIter__local
+        COPY
+        PUSH, __const_SystemInt32_0
+        PUSH, __0_py__local
+        COPY
+    m_py:
+        # while (py < h)
+        PUSH, __0_py__local
+        PUSH, __0_h__local
+        PUSH, __intnl_SystemBoolean_3
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_3
+        JUMP_IF_FALSE, 0x000008FC
+        # int px = 0;
+        PUSH, __const_SystemInt32_0
+        PUSH, __0_px__local
+        COPY
+    m_px:
+        # while (px < w)
+        PUSH, __0_px__local
+        PUSH, __0_w__local
+        PUSH, __intnl_SystemBoolean_4
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_4
+        JUMP_IF_FALSE, 0x000008D4
+        # int x0 = (px * 3072 / w) - 2048;
+        PUSH, __0_px__local
+        PUSH, __const_SystemInt32_3072
+        PUSH, __intnl_SystemInt32_10
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_10
+        PUSH, __0_w__local
+        PUSH, __intnl_SystemInt32_11
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_11
+        PUSH, __const_SystemInt32_2048
+        PUSH, __0_x0__local
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        # int y0 = (py * 2048 / h) - 1024;
+        PUSH, __0_py__local
+        PUSH, __const_SystemInt32_2048
+        PUSH, __intnl_SystemInt32_12
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_12
+        PUSH, __0_h__local
+        PUSH, __intnl_SystemInt32_13
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_13
+        PUSH, __const_SystemInt32_1024
+        PUSH, __0_y0__local
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        # int x = 0; int y = 0; int it = 0;
+        PUSH, __const_SystemInt32_0
+        PUSH, __0_x__local
+        COPY
+        PUSH, __const_SystemInt32_0
+        PUSH, __0_y__local
+        COPY
+        PUSH, __const_SystemInt32_0
+        PUSH, __0_it__local
+        COPY
+    m_it:
+        # while (it < maxIter)
+        PUSH, __0_it__local
+        PUSH, __0_maxIter__local
+        PUSH, __intnl_SystemBoolean_5
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_5
+        JUMP_IF_FALSE, 0x0000088C
+        # int xx = (x * x) / 1024;
+        PUSH, __0_x__local
+        PUSH, __0_x__local
+        PUSH, __intnl_SystemInt32_14
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_14
+        PUSH, __const_SystemInt32_1024
+        PUSH, __0_xx__local
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        # int yy = (y * y) / 1024;
+        PUSH, __0_y__local
+        PUSH, __0_y__local
+        PUSH, __intnl_SystemInt32_15
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_15
+        PUSH, __const_SystemInt32_1024
+        PUSH, __0_yy__local
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        # if (xx + yy > 4096) break;
+        PUSH, __0_xx__local
+        PUSH, __0_yy__local
+        PUSH, __intnl_SystemInt32_16
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_16
+        PUSH, __const_SystemInt32_4096
+        PUSH, __intnl_SystemBoolean_6
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_6
+        JUMP_IF_FALSE, 0x000007A4
+        JUMP, 0x0000088C
+    m_no_break:
+        # int xy = (x * y) / 1024;
+        PUSH, __0_x__local
+        PUSH, __0_y__local
+        PUSH, __intnl_SystemInt32_17
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_17
+        PUSH, __const_SystemInt32_1024
+        PUSH, __0_xy__local
+        EXTERN, "SystemInt32.__op_Division__SystemInt32_SystemInt32__SystemInt32"
+        # x = xx - yy + x0;
+        PUSH, __0_xx__local
+        PUSH, __0_yy__local
+        PUSH, __intnl_SystemInt32_18
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_18
+        PUSH, __0_x0__local
+        PUSH, __0_x__local
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        # y = 2 * xy + y0;
+        PUSH, __const_SystemInt32_2
+        PUSH, __0_xy__local
+        PUSH, __intnl_SystemInt32_19
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __intnl_SystemInt32_19
+        PUSH, __0_y0__local
+        PUSH, __0_y__local
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        # it += 1;
+        PUSH, __0_it__local
+        PUSH, __const_SystemInt32_1
+        PUSH, __0_it__local
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x0000069C
+    m_it_end:
+        # total += it; px += 1;
+        PUSH, __0_total__local
+        PUSH, __0_it__local
+        PUSH, __0_total__local
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __0_px__local
+        PUSH, __const_SystemInt32_1
+        PUSH, __0_px__local
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00000570
+    m_px_end:
+        # py += 1;
+        PUSH, __0_py__local
+        PUSH, __const_SystemInt32_1
+        PUSH, __0_py__local
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x0000052C
+    m_py_end:
+        # mandelResult = total;
+        PUSH, __0_total__local
+        PUSH, mandelResult
+        COPY
+        PUSH, __intnl_returnJump_SystemUInt32_0
+        COPY
+        JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
+    .export Str
+    Str:
+        PUSH, __const_SystemUInt32_0
+    Str__body:
+        # string s = ""; int i = 0;
+        PUSH, __const_SystemString_0
+        PUSH, __0_s__local
+        COPY
+        PUSH, __const_SystemInt32_0
+        PUSH, __0_i__local
+        COPY
+    s_loop:
+        # while (i < 64)
+        PUSH, __0_i__local
+        PUSH, __const_SystemInt32_64
+        PUSH, __intnl_SystemBoolean_7
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_7
+        JUMP_IF_FALSE, 0x000009CC
+        # s += "abc"; i += 1;
+        PUSH, __0_s__local
+        PUSH, __const_SystemString_1
+        PUSH, __0_s__local
+        EXTERN, "SystemString.__Concat__SystemString_SystemString__SystemString"
+        PUSH, __0_i__local
+        PUSH, __const_SystemInt32_1
+        PUSH, __0_i__local
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00000954
+    s_end:
+        # strResult = s.Length;
+        PUSH, __0_s__local
+        PUSH, strResult
+        EXTERN, "SystemString.__get_Length__SystemInt32"
+        PUSH, __intnl_returnJump_SystemUInt32_0
+        COPY
+        JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
+.code_end

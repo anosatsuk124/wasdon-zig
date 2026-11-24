@@ -55,10 +55,13 @@ pub const Report = struct {
     }
 };
 
+/// Value types whose slots the translator keeps at one type for life. A
+/// string is not one of them: it is an object, and like any object it may
+/// sit in an `Int32` slot as a handle (`docs/spec_host_import_conversion.md`
+/// §4).
 const primitive_types = [_][]const u8{
     "SystemBoolean", "SystemByte",   "SystemSByte", "SystemInt16",  "SystemUInt16", "SystemChar",
     "SystemInt32",   "SystemUInt32", "SystemInt64", "SystemUInt64", "SystemSingle", "SystemDouble",
-    "SystemString",
 };
 
 fn isPrimitive(t: []const u8) bool {
