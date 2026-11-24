@@ -44,7 +44,64 @@ const zig_examples = [_]Example{
         .setup = orbitSetup,
         .verify = orbitVerify,
     },
+    .{
+        .name = "pi",
+        .wasm = @embedFile("pi.wasm"),
+        // 100 digits take 25 steps; the extra frames are idle.
+        .scenario = "_start,_update*30",
+        .expected_log = "pi: started\n" ++ @import("pi-core").reference_100 ++ "\n",
+        .setup = piSetup,
+        .verify = piVerify,
+    },
+    .{
+        .name = "mandelbrot",
+        .wasm = @embedFile("mandelbrot.wasm"),
+        // 64 rows at 2 per frame: 32 frames per view.
+        .scenario = "_start,_update*33,_interact,_update*33",
+        .expected_log = "mandelbrot: started\nmandelbrot: view 0 done\nmandelbrot: view 1 done\n",
+        .setup = mandelbrotSetup,
+        .verify = mandelbrotVerify,
+    },
 };
+
+fn piSetup(vm: *Vm) !void {
+    const text = try vm.newObject("UnityEngineUIText");
+    try std.testing.expect(vm.setVar("_display", .{ .object = text }));
+}
+
+fn piVerify(vm: *Vm) !void {
+    const reference = @import("pi-core").reference_100;
+    // The UI text ends up holding the digits.
+    const text = vm.getVar("_display").?.object;
+    try std.testing.expectEqualStrings(reference, text.get("text").?.string);
+}
+
+fn mandelbrotSetup(vm: *Vm) !void {
+    const renderer = try vm.newObject("UnityEngineMeshRenderer");
+    try std.testing.expect(vm.setVar("_renderer", .{ .object = renderer }));
+}
+
+fn mandelbrotVerify(vm: *Vm) !void {
+    const core = @import("mandelbrot-core");
+    const gpa = std.heap.page_allocator;
+    const texture = vm.getVar("_texture").?.object;
+    try std.testing.expectEqual(@as(i32, core.width), texture.get("width").?.int32);
+    try std.testing.expectEqual(@as(i32, core.height), texture.get("height").?.int32);
+
+    // The scenario leaves view 1 fully rendered; the uploaded pixels must
+    // be bit-identical to the same code compiled natively.
+    const reference = try gpa.create(core.State);
+    defer gpa.destroy(reference);
+    reference.* = .{};
+    reference.init();
+    reference.setView(1);
+    reference.render(core.height);
+    try std.testing.expectEqualSlices(u8, reference.bytes(), texture.get("rawTextureData").?.array.bytes);
+
+    // And the renderer shows that texture.
+    const material = vm.getVar("_renderer").?.object.get("material").?.object;
+    try std.testing.expectEqual(texture, material.get("mainTexture").?.object);
+}
 
 const rust_examples = if (build_options.with_rust) [_]Example{
     .{

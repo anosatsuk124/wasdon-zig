@@ -865,17 +865,50 @@ const unity = struct {
         });
         return clone;
     }
+    /// `new Texture2D(w, h)`: RGBA32 with a full mipmap chain.
     fn texture2D(vm: *Vm, w: i32, h: i32) Error!*Object {
+        const format = try vm.newObject("UnityEngineTextureFormat");
+        format.name = "RGBA32";
+        return texture2DFormat(vm, w, h, format, true);
+    }
+    fn texture2DFormat(vm: *Vm, w: i32, h: i32, format: ?*Object, mip_chain: bool) Error!*Object {
         const a = vm.arena.allocator();
+        // An enum that was never assigned is its zero value, which is not a
+        // texture format.
+        const f = format orelse return vm.raise("UnityException: TextureFormat is invalid", .{});
+        if (w <= 0 or h <= 0) return vm.raise("UnityException: Texture has out of range width / height", .{});
         const t = try vm.newObject("UnityEngineTexture2D");
         try t.put(a, "width", .{ .int32 = w });
         try t.put(a, "height", .{ .int32 = h });
+        try t.put(a, "format", .{ .object = f });
+        var mips: i32 = 1;
+        if (mip_chain) {
+            var side = @max(w, h);
+            while (side > 1) : (side >>= 1) mips += 1;
+        }
+        try t.put(a, "mipmapCount", .{ .int32 = mips });
         return t;
     }
+    /// Bytes of raw RGBA32 data in all mip levels.
+    fn rawTextureSize(tex: *const Object) ?u32 {
+        var w: u32 = @intCast((tex.get("width") orelse return null).int32);
+        var h: u32 = @intCast((tex.get("height") orelse return null).int32);
+        var mips = (tex.get("mipmapCount") orelse return null).int32;
+        var total: u32 = 0;
+        while (mips > 0) : (mips -= 1) {
+            total += w * h * 4;
+            w = @max(w / 2, 1);
+            h = @max(h / 2, 1);
+        }
+        return total;
+    }
     /// Keeps a private copy, as Unity does, so later writes to the source
-    /// array do not change what tests see as "uploaded".
+    /// array do not change what tests see as "uploaded". Unity rejects data
+    /// that does not fill the texture.
     fn loadRawTextureData(vm: *Vm, tex: *Object, data: *Array) Error!void {
         if (data.kind != .byte) return vm.raise("LoadRawTextureData needs a byte[]", .{});
+        if (rawTextureSize(tex)) |need| if (data.len < need)
+            return vm.raise("UnityException: LoadRawTextureData: not enough data provided (will result in overread).", .{});
         const copy = try vm.newArray("SystemByteArray", data.len);
         @memcpy(copy.bytes, data.bytes);
         try tex.put(vm.arena.allocator(), "rawTextureData", .{ .array = copy });
@@ -1104,6 +1137,7 @@ const fixed_entries = [_]KV{
     .{ "UnityEngineGameObject.__SetActive__SystemBoolean__SystemVoid", wrap(unity.setActive) },
     .{ "VRCInstantiate.__Instantiate__UnityEngineGameObject__UnityEngineGameObject", wrap(unity.instantiate) },
     .{ "UnityEngineTexture2D.__ctor__SystemInt32_SystemInt32__UnityEngineTexture2D", wrap(unity.texture2D) },
+    .{ "UnityEngineTexture2D.__ctor__SystemInt32_SystemInt32_UnityEngineTextureFormat_SystemBoolean__UnityEngineTexture2D", wrap(unity.texture2DFormat) },
     .{ "UnityEngineTexture2D.__LoadRawTextureData__SystemByteArray__SystemVoid", wrap(unity.loadRawTextureData) },
     .{ "VRCSDKBaseNetworking.__get_LocalPlayer__VRCSDKBaseVRCPlayerApi", wrap(unity.localPlayer) },
     .{ "VRCSDKBaseNetworking.__IsOwner__UnityEngineGameObject__SystemBoolean", wrap(unity.isOwner) },
@@ -1180,11 +1214,21 @@ pub fn dynamicCall(vm: *Vm, r: *const vm_mod.Resolved, args: []const u32) Error!
         try vm.calls.append(a, .{ .sig = r.text, .args = copy });
     }
 
-    // Property access on a host object.
+    // An instance member of nothing.
+    if (has_this and vm.heap[in[0]] == .null_ and Value.defaultFor(sig.type_name) == .null_)
+        return vm.raise("NullReferenceException: {s} called on null", .{r.text});
+
+    // Property access on a host object. A component-like property that was
+    // never set reads as a fresh object, the same one every time.
     if (has_this and vm.heap[in[0]] == .object) {
         const obj = vm.heap[in[0]].object;
         if (std.mem.startsWith(u8, sig.method, "get_") and in.len == 1) {
-            vm.heap[ret_idx.?] = obj.get(sig.method[4..]) orelse Value.defaultFor(sig.ret);
+            const key = sig.method[4..];
+            vm.heap[ret_idx.?] = obj.get(key) orelse made: {
+                const v = try defaultResult(vm, sig.ret);
+                if (v == .object) try obj.put(a, key, v);
+                break :made v;
+            };
             return;
         }
         if (std.mem.startsWith(u8, sig.method, "set_") and in.len == 2) {
@@ -1196,12 +1240,18 @@ pub fn dynamicCall(vm: *Vm, r: *const vm_mod.Resolved, args: []const u32) Error!
     // Anything else: the call is logged; a result gets the type's default,
     // or a fresh host object when the type is a reference type we do not
     // model, so chained calls keep working.
-    if (ret_idx) |ri| {
-        var v = Value.defaultFor(sig.ret);
-        if (v == .null_ and !std.mem.endsWith(u8, sig.ret, "Array") and !std.mem.eql(u8, sig.ret, "SystemString") and !std.mem.eql(u8, sig.ret, "SystemObject"))
-            v = .{ .object = try vm.newObject(sig.ret) };
-        vm.heap[ri] = v;
-    }
+    if (ret_idx) |ri| vm.heap[ri] = try defaultResult(vm, sig.ret);
+}
+
+/// What an unmodelled extern returns: the type's default, or a fresh host
+/// object when the type is a reference type we do not model, so chained
+/// calls keep working.
+fn defaultResult(vm: *Vm, type_name: []const u8) Error!Value {
+    const v = Value.defaultFor(type_name);
+    if (v != .null_) return v;
+    for ([_][]const u8{ "SystemString", "SystemObject" }) |plain| if (std.mem.eql(u8, type_name, plain)) return v;
+    if (std.mem.endsWith(u8, type_name, "Array")) return v;
+    return .{ .object = try vm.newObject(type_name) };
 }
 
 // ------------------------------- tests -------------------------------

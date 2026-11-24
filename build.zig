@@ -2,9 +2,17 @@ const std = @import("std");
 
 /// Example programs under `examples/`, compiled to WebAssembly and used as
 /// fixtures by the integration tests and the statistics tool.
-const zig_examples = [_]struct { name: []const u8, root: []const u8 }{
+const zig_examples = [_]struct {
+    name: []const u8,
+    root: []const u8,
+    /// A pure-Zig file holding the example's logic. The tests compile it
+    /// natively and use it as the reference the Udon run is compared with.
+    core: ?[]const u8 = null,
+}{
     .{ .name = "wasm-bench", .root = "examples/wasm-bench/main.zig" },
     .{ .name = "udon-orbit", .root = "examples/udon-orbit/main.zig" },
+    .{ .name = "pi", .root = "examples/pi/main.zig", .core = "examples/pi/core.zig" },
+    .{ .name = "mandelbrot", .root = "examples/mandelbrot/main.zig", .core = "examples/mandelbrot/core.zig" },
 };
 
 /// Rust examples (Cargo workspace members). Only built with `-Drust`.
@@ -66,6 +74,7 @@ pub fn build(b: *std.Build) void {
         .cpu_features_add = std.Target.wasm.featureSet(&.{ .bulk_memory_opt, .sign_ext, .nontrapping_fptoint, .mutable_globals }),
     });
     const examples_step = b.step("examples", "Build the example WASM modules into zig-out/wasm/");
+    const core_tests = b.step("test-example-cores", "Run the native unit tests of the examples' logic");
 
     // The integration tests and the statistics tool share one module that
     // embeds every example binary by name.
@@ -79,6 +88,9 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "with_rust", with_rust);
     fixtures.addOptions("build_options", options);
 
+    // Udon bindings shared by the examples.
+    const udon_api = b.createModule(.{ .root_source_file = b.path("examples/udon/udon.zig"), .target = wasm_target, .optimize = .ReleaseSmall });
+
     for (zig_examples) |ex| {
         const wasm_exe = b.addExecutable(.{
             .name = ex.name,
@@ -86,12 +98,18 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path(ex.root),
                 .target = wasm_target,
                 .optimize = .ReleaseSmall,
+                .imports = &.{.{ .name = "udon", .module = udon_api }},
             }),
         });
         wasm_exe.entry = .disabled;
         wasm_exe.rdynamic = true;
         examples_step.dependOn(&b.addInstallArtifact(wasm_exe, .{ .dest_dir = .{ .override = .{ .custom = "wasm" } } }).step);
         fixtures.addAnonymousImport(b.fmt("{s}.wasm", .{ex.name}), .{ .root_source_file = wasm_exe.getEmittedBin() });
+        if (ex.core) |core| {
+            const core_mod = b.createModule(.{ .root_source_file = b.path(core), .target = target, .optimize = optimize });
+            fixtures.addImport(b.fmt("{s}-core", .{ex.name}), core_mod);
+            core_tests.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = core_mod })).step);
+        }
     }
 
     if (with_rust) {
@@ -119,6 +137,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(integration).step);
+    test_step.dependOn(core_tests);
 
     // ---- statistics ----
     const stats_exe = b.addExecutable(.{
