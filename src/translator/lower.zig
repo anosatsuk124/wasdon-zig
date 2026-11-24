@@ -1956,6 +1956,11 @@ const Lowerer = struct {
         const imp = self.t.funcs[idx].import.?;
         const ty = self.t.funcs[idx].ty;
         if (self.t.field_access.get(idx)) |fa| return self.lowerFieldAccess(fa, imp, ty);
+        const wasi = @import("wasi.zig");
+        if (std.mem.eql(u8, imp.module, wasi.halt_module) and std.mem.eql(u8, imp.name, wasi.halt_name)) {
+            // End the event. Used by the WASI `proc_exit` shim.
+            return self.a.jump(udon.asm_.halt);
+        }
         const sig = nodes.parseSignature(imp.name) orelse
             return self.t.fail(error.Unsupported, "import '{s}.{s}' is neither an Udon extern signature nor bound by __udon_meta", .{ imp.module, imp.name });
         try self.lowerExtern(imp, ty, sig);

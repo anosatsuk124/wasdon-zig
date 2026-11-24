@@ -4,6 +4,16 @@ members = [
     "examples/udon-orbit-rs",
     "examples/wasm-bench-rs",
     "examples/wasm-bench-alloc-rs",
+    "examples/bench/rs",
+    "examples/bench/wasi-rs",
+]
+# The WASI program needs `std` and its own target; `cargo build` on its own
+# builds the freestanding examples.
+default-members = [
+    "examples/udon-orbit-rs",
+    "examples/wasm-bench-rs",
+    "examples/wasm-bench-alloc-rs",
+    "examples/bench/rs",
 ]
 
 [workspace.package]
@@ -16,3 +26,11 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+
+# The benchmark is built for speed: on the Udon VM what counts is how many
+# externs run, and unrolled, inlined code runs fewer.
+[profile.release.package.bench-rs]
+opt-level = 3
+
+[profile.release.package.bench-wasi-rs]
+opt-level = 3

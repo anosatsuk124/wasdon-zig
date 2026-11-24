@@ -378,7 +378,17 @@ fn benchVerify(vm: *Vm) !void {
     try std.testing.expectEqual(Value{ .int32 = 192 }, vm.getVar("strResult").?);
 }
 
+/// The programs in `examples/` that are plain WASI programs: `_start` runs
+/// `main`, and what it prints is the log.
+const wasi_bench_log = std.fmt.comptimePrint("fib(20) = 6765\nmandel  = {d}\nstr.len = 192\nelapsed = 0 ms\n", .{1345});
+
+fn wasiBenchVerify(_: *Vm) !void {
+    // The printed value is the reference's.
+    try std.testing.expectEqual(@as(i32, 1345), benchMandel());
+}
+
 const bench_examples = [_]Example{
+    .{ .name = "wasi-hello", .wasm = @embedFile("wasi-hello.wasm"), .scenario = "_start", .expected_log = "Hello, Udon!\nfib(15) = 610\n" },
     .{ .name = "bench-usharp", .uasm = @embedFile("bench-usharp.uasm"), .scenario = usharp_scenario, .setup = usharpSetup, .verify = benchVerify },
     .{ .name = "bench-zig", .wasm = @embedFile("bench-zig.wasm"), .scenario = usharp_scenario, .verify = benchVerify },
 };
@@ -402,6 +412,8 @@ const rust_examples = if (build_options.with_rust) [_]Example{
         .scenario = orbit_scenario,
         .expected_log = "udon-orbit-rs: _start\nudon-orbit-rs: cloned\nudon-orbit-rs: cloned\n",
     },
+    .{ .name = "bench-rs", .wasm = @embedFile("bench-rs.wasm"), .scenario = usharp_scenario, .verify = benchVerify },
+    .{ .name = "bench-wasi-rs", .wasm = @embedFile("bench-wasi-rs.wasm"), .scenario = "_start", .expected_log = wasi_bench_log, .verify = wasiBenchVerify },
 } else [_]Example{};
 
 pub const examples = zig_examples ++ bench_examples ++ rust_examples;

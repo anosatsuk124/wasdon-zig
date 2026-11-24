@@ -10,6 +10,9 @@ const zig_examples = [_]struct {
     core: ?[]const u8 = null,
     /// Size by default; speed where the example is a benchmark.
     optimize: std.builtin.OptimizeMode = .ReleaseSmall,
+    /// An ordinary program with a `main`, built for `wasm32-wasi`, rather
+    /// than a freestanding module that exports Udon events.
+    wasi: bool = false,
 }{
     .{ .name = "wasm-bench", .root = "examples/wasm-bench/main.zig" },
     .{ .name = "udon-orbit", .root = "examples/udon-orbit/main.zig" },
@@ -19,13 +22,22 @@ const zig_examples = [_]struct {
     .{ .name = "ragdoll", .root = "examples/ragdoll/main.zig", .core = "examples/ragdoll/core.zig" },
     .{ .name = "blockfall", .root = "examples/blockfall/main.zig", .core = "examples/blockfall/core.zig" },
     .{ .name = "bench-zig", .root = "examples/bench/zig/main.zig", .optimize = .ReleaseFast },
+    .{ .name = "wasi-hello", .root = "examples/wasi-hello/main.zig", .wasi = true },
 };
 
 /// Rust examples (Cargo workspace members). Only built with `-Drust`.
-const rust_examples = [_]struct { name: []const u8, artifact: []const u8 }{
+const rust_examples = [_]struct {
+    name: []const u8,
+    artifact: []const u8,
+    /// Built for `wasm32-wasip1` (needs that target installed) instead of
+    /// the workspace's freestanding default.
+    wasi: bool = false,
+}{
     .{ .name = "wasm-bench-rs", .artifact = "wasm_bench_rs.wasm" },
     .{ .name = "wasm-bench-alloc-rs", .artifact = "wasm_bench_alloc_rs.wasm" },
     .{ .name = "udon-orbit-rs", .artifact = "udon_orbit_rs.wasm" },
+    .{ .name = "bench-rs", .artifact = "bench_rs.wasm" },
+    .{ .name = "bench-wasi-rs", .artifact = "bench_wasi_rs.wasm", .wasi = true },
 };
 
 pub fn build(b: *std.Build) void {
@@ -73,11 +85,18 @@ pub fn build(b: *std.Build) void {
     // MVP plus the post-MVP features the translator lowers cheaply: bulk
     // memory copies/fills become single externs, the others a few
     // instructions (docs/producer_guide.md §1).
+    const wasm_features = std.Target.wasm.featureSet(&.{ .bulk_memory_opt, .sign_ext, .nontrapping_fptoint, .mutable_globals });
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
         .cpu_model = .{ .explicit = &std.Target.wasm.cpu.mvp },
-        .cpu_features_add = std.Target.wasm.featureSet(&.{ .bulk_memory_opt, .sign_ext, .nontrapping_fptoint, .mutable_globals }),
+        .cpu_features_add = wasm_features,
+    });
+    const wasi_target = b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .wasi,
+        .cpu_model = .{ .explicit = &std.Target.wasm.cpu.mvp },
+        .cpu_features_add = wasm_features,
     });
     const examples_step = b.step("examples", "Build the example WASM modules into zig-out/wasm/");
     const core_tests = b.step("test-example-cores", "Run the native unit tests of the examples' logic");
@@ -104,13 +123,19 @@ pub fn build(b: *std.Build) void {
             .name = ex.name,
             .root_module = b.createModule(.{
                 .root_source_file = b.path(ex.root),
-                .target = wasm_target,
+                .target = if (ex.wasi) wasi_target else wasm_target,
                 .optimize = ex.optimize,
-                .imports = &.{.{ .name = "udon", .module = udon_api }},
+                .imports = if (ex.wasi) &.{} else &.{.{ .name = "udon", .module = udon_api }},
             }),
         });
-        wasm_exe.entry = .disabled;
-        wasm_exe.rdynamic = true;
+        if (ex.wasi) {
+            // The default megabytes of stack would all be allocated as
+            // Udon memory.
+            wasm_exe.stack_size = 64 * 1024;
+        } else {
+            wasm_exe.entry = .disabled;
+            wasm_exe.rdynamic = true;
+        }
         examples_step.dependOn(&b.addInstallArtifact(wasm_exe, .{ .dest_dir = .{ .override = .{ .custom = "wasm" } } }).step);
         fixtures.addAnonymousImport(b.fmt("{s}.wasm", .{ex.name}), .{ .root_source_file = wasm_exe.getEmittedBin() });
         if (ex.core) |core| {
@@ -122,10 +147,14 @@ pub fn build(b: *std.Build) void {
 
     if (with_rust) {
         const cargo = b.addSystemCommand(&.{ "cargo", "build", "--release", "--quiet" });
+        // The WASI programs are not default members of the workspace.
+        const cargo_wasi = b.addSystemCommand(&.{ "cargo", "build", "--release", "--quiet", "--target", "wasm32-wasip1", "-p", "bench-wasi-rs" });
+        cargo_wasi.step.dependOn(&cargo.step);
         for (rust_examples) |ex| {
             const copy = b.addWriteFiles();
-            copy.step.dependOn(&cargo.step);
-            const bin = copy.addCopyFile(b.path(b.fmt("target/wasm32v1-none/release/{s}", .{ex.artifact})), ex.artifact);
+            copy.step.dependOn(if (ex.wasi) &cargo_wasi.step else &cargo.step);
+            const triple = if (ex.wasi) "wasm32-wasip1" else "wasm32v1-none";
+            const bin = copy.addCopyFile(b.path(b.fmt("target/{s}/release/{s}", .{ triple, ex.artifact })), ex.artifact);
             fixtures.addAnonymousImport(b.fmt("{s}.wasm", .{ex.name}), .{ .root_source_file = bin });
             examples_step.dependOn(&b.addInstallFileWithDir(bin, .{ .custom = "wasm" }, b.fmt("{s}.wasm", .{ex.name})).step);
         }

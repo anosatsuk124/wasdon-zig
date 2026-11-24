@@ -1235,3 +1235,150 @@ test "64-bit and float constants and global initializers are exact" {
     try testing.expectEqual(@as(u64, @as(u32, @bitCast(@as(f32, 0.1)))), bitsOf(p.global("__G__g2")));
     try testing.expectEqual(@as(u64, 0x8000_0000), bitsOf(p.global("__G__g3")));
 }
+
+// ----------------------------------------------------------------------
+//  WASI preview 1
+// ----------------------------------------------------------------------
+
+const wasi_module = "wasi_snapshot_preview1";
+
+fn wasiImport(name: []const u8, type_index: u32) wasm.module.Import {
+    return .{ .module = wasi_module, .name = name, .desc = .{ .func = type_index } };
+}
+
+/// A module importing WASI functions (types by index into `wasi_types`),
+/// with `_start` as function `imports.len` and an optional helper after it.
+const wasi_types = [_]FuncType{
+    .{ .params = &.{}, .results = &.{} }, // 0
+    .{ .params = &.{ .i32, .i32, .i32, .i32 }, .results = &.{.i32} }, // 1: fd_write, fd_read
+    .{ .params = &.{.i32}, .results = &.{} }, // 2: proc_exit
+    .{ .params = &.{ .i32, .i32 }, .results = &.{.i32} }, // 3: *_sizes_get, random_get, fd_fdstat_get
+    .{ .params = &.{ .i32, .i64, .i32 }, .results = &.{.i32} }, // 4: clock_time_get
+    .{ .params = &.{ .i32, .i64, .i32, .i32 }, .results = &.{.i32} }, // 5: fd_seek
+    .{ .params = &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i64, .i32, .i32 }, .results = &.{.i32} }, // 6: path_open
+    .{ .params = &.{.i32}, .results = &.{.i32} }, // 7: fd_close
+};
+
+fn wasiModule(a: std.mem.Allocator, imports: []const wasm.module.Import, body: []const I, data: []const u8) !wasm.Module {
+    var mod = try simpleModule(a, &.{ .i64, .i64, .i32, .i32 }, &.{}, body);
+    mod.types_ = &wasi_types;
+    mod.imports = imports;
+    const exports = try a.dupe(wasm.module.Export, mod.exports);
+    exports[exports.len - 1] = .{ .name = "_start", .desc = .{ .func = @intCast(imports.len) } };
+    mod.exports = exports;
+    const offset = try a.dupe(I, &.{.{ .i32_const = 0 }});
+    mod.datas = try a.dupe(wasm.module.Data, &.{.{ .memory_index = 0, .offset = offset, .init = data }});
+    return mod;
+}
+
+test "WASI: fd_write reaches the log a line at a time; proc_exit ends the event" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const m0 = wasm.instruction.MemArg{ .@"align" = 2, .offset = 0 };
+    // Memory: text at 0, three iovecs at 64, nwritten at 96.
+    //   "Hello, " | "Udon!\nsecond line\nno newline" | " yet"
+    const text = "Hello, Udon!\nsecond line\nno newline yet" ++ "warn\n";
+    var data: [128]u8 = @splat(0);
+    @memcpy(data[0..text.len], text);
+    const iov = [_]u32{ 0, 7, 7, 28, 35, 4, 39, 5 };
+    for (iov, 0..) |x, i| std.mem.writeInt(u32, data[64 + i * 4 ..][0..4], x, .little);
+
+    const fd_write = 0;
+    const proc_exit = 1;
+    const body = [_]I{
+        // Two iovecs in one call: one complete line straddles them, a
+        // second line follows, and a third is left unfinished.
+        .{ .i32_const = 1 },   .{ .i32_const = 64 }, .{ .i32_const = 2 },  .{ .i32_const = 96 },  .{ .call = fd_write },
+        .{ .global_set = 2 },  .{ .i32_const = 96 }, .{ .i32_load = m0 },  .{ .global_set = 3 },
+        // stderr is a separate stream.
+         .{ .i32_const = 2 },
+        .{ .i32_const = 88 },  .{ .i32_const = 1 },  .{ .i32_const = 96 }, .{ .call = fd_write }, .drop,
+        // The rest of the third line arrives without a newline;
+        // proc_exit shows it.
+        .{ .i32_const = 1 },   .{ .i32_const = 80 }, .{ .i32_const = 1 },  .{ .i32_const = 96 },  .{ .call = fd_write },
+        .drop,
+        // A descriptor that does not exist.
+                        .{ .i32_const = 7 },  .{ .i32_const = 64 }, .{ .i32_const = 1 },   .{ .i32_const = 96 },
+        .{ .call = fd_write }, .i64_extend_i32_u,    .{ .global_set = 0 }, .{ .i32_const = 3 },   .{ .call = proc_exit },
+        // Never reached.
+        .{ .i64_const = 99 },  .{ .global_set = 1 },
+    };
+    const mod = try wasiModule(a, &.{ wasiImport("fd_write", 1), wasiImport("proc_exit", 2) }, &body, &data);
+    var p = try load(mod, null);
+    defer p.deinit();
+    _ = try p.vm.runEvent("_start");
+    try testing.expectEqualStrings("Hello, Udon!\nsecond line\nwarn\nno newline yet\n", try p.vm.logText());
+    try testing.expectEqual(udon.vm.LogLevel.warning, p.vm.logs.items[2].level);
+    try testing.expectEqual(Value{ .int32 = 0 }, p.global("__G__g2")); // errno
+    try testing.expectEqual(Value{ .int32 = 35 }, p.global("__G__g3")); // bytes written
+    try testing.expectEqual(Value{ .int64 = 8 }, p.global("__G__g0")); // badf
+    try testing.expectEqual(Value{ .int64 = 0 }, p.global("__G__g1"));
+}
+
+test "WASI: clocks, random bytes, descriptors, and what a system without files answers" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const m0 = wasm.instruction.MemArg{ .@"align" = 0, .offset = 0 };
+    const imports = [_]wasm.module.Import{
+        wasiImport("clock_time_get", 4), wasiImport("random_get", 3), wasiImport("fd_fdstat_get", 3),
+        wasiImport("fd_seek", 5),        wasiImport("path_open", 6),  wasiImport("environ_sizes_get", 3),
+        wasiImport("fd_close", 7),       wasiImport("fd_read", 1),    wasiImport("fd_prestat_get", 3),
+    };
+    const body = [_]I{
+        // Monotonic clock → g0, wall clock → g1.
+        .{ .i32_const = 1 },  .{ .i64_const = 0 },  .{ .i32_const = 16 }, .{ .call = 0 },         .drop,
+        .{ .i32_const = 16 }, .{ .i64_load = m0 },  .{ .global_set = 0 }, .{ .i32_const = 0 },    .{ .i64_const = 0 },
+        .{ .i32_const = 16 }, .{ .call = 0 },       .drop,                .{ .i32_const = 16 },   .{ .i64_load = m0 },
+        .{ .global_set = 1 },
+        // errno sum → g2: CPU clock (28) + fdstat of fd 9 (8) + seek (70)
+        // + path_open (52) + environ_sizes_get (0) + close (0) + read of
+        // stdin (0) + prestat (8) + random (0) + fdstat of stdout (0).
+        .{ .i32_const = 2 },  .{ .i64_const = 0 },  .{ .i32_const = 16 },   .{ .call = 0 },
+        .{ .i32_const = 9 },  .{ .i32_const = 32 }, .{ .call = 2 },       .i32_add,               .{ .i32_const = 1 },
+        .{ .i64_const = 5 },  .{ .i32_const = 0 },  .{ .i32_const = 16 }, .{ .call = 3 },         .i32_add,
+        .{ .i32_const = 3 },  .{ .i32_const = 0 },  .{ .i32_const = 0 },  .{ .i32_const = 0 },    .{ .i32_const = 0 },
+        .{ .i64_const = 0 },  .{ .i64_const = 0 },  .{ .i32_const = 0 },  .{ .i32_const = 16 },   .{ .call = 4 },
+        .i32_add,             .{ .i32_const = 60 }, .{ .i32_const = 64 }, .{ .call = 5 },         .i32_add,
+        .{ .i32_const = 1 },  .{ .call = 6 },       .i32_add,             .{ .i32_const = 0 },    .{ .i32_const = 16 },
+        .{ .i32_const = 0 },  .{ .i32_const = 60 }, .{ .call = 7 },       .i32_add,               .{ .i32_const = 3 },
+        .{ .i32_const = 16 }, .{ .call = 8 },       .i32_add,             .{ .i32_const = 100 },  .{ .i32_const = 16 },
+        .{ .call = 1 },       .i32_add,             .{ .i32_const = 1 },  .{ .i32_const = 40 },   .{ .call = 2 },
+        .i32_add,             .{ .global_set = 2 },
+        // The file type of stdout (character device = 2) → g3.
+        .{ .i32_const = 40 }, .{ .i32_load8_u = m0 }, .{ .global_set = 3 },
+    };
+    var data: [128]u8 = @splat(0xEE);
+    const mod = try wasiModule(a, &imports, &body, &data);
+    var p = try load(mod, null);
+    defer p.deinit();
+    p.vm.host.time = 2.5;
+    _ = try p.vm.runEvent("_start");
+    try testing.expectEqual(Value{ .int64 = 2_500_000_000 }, p.global("__G__g0"));
+    // 2024-01-01T00:00:02.5Z in nanoseconds since 1970.
+    try testing.expectEqual(Value{ .int64 = 1_704_067_202_500_000_000 }, p.global("__G__g1"));
+    try testing.expectEqual(Value{ .int32 = 28 + 8 + 70 + 52 + 8 }, p.global("__G__g2"));
+    try testing.expectEqual(Value{ .int32 = 2 }, p.global("__G__g3"));
+    // random_get filled exactly its 16 bytes; the rest of fdstat is zero.
+    const memory = p.global("__G__memory").array.bytes;
+    try testing.expect(!std.mem.allEqual(u8, memory[100..116], 0xEE));
+    try testing.expectEqual(@as(u8, 0xEE), memory[116]);
+    try testing.expect(std.mem.allEqual(u8, memory[41..64], 0));
+}
+
+test "WASI: an import the interface does not have is refused in strict mode" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const body = [_]I{ .{ .i32_const = 0 }, .{ .call = 0 }, .drop };
+    const mod = try wasiModule(a, &.{wasiImport("fd_frobnicate", 7)}, &body, "");
+    var diag: translate_.Diagnostics = .init(a);
+    var out: std.Io.Writer.Allocating = .init(a);
+    try testing.expectError(error.Unsupported, translate_.translate(testing.allocator, mod, null, &out.writer, .{ .strict = true, .diagnostics = &diag }));
+    try testing.expect(std.mem.indexOf(u8, diag.message, "fd_frobnicate") != null);
+    // Otherwise it answers "not implemented".
+    var p = try load(mod, null);
+    defer p.deinit();
+    _ = try p.vm.runEvent("_start");
+}

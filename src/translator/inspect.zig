@@ -36,6 +36,10 @@ pub const Census = struct {
 
     extern_imports: usize = 0,
     bound_imports: usize = 0,
+    /// WASI functions the translator implements, and ones it accepts but
+    /// answers "not available".
+    wasi_implemented: usize = 0,
+    wasi_stubbed: usize = 0,
     unknown_imports: std.ArrayList([]const u8) = .empty,
 
     atomics: [@typeInfo(wasm.instruction.Atomic.Kind).@"enum".fields.len]u64 = @splat(0),
@@ -66,7 +70,13 @@ pub fn census(arena: std.mem.Allocator, mod: wasm.Module, meta: ?wasm.UdonMeta) 
         .func => |type_index| {
             c.imported_functions += 1;
             try func_types.append(arena, type_index);
-            if (boundByMeta(meta, imp)) {
+            const wasi = @import("wasi.zig");
+            const from_wasi = std.mem.eql(u8, imp.module, wasi.module_name);
+            if (from_wasi and wasi.support(imp.name) == .implemented) {
+                c.wasi_implemented += 1;
+            } else if (from_wasi and wasi.support(imp.name) == .stubbed) {
+                c.wasi_stubbed += 1;
+            } else if (boundByMeta(meta, imp)) {
                 c.bound_imports += 1;
             } else if (udon.nodes.resolveExtern(imp.name, &name_buf) != null) {
                 c.extern_imports += 1;
@@ -156,6 +166,8 @@ pub fn report(c: *const Census, w: *std.Io.Writer) !void {
     try w.print("data                 {d} bytes in {d} active and {d} passive segments\n", .{ c.data_bytes, c.active_segments, c.passive_segments });
     try w.print("globals, exports     {d}, {d} ({d} exported functions could be events)\n", .{ c.globals, c.exports, c.event_candidates });
     try w.print("imports              {d} Udon externs, {d} bound by __udon_meta, {d} unknown\n", .{ c.extern_imports, c.bound_imports, c.unknown_imports.items.len });
+    if (c.wasi_implemented + c.wasi_stubbed != 0)
+        try w.print("WASI preview 1       {d} functions implemented, {d} answered \"not available\"\n", .{ c.wasi_implemented, c.wasi_stubbed });
 
     try w.writeAll("\nNot supported by the translator:\n");
     var any = false;

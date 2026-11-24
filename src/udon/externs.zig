@@ -663,6 +663,17 @@ const str = struct {
         if (start < 0 or len < 0 or @as(i64, start) + len > s.len) return vm.raise("ArgumentOutOfRangeException: Substring", .{});
         return s[@intCast(start)..][0..@intCast(len)];
     }
+    /// `Convert.ToChar(int)`: range-checked.
+    fn charFromInt(vm: *Vm, x: i32) Error!Char {
+        if (x < 0 or x > 0xFFFF) return vm.raise("OverflowException: {d} is not a Char", .{x});
+        return .{ .c = @intCast(x) };
+    }
+    fn indexOfChar(s: []const u8, c: Char) i32 {
+        // Strings are kept as UTF-8 and indexed by byte, which is the
+        // character index for the ASCII the tests use.
+        if (c.c > 0x7F) return -1;
+        return if (std.mem.indexOfScalar(u8, s, @intCast(c.c))) |i| @intCast(i) else -1;
+    }
     fn substring1(vm: *Vm, s: []const u8, start: i32) Error![]const u8 {
         return substring2(vm, s, start, @as(i32, @intCast(s.len)) - start);
     }
@@ -887,6 +898,18 @@ fn color32New(r: u8, g: u8, b: u8, a: u8) Color32 {
 const unity = struct {
     fn deltaTime(vm: *Vm) f32 {
         return vm.host.delta_time;
+    }
+    fn uptime(vm: *Vm) f64 {
+        return vm.host.time;
+    }
+    /// A `DateTime` is modelled by its tick count: 100 ns units since
+    /// 0001-01-01. The emulated wall clock starts at 2024-01-01T00:00:00Z
+    /// and follows the frame clock, so runs are reproducible.
+    fn utcNow(vm: *Vm) Error!*Object {
+        const start_ticks: i64 = 638_396_640_000_000_000;
+        const now = try vm.newObject("SystemDateTime");
+        try now.put(vm.arena.allocator(), "Ticks", .{ .int64 = start_ticks + @as(i64, @intFromFloat(vm.host.time * 1e7)) });
+        return now;
     }
     fn time(vm: *Vm) f32 {
         return @floatCast(vm.host.time);
@@ -1145,6 +1168,8 @@ const fixed_entries = [_]KV{
     .{ "SystemString.__Format__SystemString_SystemObject_SystemObject_SystemObject__SystemString", wrap(str.format3) },
     .{ "SystemString.__ToString__SystemString", wrap(str.toString) },
     .{ "SystemString.__Copy__SystemString__SystemString", wrap(str.toString) },
+    .{ "SystemString.__IndexOf__SystemChar__SystemInt32", wrap(str.indexOfChar) },
+    .{ "SystemConvert.__ToChar__SystemInt32__SystemChar", wrap(str.charFromInt) },
     .{ "SystemObject.__ToString__SystemString", wrap(str.toString) },
     .{ "SystemBoolean.__ToString__SystemString", wrap(str.toString) },
     .{ "SystemObject.__Equals__SystemObject__SystemBoolean", wrap(objectEquals) },
@@ -1220,6 +1245,8 @@ const fixed_entries = [_]KV{
     .{ "VRCInstantiate.__Instantiate__UnityEngineGameObject__UnityEngineGameObject", wrap(unity.instantiate) },
     .{ "UnityEngineLineRenderer.__set_positionCount__SystemInt32__SystemVoid", wrap(unity.setPositionCount) },
     .{ "UnityEngineLineRenderer.__SetPosition__SystemInt32_UnityEngineVector3__SystemVoid", wrap(unity.setLinePosition) },
+    .{ "UnityEngineTime.__get_realtimeSinceStartupAsDouble__SystemDouble", wrap(unity.uptime) },
+    .{ "SystemDateTime.__get_UtcNow__SystemDateTime", wrap(unity.utcNow) },
     .{ "UnityEngineTexture2D.__ctor__SystemInt32_SystemInt32__UnityEngineTexture2D", wrap(unity.texture2D) },
     .{ "UnityEngineTexture2D.__ctor__SystemInt32_SystemInt32_UnityEngineTextureFormat_SystemBoolean__UnityEngineTexture2D", wrap(unity.texture2DFormat) },
     .{ "UnityEngineTexture2D.__LoadRawTextureData__SystemByteArray__SystemVoid", wrap(unity.loadRawTextureData) },
@@ -1293,6 +1320,12 @@ pub fn dynamicCall(vm: *Vm, r: *const vm_mod.Resolved, args: []const u32) Error!
             }
         }
     }
+
+    // The object model below stands in for Unity and VRChat types only.
+    // A .NET member the emulator has no implementation of must not
+    // quietly return a default: programs depend on those exactly.
+    if (std.mem.startsWith(u8, sig.type_name, "System") and vm.heapObject(in) == null)
+        return vm.raise("extern not implemented by the emulator: {s}", .{r.text});
 
     if (vm.options.record_calls) {
         const copy = try a.alloc(Value, in.len);

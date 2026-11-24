@@ -49,7 +49,7 @@ test "every example translates to valid Udon Assembly and behaves as expected" {
 }
 
 test "the Unity assets hold what the translator produces now" {
-    inline for (.{ "wasm-bench", "udon-orbit", "pi", "mandelbrot", "image-codec", "ragdoll", "blockfall", "bench-zig" }) |name| {
+    inline for (.{ "wasm-bench", "udon-orbit", "pi", "mandelbrot", "image-codec", "ragdoll", "blockfall", "bench-zig", "wasi-hello" }) |name| {
         const ex = fixtures.find(name).?;
         try testing.expect(fixtures.hasUnityAsset(ex));
         var fresh: std.Io.Writer.Allocating = .init(testing.allocator);
@@ -63,7 +63,7 @@ test "the Unity assets hold what the translator produces now" {
     // Every example with an asset is in the list above.
     var with_asset: usize = 0;
     for (fixtures.examples) |ex| with_asset += @intFromBool(fixtures.hasUnityAsset(ex));
-    try testing.expectEqual(@as(usize, 8), with_asset);
+    try testing.expectEqual(@as(usize, 9), with_asset);
 }
 
 test "the bench fixture parses as a WASM module" {

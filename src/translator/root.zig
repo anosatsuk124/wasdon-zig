@@ -7,6 +7,7 @@ pub const translate_ = @import("translate.zig");
 pub const lower = @import("lower.zig");
 pub const inspect = @import("inspect.zig");
 pub const liveness = @import("liveness.zig");
+pub const wasi = @import("wasi.zig");
 
 pub const translate = translate_.translate;
 pub const Options = translate_.Options;
@@ -21,5 +22,6 @@ test {
     _ = lower;
     _ = inspect;
     _ = liveness;
+    _ = wasi;
     _ = @import("tests.zig");
 }

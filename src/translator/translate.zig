@@ -75,6 +75,7 @@ pub fn translate(
 ) Error!Stats {
     var t: Translator = try .init(gpa, mod, meta, options);
     defer t.deinit();
+    try t.linkWasi();
     try t.run();
     try t.a.render(writer);
     return t.a.stats();
@@ -216,6 +217,31 @@ pub const Translator = struct {
     /// (names, tables); freed in one go by `deinit`.
     pub fn arena(self: *Translator) std.mem.Allocator {
         return self.arena_state.allocator();
+    }
+
+    /// A module built for WASI gets its system interface as functions of
+    /// its own (`wasi.zig`), and the Udon variables those keep state in.
+    fn linkWasi(self: *Translator) Error!void {
+        const wasi = @import("wasi.zig");
+        if (!wasi.used(self.mod)) return;
+        var offender: []const u8 = "";
+        self.mod = wasi.link(self.arena(), self.mod, self.strict(), &offender) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.WasiUnknownImport => return self.fail(error.Unsupported, "'{s}' is not a function of " ++ wasi.module_name, .{offender}),
+            error.WasiSignatureMismatch => return self.fail(error.Invalid, "import " ++ wasi.module_name ++ ".{s} does not have that function's type", .{offender}),
+        };
+        var meta: wasm.UdonMeta = self.meta orelse .{ .version = 1 };
+        var all: std.ArrayList(wasm.udon_meta.Field) = .empty;
+        try all.appendSlice(self.arena(), meta.fields);
+        for (wasi.fields) |f| {
+            // Only the buffers the linked functions actually use.
+            const bound = for (self.mod.imports) |imp| {
+                if (std.mem.eql(u8, imp.name, f.source.name.?) or std.mem.eql(u8, imp.name, f.source.setter.?)) break true;
+            } else false;
+            if (bound) try all.append(self.arena(), f);
+        }
+        meta.fields = all.items;
+        self.meta = meta;
     }
 
     pub fn fail(self: *Translator, err: Error, comptime fmt: []const u8, args: anytype) Error {

@@ -358,8 +358,11 @@ pub fn decodeInstruction(allocator: std.mem.Allocator, r: *Reader) errors.ParseE
                 },
                 .typeidx_reserved => {
                     const tidx = try leb128.readULEB128(u32, r);
-                    const reserved = try r.readByte();
-                    if (reserved != 0x00) return error.MalformedReserved;
+                    // Core 1 has a zero byte here. With reference types it
+                    // is a table index, which linkers write as a padded
+                    // LEB128; only table 0 exists for this translator.
+                    const table = try leb128.readULEB128(u32, r);
+                    if (table != 0) return error.MalformedReserved;
                     return @unionInit(Instruction, s.tag, tidx);
                 },
                 .br_table => {

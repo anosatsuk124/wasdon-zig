@@ -336,6 +336,14 @@ pub const Vm = struct {
         return true;
     }
 
+    /// The host object a call's first operand holds, if it holds one: a
+    /// property or method of something the tests put in the scene.
+    pub fn heapObject(self: *const Vm, operands: []const u32) ?*Object {
+        if (operands.len == 0) return null;
+        const v = self.heap[operands[0]];
+        return if (v == .object) v.object else null;
+    }
+
     pub fn newObject(self: *Vm, type_name: []const u8) Error!*Object {
         const o = try self.arena.allocator().create(Object);
         o.* = .{ .type_name = type_name };
