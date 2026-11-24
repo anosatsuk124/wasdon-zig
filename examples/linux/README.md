@@ -36,7 +36,6 @@ imports              0 Udon externs, 0 bound by __udon_meta, 96 unknown
 Not supported by the translator:
   - shared memory (threads): the Udon VM runs one thread
   - 6523 atomic instructions (threads): notify 8 wait 3 fence 3977 load 1 store 2 rmw 95 cmpxchg 2437
-  - passive data: 33 segments, 33 memory.init, 33 data.drop
   - 96 imports that are neither Udon externs nor bound by __udon_meta:
       env.wasm_user_mode_tail
       env.wasm_create_and_run_task
@@ -88,9 +87,10 @@ In order of how fundamental the obstacle is:
    editor's assembler and serializer are used with.
 
 What the translator itself lacks for this module — shared memory accepted
-as ordinary memory, atomics lowered for one thread, passive data segments,
-trapping stubs for unknown imports — is the small part, and could be added;
-it would produce a very large program that stops at the first `wait`.
+as ordinary memory, atomics lowered for one thread, trapping stubs for
+unknown imports — is the small part, and could be added; it would produce
+a very large program that stops at the first `wait`. (Its 33 passive data
+segments are no obstacle: `memory.init` is supported.)
 
 ## What does work
 

@@ -19,13 +19,18 @@ The translator accepts WebAssembly Core 1 (MVP) plus:
 | non-trapping float-to-int | supported |
 | mutable-global import/export | supported |
 
-Not supported: multi-value block parameters, reference types, passive data
-segments (`memory.init` / `data.drop`), SIMD, threads/atomics, tail calls,
-exception handling, memory64.
+Passive data segments (`memory.init` / `data.drop`) and the LEB-encoded
+table index of `call_indirect` are read as well, so the output of
+toolchains that enable bulk memory and reference types by default
+translates.
+
+Not supported: multi-value block parameters, reference-typed values and
+table instructions, SIMD, threads/atomics, tail calls, exception handling,
+memory64. `wasdon_zig inspect` lists what a given module uses.
 
 | Toolchain | Setup |
 |---|---|
-| Zig | `wasm32-freestanding`, CPU model `mvp` plus features `bulk_memory_opt`, `sign_ext`, `nontrapping_fptoint`, `mutable_globals` — see `build.zig`. `bulk_memory_opt` gives `memory.copy`/`memory.fill` without passive segments; the default `generic` model also enables multi-value and reference types, which are rejected. |
+| Zig | `wasm32-freestanding`, CPU model `mvp` plus features `bulk_memory_opt`, `sign_ext`, `nontrapping_fptoint`, `mutable_globals` — see `build.zig`. The default `generic` model also enables multi-value, which is rejected. |
 | Rust | `wasm32v1-none` (MVP only) works as is; the examples in this repository use it. Add `-C target-feature=+bulk-memory` to get `memory.copy` / `memory.fill` in your own code (the precompiled standard library keeps its software `memcpy` unless rebuilt with `-Zbuild-std`). |
 | C / other | Equivalent `-m` flags; check the output with the translator, which names the first unsupported construct. |
 

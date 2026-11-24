@@ -43,6 +43,7 @@ itself reserves for event parameters or with names the producer chooses in
 | imported global | `__G__imp_{name}` | |
 | linear memory, its size | `__G__memory`, `__G__memory_size_pages` | `spec_linear_memory.md` §2 |
 | data segment *n*, decode scratch | `__data_{n}`, `__data_bytes` | §8 |
+| passive data segment *n*; what a dropped one becomes | `__seg_{n}`, `__seg_dropped` | §6 |
 | store arrays | `__st_{type}` | §4 |
 | derived-value cache slot *k* (0–7) | `__derived{k}` | §5 |
 | `i32` constant | `__c_i32_{value}` (`n` prefix for negatives) | `spec_numeric_conversion.md` §5 |

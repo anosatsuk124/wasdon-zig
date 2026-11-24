@@ -36,7 +36,8 @@ Rust translated this way execute 1.5–1.7× fewer externs than UdonSharp
 - [x] Structured control flow, direct and indirect calls, recursion, the
       start function — `docs/spec_call_return_conversion.md`
 - [x] Linear memory: all load/store widths at any alignment, `memory.grow`,
-      `memory.copy`, `memory.fill` — `docs/spec_linear_memory.md`
+      `memory.copy`, `memory.fill`, passive data segments
+      (`memory.init`, `data.drop`) — `docs/spec_linear_memory.md`
 - [x] Udon externs as imports, with string marshalling, `ref`/`out`
       arguments and opaque object handles —
       `docs/spec_host_import_conversion.md`
@@ -49,8 +50,8 @@ Rust translated this way execute 1.5–1.7× fewer externs than UdonSharp
       `docs/udon_vm.md`
 - [x] Unity editor support and the examples as ready-made assets —
       `unity/Wasdon/`
-- [ ] Not supported: passive data segments, multi-value block parameters,
-      reference types beyond the `call_indirect` encoding, SIMD, threads,
+- [ ] Not supported: multi-value block parameters, reference types
+      beyond the `call_indirect` encoding, SIMD, threads,
       tail calls, exceptions (`wasdon_zig inspect` lists what a module
       needs)
 

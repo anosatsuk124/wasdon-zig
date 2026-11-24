@@ -819,6 +819,39 @@ test "a byte in memory is tested without being loaded" {
     }
 }
 
+test "passive data segments: memory.init copies, data.drop empties" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const m0 = wasm.instruction.MemArg{ .@"align" = 0, .offset = 0 };
+    const body = [_]I{
+        // memory[100..104] = segment 1 [2..6]
+        .{ .i32_const = 100 }, .{ .i32_const = 2 }, .{ .i32_const = 4 }, .{ .memory_init = 1 },
+        .{ .i32_const = 100 }, .{ .i32_load = m0 }, .{ .global_set = 2 },
+        // The active segment was placed at startup; segment 1 was not.
+        .{ .i32_const = 8 },   .{ .i32_load = m0 }, .{ .global_set = 3 },
+        // After data.drop a zero-length init still succeeds…
+        .{ .data_drop = 1 },
+        .{ .i32_const = 200 }, .{ .i32_const = 0 }, .{ .i32_const = 0 }, .{ .memory_init = 1 },
+        .{ .i64_const = 1 },   .{ .global_set = 0 },
+        // …and any other traps.
+        .{ .i32_const = 200 }, .{ .i32_const = 0 }, .{ .i32_const = 1 }, .{ .memory_init = 1 },
+        .{ .i64_const = 2 },   .{ .global_set = 0 },
+    };
+    var mod = try simpleModule(a, &.{ .i64, .i64, .i32, .i32 }, &.{}, &body);
+    const offset = try a.dupe(I, &.{.{ .i32_const = 8 }});
+    mod.datas = try a.dupe(wasm.module.Data, &.{
+        .{ .memory_index = 0, .offset = offset, .init = "\x11\x22\x33\x44" },
+        .{ .memory_index = 0, .offset = &.{}, .init = "abcdefgh", .passive = true },
+    });
+    var p = try load(mod, null);
+    defer p.deinit();
+    try testing.expectError(error.UdonFault, p.vm.runEvent("run"));
+    try testing.expectEqual(Value{ .int32 = std.mem.readInt(i32, "cdef", .little) }, p.global("__G__g2"));
+    try testing.expectEqual(Value{ .int32 = 0x44332211 }, p.global("__G__g3"));
+    try testing.expectEqual(Value{ .int64 = 1 }, p.global("__G__g0"));
+}
+
 test "memory.copy overlaps correctly; memory.fill; memory.size and grow" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

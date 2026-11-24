@@ -1006,7 +1006,23 @@ const Lowerer = struct {
                     else => try self.memoryFill(),
                 }
             },
-            .memory_init, .data_drop => return self.t.fail(error.Unsupported, "passive data segments (memory.init / data.drop) are not supported", .{}),
+            .memory_init => |segment| {
+                try self.flushLoads();
+                const mem = try self.memory();
+                var n = try self.pop();
+                var src = try self.pop();
+                var dst = try self.pop();
+                // Out-of-range offsets make BlockCopy throw, as the
+                // instruction traps.
+                try self.a.call(block_copy, &.{ try self.t.segmentSym(segment), try self.operand(&src), mem.sym, try self.operand(&dst), try self.operand(&n) });
+                try self.release(n);
+                try self.release(src);
+                try self.release(dst);
+            },
+            // A dropped segment behaves as an empty one from then on.
+            .data_drop => |segment| if (self.t.mod.datas[@min(segment, self.t.mod.datas.len - 1)].passive) {
+                try self.a.copy(try self.t.emptySegment(), try self.t.segmentSym(segment));
+            },
             .atomic => return self.t.fail(error.Unsupported, "function {s} uses atomic instructions (threads proposal); the Udon VM runs one thread. `wasdon-zig inspect` lists everything a module needs", .{self.f.name}),
 
             .i32_eqz => try self.eqz(.i32),

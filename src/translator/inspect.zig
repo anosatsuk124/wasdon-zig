@@ -56,8 +56,7 @@ pub const Census = struct {
     /// Nothing in the module is beyond the translator.
     pub fn translatable(c: *const Census) bool {
         const shared = if (c.memory) |m| m.shared else false;
-        return !shared and c.atomicTotal() == 0 and c.passive_segments == 0 and c.memory_init == 0 and
-            c.multi_value_blocks == 0 and c.unknown_imports.items.len == 0;
+        return !shared and c.atomicTotal() == 0 and c.multi_value_blocks == 0 and c.unknown_imports.items.len == 0;
     }
 };
 
@@ -183,10 +182,6 @@ pub fn report(c: *const Census, w: *std.Io.Writer) !void {
         }
         try w.writeAll("\n");
     }
-    if (c.passive_segments != 0 or c.memory_init != 0) {
-        any = true;
-        try w.print("  - passive data: {d} segments, {d} memory.init, {d} data.drop\n", .{ c.passive_segments, c.memory_init, c.data_drop });
-    }
     if (c.multi_value_blocks != 0) {
         any = true;
         try w.print("  - {d} blocks with parameters or several results (multi-value)\n", .{c.multi_value_blocks});
@@ -244,6 +239,7 @@ test "census names what a threaded module needs" {
     try std.testing.expect(c.memory.?.shared and c.memory_imported);
     try std.testing.expectEqual(@as(u64, 1), c.atomicTotal());
     try std.testing.expectEqual(@as(usize, 1), c.passive_segments);
+    try std.testing.expectEqual(@as(u64, 1), c.memory_init);
     try std.testing.expectEqual(@as(usize, 1), c.extern_imports);
     try std.testing.expectEqualStrings("env.spawn_worker", c.unknown_imports.items[0]);
     var out: std.Io.Writer.Allocating = .init(arena.allocator());

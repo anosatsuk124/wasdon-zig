@@ -192,6 +192,11 @@ pub const Translator = struct {
     frame_columns: std.ArrayList(Sym) = .empty,
     frame_depth: ?Sym = null,
     return_slot: ?Sym = null,
+    /// Passive data segments that some `memory.init` reads, as `byte[]`
+    /// variables indexed by segment; and the empty array a dropped segment
+    /// is replaced with.
+    segments: std.AutoArrayHashMapUnmanaged(u32, Sym) = .empty,
+    empty_segment: ?Sym = null,
     bool_true: ?Sym = null,
     bool_false: ?Sym = null,
 
@@ -849,6 +854,20 @@ pub const Translator = struct {
         return gop.value_ptr.*;
     }
 
+    /// The `byte[]` holding passive data segment `index`
+    /// (`docs/spec_linear_memory.md` §8).
+    pub fn segmentSym(self: *Translator, index: u32) Error!Sym {
+        if (index >= self.mod.datas.len) return self.fail(error.Invalid, "data segment {d} does not exist", .{index});
+        const gop = try self.segments.getOrPut(self.arena(), index);
+        if (!gop.found_existing) gop.value_ptr.* = try self.a.declare(.{ .name = try self.name("__seg_{d}", .{index}), .type_name = "SystemByteArray" });
+        return gop.value_ptr.*;
+    }
+
+    pub fn emptySegment(self: *Translator) Error!Sym {
+        if (self.empty_segment == null) self.empty_segment = try self.a.declare(.{ .name = "__seg_dropped", .type_name = "SystemByteArray" });
+        return self.empty_segment.?;
+    }
+
     /// Where a `.stack` function pops its return address to jump to it.
     pub fn returnSlot(self: *Translator) Error!Sym {
         if (self.return_slot == null) self.return_slot = try self.a.declare(.{ .name = "__return_to", .type_name = "SystemUInt32", .init = .{ .uint32 = 0 } });
@@ -1056,7 +1075,8 @@ pub const Translator = struct {
             try a.call("SystemByteArray.__ctor__SystemInt32__SystemByteArray", &.{ try self.constI32(@intCast(self.initial_pages << 16)), mem });
             var scratch: ?Sym = null;
             for (self.mod.datas, 0..) |d, i| {
-                if (d.passive) return self.fail(error.Unsupported, "passive data segments are not supported", .{});
+                // A passive segment is copied by `memory.init`, if at all.
+                if (d.passive) continue;
                 // Fresh memory is zero, so zero bytes at either end need no copy.
                 var start: usize = 0;
                 var end: usize = d.init.len;
@@ -1071,6 +1091,14 @@ pub const Translator = struct {
                 try a.call(block_copy, &.{ scratch.?, c0, mem, try self.constI32(@intCast(off + start)), try self.constI32(@intCast(end - start)) });
             }
         }
+
+        // Passive segments some `memory.init` uses: decoded once, kept.
+        for (self.segments.keys(), self.segments.values()) |index, sym| {
+            const text = try encodeBase64(self.arena(), self.mod.datas[index].init);
+            const src = try a.declare(.{ .name = try self.name("__data_{d}", .{index}), .type_name = "SystemString", .init = .{ .string = text } });
+            try a.call(from_b64, &.{ src, sym });
+        }
+        if (self.empty_segment) |sym| try a.call("SystemByteArray.__ctor__SystemInt32__SystemByteArray", &.{ c0, sym });
 
         if (self.pool_sym != null or self.pooled.items.len != 0) {
             const pool = try self.poolSym();

@@ -145,7 +145,17 @@ may run another event of the behaviour).
 | `memory.copy` | `Buffer.BlockCopy(mem, src, mem, dst, n)` — overlap-safe, as required |
 | `memory.fill` with constant 0 | `Array.Clear(mem, dst, n)` |
 | `memory.fill` otherwise | runtime routine: write one byte, then double the filled prefix with `BlockCopy` (⌈log₂ n⌉ + 2 externs) |
-| `memory.init`, `data.drop` | not supported (passive segments) |
+| `memory.init s` | `Buffer.BlockCopy(__seg_{s}, src, mem, dst, n)` — one extern |
+| `data.drop s` | `COPY` of an empty `byte[]` into `__seg_{s}` |
+
+**Passive data segments** are not copied into memory at startup. Each one
+that some `memory.init` names becomes a `byte[]` variable `__seg_{s}`,
+decoded from Base64 by the init routine; `memory.init` copies from it, and
+an out-of-range source or destination makes `BlockCopy` throw where the
+instruction traps. `data.drop` replaces the variable with an empty array,
+so that — as WebAssembly requires — a later `memory.init` of zero bytes
+still succeeds and any other traps. A passive segment no `memory.init`
+uses is not emitted at all.
 
 Producers should enable bulk memory (`docs/producer_guide.md` §1): without
 it `memcpy` / `memset` are byte loops costing several externs per byte.
