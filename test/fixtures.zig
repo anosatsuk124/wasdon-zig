@@ -59,8 +59,24 @@ const zig_examples = [_]Example{
         // 64 rows at 2 per frame: 32 frames per view.
         .scenario = "_start,_update*33,_interact,_update*33",
         .expected_log = "mandelbrot: started\nmandelbrot: view 0 done\nmandelbrot: view 1 done\n",
-        .setup = mandelbrotSetup,
+        .setup = rendererSetup,
         .verify = mandelbrotVerify,
+    },
+    .{
+        .name = "image-codec",
+        .wasm = @embedFile("image-codec.wasm"),
+        // 2304 pixels at 96 per frame: 24 frames to decode, 24 to encode.
+        .scenario = "_start,_update*50,_interact,_update*50",
+        .expected_log = codecLog(),
+        .setup = rendererSetup,
+        .verify = codecVerify,
+    },
+    .{
+        .name = "ragdoll",
+        .wasm = @embedFile("ragdoll.wasm"),
+        .scenario = std.fmt.comptimePrint("_start,_update*{d},_interact,_update*{d}", .{ ragdoll_frames[0], ragdoll_frames[1] }),
+        .setup = ragdollSetup,
+        .verify = ragdollVerify,
     },
 };
 
@@ -74,11 +90,6 @@ fn piVerify(vm: *Vm) !void {
     // The UI text ends up holding the digits.
     const text = vm.getVar("_display").?.object;
     try std.testing.expectEqualStrings(reference, text.get("text").?.string);
-}
-
-fn mandelbrotSetup(vm: *Vm) !void {
-    const renderer = try vm.newObject("UnityEngineMeshRenderer");
-    try std.testing.expect(vm.setVar("_renderer", .{ .object = renderer }));
 }
 
 fn mandelbrotVerify(vm: *Vm) !void {
@@ -101,6 +112,87 @@ fn mandelbrotVerify(vm: *Vm) !void {
     // And the renderer shows that texture.
     const material = vm.getVar("_renderer").?.object.get("material").?.object;
     try std.testing.expectEqual(texture, material.get("mainTexture").?.object);
+}
+
+/// The scene every texture example needs: a renderer to show it on.
+fn rendererSetup(vm: *Vm) !void {
+    const renderer = try vm.newObject("UnityEngineMeshRenderer");
+    try std.testing.expect(vm.setVar("_renderer", .{ .object = renderer }));
+}
+
+const codec = @import("image-codec-core");
+
+fn codecLog() []const u8 {
+    comptime {
+        var text: []const u8 = "";
+        for (codec.pictures[0..2]) |pic| {
+            text = text ++ std.fmt.comptimePrint(
+                "image-codec: {s} decoded, {d} bytes to {d}\nimage-codec: {s} encoded again, {d} bytes, identical\n",
+                .{ pic.name, pic.qoi.len, codec.pixel_count * 4, pic.name, pic.qoi.len },
+            );
+        }
+        return text;
+    }
+}
+
+fn codecVerify(vm: *Vm) !void {
+    // The texture holds the second picture, exactly as painted.
+    const uploaded = vm.getVar("_texture").?.object.get("rawTextureData").?.array.bytes;
+    try std.testing.expectEqual(@as(usize, codec.pixel_count * 4), uploaded.len);
+    for (0..codec.pixel_count) |i| {
+        const want = codec.pictures[1].paint(@intCast(i % codec.side), @intCast(i / codec.side));
+        try std.testing.expectEqual(want, std.mem.readInt(u32, uploaded[i * 4 ..][0..4], .little));
+    }
+}
+
+const ragdoll = @import("ragdoll-core");
+const ragdoll_frames = [2]u32{ 150, 250 };
+
+fn ragdollSetup(vm: *Vm) !void {
+    const a = vm.arena.allocator();
+    const joints = try vm.newObject("UnityEngineTransform");
+    for (0..ragdoll.joint_count) |_| try joints.children.append(a, try vm.newObject("UnityEngineTransform"));
+    try std.testing.expect(vm.setVar("_joints", .{ .object = joints }));
+    try std.testing.expect(vm.setVar("_line", .{ .object = try vm.newObject("UnityEngineLineRenderer") }));
+}
+
+/// Replays the scenario on the natively compiled simulation: the Udon run
+/// must have logged the same transitions and left every joint at exactly
+/// the same coordinates.
+fn ragdollVerify(vm: *Vm) !void {
+    const names = [_][]const u8{ "idle", "walking", "down", "getting up" };
+    var log: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer log.deinit();
+    const w = &log.writer;
+
+    var body: ragdoll.Body = .{};
+    body.init(1);
+    try w.print("ragdoll: {s}\n", .{names[@intFromEnum(body.mode)]});
+    for (ragdoll_frames, 0..) |frames, part| {
+        if (part == 1) {
+            body.hit();
+            try w.writeAll("ragdoll: hit\n");
+        }
+        for (0..frames) |_| {
+            const before = body.mode;
+            if (body.advance(vm.host.delta_time) and body.mode != before)
+                try w.print("ragdoll: {s}\n", .{names[@intFromEnum(body.mode)]});
+        }
+    }
+    // The scenario covers the whole story: walking, the fall, getting up.
+    try std.testing.expect(std.mem.indexOf(u8, log.written(), "getting up\nragdoll: idle") != null);
+    try std.testing.expectEqualStrings(log.written(), try vm.logText());
+
+    const markers = vm.getVar("_joints").?.object.children.items;
+    for (markers, body.pos) |marker, want| {
+        const got = marker.get("localPosition").?.vec.v;
+        for (want, got[0..3]) |x, y| try std.testing.expectEqual(@as(u32, @bitCast(x)), @as(u32, @bitCast(y)));
+    }
+    const points = vm.getVar("_line").?.object.get("positions").?.array;
+    try std.testing.expectEqual(@as(u32, ragdoll.outline.len), points.len);
+    for (points.values, ragdoll.outline) |point, joint| {
+        for (body.pos[joint], point.vec.v[0..3]) |x, y| try std.testing.expectEqual(x, y);
+    }
 }
 
 const rust_examples = if (build_options.with_rust) [_]Example{

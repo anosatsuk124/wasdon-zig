@@ -13,6 +13,8 @@ const zig_examples = [_]struct {
     .{ .name = "udon-orbit", .root = "examples/udon-orbit/main.zig" },
     .{ .name = "pi", .root = "examples/pi/main.zig", .core = "examples/pi/core.zig" },
     .{ .name = "mandelbrot", .root = "examples/mandelbrot/main.zig", .core = "examples/mandelbrot/core.zig" },
+    .{ .name = "image-codec", .root = "examples/image-codec/main.zig", .core = "examples/image-codec/core.zig" },
+    .{ .name = "ragdoll", .root = "examples/ragdoll/main.zig", .core = "examples/ragdoll/core.zig" },
 };
 
 /// Rust examples (Cargo workspace members). Only built with `-Drust`.

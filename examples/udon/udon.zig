@@ -178,6 +178,7 @@ extern "env" fn @"UnityEngineTransform.__set_localPosition__UnityEngineVector3__
 extern "env" fn @"UnityEngineTransform.__set_position__UnityEngineVector3__SystemVoid"(self: Transform, pos: Vector3) void;
 extern "env" fn @"UnityEngineComponent.__get_gameObject__UnityEngineGameObject"(self: Transform) GameObject;
 extern "env" fn @"UnityEngineLineRenderer.__SetPosition__SystemInt32_UnityEngineVector3__SystemVoid"(self: LineRenderer, index: i32, pos: Vector3) void;
+extern "env" fn @"UnityEngineLineRenderer.__set_positionCount__SystemInt32__SystemVoid"(self: LineRenderer, count: i32) void;
 extern "env" fn @"UnityEngineUIText.__set_text__SystemString__SystemVoid"(self: Text, ptr: [*]const u8, len: usize) void;
 extern "env" fn @"UnityEngineRenderer.__get_material__UnityEngineMaterial"(self: Renderer) Material;
 extern "env" fn @"UnityEngineMaterial.__set_mainTexture__UnityEngineTexture__SystemVoid"(self: Material, texture: Texture2D) void;
@@ -230,6 +231,10 @@ pub fn setLocalPosition(t: Transform, x: f32, y: f32, z: f32) void {
 
 pub fn gameObjectOf(t: Transform) GameObject {
     return @"UnityEngineComponent.__get_gameObject__UnityEngineGameObject"(t);
+}
+
+pub fn setLineCount(line: LineRenderer, count: usize) void {
+    @"UnityEngineLineRenderer.__set_positionCount__SystemInt32__SystemVoid"(line, @intCast(count));
 }
 
 pub fn setLinePoint(line: LineRenderer, index: usize, x: f32, y: f32, z: f32) void {

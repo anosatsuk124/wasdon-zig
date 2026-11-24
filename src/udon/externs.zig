@@ -913,6 +913,23 @@ const unity = struct {
         @memcpy(copy.bytes, data.bytes);
         try tex.put(vm.arena.allocator(), "rawTextureData", .{ .array = copy });
     }
+    /// Points live in a Vector3[] sized by `positionCount`.
+    fn linePositions(vm: *Vm, line: *Object, count: u32) Error!*Array {
+        if (line.get("positions")) |v| if (v.array.len == count) return v.array;
+        const points = try vm.newArray("UnityEngineVector3Array", count);
+        try line.put(vm.arena.allocator(), "positions", .{ .array = points });
+        return points;
+    }
+    fn setPositionCount(vm: *Vm, line: *Object, count: i32) Error!void {
+        if (count < 0) return vm.raise("ArgumentException: negative positionCount", .{});
+        _ = try linePositions(vm, line, @intCast(count));
+    }
+    fn setLinePosition(vm: *Vm, line: *Object, index: i32, point: Vector3) Error!void {
+        const points = if (line.get("positions")) |v| v.array else try linePositions(vm, line, 0);
+        if (index < 0 or @as(u32, @intCast(index)) >= points.len)
+            return vm.raise("LineRenderer.SetPosition index out of bounds ({d} of {d})", .{ index, points.len });
+        points.values[@intCast(index)] = .{ .vec = .{ .kind = .vector3, .v = point.v } };
+    }
     fn localPlayer(vm: *Vm) *Object {
         return vm.host.local_player;
     }
@@ -1136,6 +1153,8 @@ const fixed_entries = [_]KV{
     .{ "UnityEngineTransform.__get_childCount__SystemInt32", wrap(unity.childCount) },
     .{ "UnityEngineGameObject.__SetActive__SystemBoolean__SystemVoid", wrap(unity.setActive) },
     .{ "VRCInstantiate.__Instantiate__UnityEngineGameObject__UnityEngineGameObject", wrap(unity.instantiate) },
+    .{ "UnityEngineLineRenderer.__set_positionCount__SystemInt32__SystemVoid", wrap(unity.setPositionCount) },
+    .{ "UnityEngineLineRenderer.__SetPosition__SystemInt32_UnityEngineVector3__SystemVoid", wrap(unity.setLinePosition) },
     .{ "UnityEngineTexture2D.__ctor__SystemInt32_SystemInt32__UnityEngineTexture2D", wrap(unity.texture2D) },
     .{ "UnityEngineTexture2D.__ctor__SystemInt32_SystemInt32_UnityEngineTextureFormat_SystemBoolean__UnityEngineTexture2D", wrap(unity.texture2DFormat) },
     .{ "UnityEngineTexture2D.__LoadRawTextureData__SystemByteArray__SystemVoid", wrap(unity.loadRawTextureData) },
