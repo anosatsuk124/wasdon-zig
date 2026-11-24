@@ -1,172 +1,140 @@
 # wasdon-zig
 
-A binary translator from **WebAssembly (Core 1 / MVP)** to **Udon Assembly** — the textual form executed by VRChat's Udon VM. Written in Zig.
+A translator from **WebAssembly** to **Udon Assembly** — the textual form of
+the bytecode VRChat's Udon VM executes. Written in Zig.
 
-The name `wasdon` = **Wa**SM → U**don**.
+`wasdon` = **Wa**SM → U**don**.
 
-## Overview
+Udon programs are normally written in Udon Graph or UdonSharp. `wasdon-zig`
+opens a third path: compile Zig, Rust, C — anything that targets
+WebAssembly — and translate the result. The repository also contains an
+Udon VM emulator and an Udon Assembly checker, so translated programs can be
+verified and measured without Unity.
 
-VRChat's Udon VM is a custom bytecode interpreter that runs inside a .NET sandbox. Assembly is usually produced by Udon Graph or UdonSharp; `wasdon-zig` opens a second path by taking arbitrary WASM as input and emitting equivalent assembly, so you can author Udon-world behaviour in C, Rust, Zig, AssemblyScript, or any language that targets WebAssembly.
+## What makes this hard
 
-The translator's main design challenges come from Udon's unusual constraints:
+- **No local variables, no value stack.** Every value is a field of the
+  UdonBehaviour. WASM locals and the operand stack become heap slots.
+- **No call or return.** Only `JUMP`, `JUMP_IF_FALSE`, `JUMP_INDIRECT`; the
+  translator synthesizes a calling convention.
+- **No arithmetic.** Every operation is an `EXTERN` on a .NET method, and
+  slots are strictly typed.
+- **No raw memory.** Linear memory is a .NET `byte[]`.
 
-- **No local variables.** Everything is a field on the UdonBehaviour (on the heap). WASM locals and the WASM value stack are all flattened into per-function heap slots.
-- **No call / return instructions.** Only `JUMP`, `JUMP_INDIRECT`, and `JUMP_IF_FALSE` exist. The translator synthesises a return-address-constant (RAC) based ABI.
-- **No raw byte memory.** WASM linear memory is lowered to a two-level chunked array (`SystemObjectArray` × `SystemUInt32Array`); byte-level access expands to shift/mask sequences.
-- **Host calls are `EXTERN` with .NET signature strings.** Import names themselves are parsed as Udon extern signatures and dispatched generically — no per-import tables, no translator edits for new externs.
-
-The authoritative design is in `docs/`; each `spec_*.md` covers one translation concern.
+Because `EXTERN` dominates run time on the Udon VM, the translator is built
+around emitting as few of them as possible. See `docs/benchmarks.md` for
+measurements.
 
 ## Status
 
-Covers enough of the surface to translate `examples/wasm-bench` structurally end to end:
-
-- [x] WASM Core 1 / MVP binary parser (types, imports/exports, code, data, element, custom/name)
-- [x] `__udon_meta` JSON metadata extraction from data segments
-- [x] Arithmetic (full i32 / i64 / f64 via EXTERN signatures)
-- [x] Structured control flow (block / loop / if-else / br / br_if / br_table / return)
-- [x] Locals and globals (`__{fn}_P{i}__` / `__{fn}_L{i}__` / `__G__{name}` naming)
-- [x] Direct calls with the RAC-based ABI
-- [x] Full `call_indirect` (shared `__ind_P*` / `__ind_R*` + per-function indirect entry + trampoline)
-- [x] Linear memory `i32.load` / `i32.store` with compile-time aligned fast path and 3-branch (unaligned within-chunk / page-straddling) fallback, plus `i64.load` / `i64.store` word-pair combine, `memory.size`
-- [x] Full `i32.load8_*` / `i32.store8` and `i32.store16` shift/mask RMW expansion
-- [x] `memory.grow` real allocation (per-page `SystemUInt32Array` ctor + outer `SetValue`, bounds-checked against `maxPages`)
-- [x] Conversion opcodes (`i32.wrap_i64`, `i64.extend_i32_*`, `i{32,64}.trunc_f{32,64}_{s,u}`, `f{32,64}.convert_i{32,64}_{s,u}`, `f32.demote_f64`, `f64.promote_f32`, `{i,f}{32,64}.reinterpret_{f,i}{32,64}`)
-- [x] Host import dispatch via signature grammar, with `SystemString` marshalling from `(ptr, len)`
-- [x] `__udon_meta.functions` → Udon event-label mapping (`_start` / `_update` / `_interact` / …)
-- [x] Recursive-function call-stack spill (opt-in via `__udon_meta.options.recursion = "stack"`, Tarjan-SCC based detection, prologue/epilogue spill of P / L / R / RA onto `__call_stack__`)
-- [x] CLI (`translate <in.wasm> [-o <out.uasm>]`)
-- [ ] `i32.trunc_sat_*` (0xFC prefix, post-MVP) and other non-MVP extensions
+- [x] WASM Core 1 parser, plus sign-extension, non-trapping float-to-int and
+      bulk-memory instructions
+- [x] Every Core 1 numeric instruction (`i32` / `i64` / `f32` / `f64`,
+      including unsigned operations, rotations, `clz`/`ctz`/`popcnt`,
+      conversions) — `docs/spec_numeric_conversion.md`
+- [x] Structured control flow, direct and indirect calls, recursion, the
+      start function — `docs/spec_call_return_conversion.md`
+- [x] Linear memory: all load/store widths at any alignment, `memory.grow`,
+      `memory.copy`, `memory.fill` — `docs/spec_linear_memory.md`
+- [x] Udon externs as imports, with string marshalling, `ref`/`out`
+      arguments and opaque object handles —
+      `docs/spec_host_import_conversion.md`
+- [x] `__udon_meta`: events, Inspector/synced fields, options —
+      `docs/spec_udonmeta_conversion.md`
+- [x] Udon Assembly conformance checker and Udon VM emulator —
+      `docs/udon_vm.md`
+- [ ] Not supported: passive data segments, multi-value block parameters,
+      reference types, SIMD, threads, tail calls, exceptions
 
 ## Getting started
 
-### Build
-
-Zig 0.16+ is required (pinned via `mise.toml`).
+Zig 0.16 is required (pinned in `mise.toml`).
 
 ```sh
-zig build                 # builds the CLI into zig-out/bin/wasdon_zig
-zig build test            # runs the full test suite (162 tests)
-zig build wasm-example    # compiles examples/wasm-bench/main.zig to MVP WASM and copies it into the testdata dirs
+zig build                      # the CLI: zig-out/bin/wasdon_zig
+zig build test                 # unit + integration tests
+zig build examples             # example modules: zig-out/wasm/*.wasm
+zig build stats                # size and executed-instruction table for every example
 ```
 
-### Translate
+Add `-Drust` to include the Rust examples (needs `cargo` and the
+`wasm32v1-none` target).
 
 ```sh
-# build the bench fixture, then translate it
-zig build wasm-example
-zig build run -- translate src/translator/testdata/bench.wasm -o /tmp/bench.uasm
-
-# or use the installed binary directly
-./zig-out/bin/wasdon_zig translate path/to/input.wasm -o output.uasm
+wasdon_zig translate app.wasm -o app.uasm --stats
+wasdon_zig check app.uasm
+wasdon_zig run app.uasm --events "_start,_update*60,_interact" --profile
 ```
 
-Omit `-o` to write to stdout.
+- `translate` writes Udon Assembly and, with `--stats`, the heap size and
+  instruction counts of the result.
+- `check` validates Udon Assembly against the language rules and the Udon
+  node list.
+- `run` executes it in the emulator and reports the instructions and
+  externs each event executed.
 
-### Writing your own WASM
-
-Host functions are declared with Zig's raw-identifier syntax using the Udon extern signature as the import name:
+### A minimal program
 
 ```zig
-extern "env" fn @"SystemConsole.__WriteLine__SystemString__SystemVoid"(
-    ptr: [*]const u8,
-    len: usize,
-) void;
+extern "env" fn @"UnityEngineDebug.__Log__SystemString__SystemVoid"(ptr: [*]const u8, len: usize) void;
 
-export fn on_start() void {
-    const msg = "hi";
-    @"SystemConsole.__WriteLine__SystemString__SystemVoid"(msg.ptr, msg.len);
+export fn _start() void {
+    const msg = "hello from WebAssembly";
+    @"UnityEngineDebug.__Log__SystemString__SystemVoid"(msg.ptr, msg.len);
 }
 ```
 
-The translator parses the import name against the Udon extern signature grammar (`docs/udon_specs.md` §7) and dispatches it generically, so adding new externs never requires touching the translator. `SystemString` arguments are automatically UTF-8 decoded from the `(ptr, len)` pair.
+An import named after an Udon extern signature is called as that extern; an
+exported function named after an Udon event becomes that event. Metadata is
+only needed for Inspector fields, synced variables and options
+(`docs/producer_guide.md`).
 
-For an end-to-end walkthrough — toolchain pinning (Zig + Rust `wasm32v1-none`), Cargo workspace layout, host-import declarations, mutable-state limitations, `__udon_meta` discovery rules, recursion opt-in, and the build → translate pipeline — see [`docs/producer_guide.md`](docs/producer_guide.md). Working examples live under `examples/` (Zig: `wasm-bench`, `udon-orbit`; Rust: `wasm-bench-rs`, `udon-orbit-rs`).
+### In Unity
 
-Udon-side field names, events, sync modes, and memory sizing are configured via a `__udon_meta` JSON blob embedded in the module (see `docs/spec_udonmeta_conversion.md`):
+Copy `unity/Wasdon/` into your project's `Assets/` folder and create a
+**Wasdon Assembly Program Asset**
+(`Create > VRChat > Udon > Wasdon Assembly Program Asset`). It sizes the
+Udon heap from the program; the stock Udon Assembly Program Asset only fits
+programs of up to 512 heap slots (`docs/spec_heap_size.md`).
 
-```zig
-const udon_meta_json =
-    \\{
-    \\  "version": 1,
-    \\  "functions": {
-    \\    "start": { "source": {"kind":"export","name":"on_start"}, "label":"_start", "export": true, "event":"Start" }
-    \\  },
-    \\  "fields": {
-    \\    "counter": { "source":{"kind":"global","name":"counter"}, "udonName":"_counter", "type":"int", "export": true }
-    \\  },
-    \\  "options": {
-    \\    "memory": { "initialPages": 1, "maxPages": 16 }
-    \\  }
-    \\}
-;
-
-export fn __udon_meta_ptr() [*]const u8 { return udon_meta_json.ptr; }
-export fn __udon_meta_len() u32 { return @intCast(udon_meta_json.len); }
-```
-
-## Project layout
+## Layout
 
 ```
-docs/                       # Specs — the source of truth for translation strategy
-├─ udon_specs.md                   # Udon Assembly reference
-├─ w3c_wasm_binary_format_note.md  # Notes on the WASM Core 1 binary format
-├─ spec_variable_conversion.md     # WASM locals/globals → Udon field naming
-├─ spec_linear_memory.md           # Linear memory → two-level chunked array
-├─ spec_call_return_conversion.md  # Synthesising call/return from RAC + JUMP_INDIRECT
-├─ spec_udonmeta_conversion.md     # __udon_meta JSON schema and resolution rules
-├─ spec_host_import_conversion.md  # Generic host-import dispatch via signature grammar
-└─ producer_guide.md               # Producer-side guide: writing WASM that the translator accepts (Zig, Rust on wasm32v1-none, raw WAT)
-
+docs/                        Specifications — read before changing the translator
 src/
-├─ wasm/                   # WASM Core 1 / MVP binary parser (translator-agnostic)
-├─ udon/                   # Udon Assembly construction primitives (type-name encoder + asm writer + 2-pass layout)
-├─ translator/             # WASM → Udon lowering core
-│  ├─ names.zig                 # Naming-convention helpers
-│  ├─ lower_numeric.zig         # opcode → EXTERN signature dispatch table
-│  ├─ extern_sig.zig            # Udon extern signature parser
-│  ├─ lower_import.zig          # Generic host-import dispatcher + type-erased Host interface
-│  └─ translate.zig             # Per-instruction lowering, call ABI, call_indirect, memory init, event entries
-├─ root.zig                # Library surface
-└─ main.zig                # CLI
-
-examples/                   # Producer-side fixtures (also serve as worked examples for docs/producer_guide.md)
-├─ wasm-bench/             # Zig → MVP WASM bench fixture
-├─ wasm-bench-rs/          # Rust port of wasm-bench (wasm32v1-none, no_std)
-├─ udon-orbit/             # Zig VRChat orbit-and-clone showcase
-└─ udon-orbit-rs/          # Rust port of udon-orbit
+├─ wasm/                     WASM binary parser, __udon_meta decoding
+├─ udon/                     Udon Assembly: writer, reader, checker, VM emulator, node list
+├─ translator/               WASM → Udon lowering
+│  ├─ translate.zig              module level: reachability, memory, globals, events, init
+│  ├─ lower.zig                  function bodies: operand stack, control flow, calls, memory
+│  └─ callgraph.zig              call graph and recursion detection
+├─ root.zig                  library surface (`@import("wasdon_zig")`)
+└─ main.zig                  CLI
+test/                        integration tests and the statistics tool over examples/
+examples/                    producer-side examples (Zig and Rust)
+unity/Wasdon/                Unity editor support
 ```
-
-## Testing
-
-`zig build test` runs 185 unit and integration tests:
-
-- Parser tests in `src/wasm/*.zig` (including `__udon_meta` parse coverage for `options.recursion`)
-- Assembly writer tests in `src/udon/*.zig`
-- Signature-parser tests in `src/translator/extern_sig.zig`, including a regression round-trip over the entire numeric EXTERN table
-- Call-graph / Tarjan SCC tests in `src/translator/recursion.zig` (self-recursion, mutual recursion, linear chains)
-- Mock-`Host`-based tests for the generic import dispatcher in `src/translator/lower_import.zig`
-- End-to-end structural assertions in `src/translator/translate.zig` that `@embedFile` the compiled `bench.wasm` and check the emitted assembly, plus synthesized-module tests for unaligned memory access and recursion spill
-
-Execution on the real Udon VM depends on the VRChat runtime and cannot be validated from CI, so the translator's responsibility stops at "emit a structurally spec-conformant Udon Assembly program."
 
 ## Using it as a library
-
-Add `wasdon-zig` as a dependency in `build.zig.zon` and `@import("wasdon_zig")`:
 
 ```zig
 const wasdon_zig = @import("wasdon_zig");
 
-pub fn translate_wasm(
-    gpa: std.mem.Allocator,
-    wasm_bytes: []const u8,
-    writer: *std.Io.Writer,
-) !void {
-    try wasdon_zig.translateBytes(gpa, wasm_bytes, writer, .{});
+pub fn translate(gpa: std.mem.Allocator, wasm_bytes: []const u8, out: *std.Io.Writer) !void {
+    const stats = try wasdon_zig.translateBytes(gpa, wasm_bytes, out, .{});
+    std.log.info("heap size {d}", .{stats.heapSize()});
 }
 ```
 
-The sub-modules (`wasdon_zig.wasm` / `.udon` / `.translator`) are independently importable — if you only need the WASM parser, pull the `wasm` module alone.
+`wasdon_zig.wasm`, `.udon` and `.translator` are importable on their own.
+
+## Testing
+
+Tests do not stop at "the output looks right". Every example and every
+synthesized module is translated, **checked** against the Udon Assembly
+rules and the node list, **executed** in the emulator, and compared with its
+expected behaviour. Execution on the real Udon VM still needs Unity; the
+emulator follows the behaviour documented in `docs/udon_vm.md`.
 
 ## License
 

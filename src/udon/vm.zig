@@ -56,6 +56,15 @@ pub const Stats = struct {
     }
 };
 
+/// What one step of a scenario cost.
+pub const EventStat = struct {
+    name: []const u8,
+    runs: u32,
+    /// False when the program does not export the event.
+    found: bool,
+    stats: Stats,
+};
+
 pub const Options = struct {
     /// Abort an event after this many instructions (the real VM uses a
     /// 10 second wall-clock watchdog instead).
@@ -262,6 +271,30 @@ pub const Vm = struct {
         if (!l.is_export) return false;
         try self.run(l.addr);
         return true;
+    }
+
+    /// Run a scenario: a comma-separated list of events, each optionally
+    /// repeated with `*N` — `"_start,_interact*3,_update*60"`. `_update`
+    /// advances the clock by one frame per run. One `EventStat` per list
+    /// entry is appended to `out` (allocated in the VM arena); on a fault the
+    /// entries completed so far remain.
+    pub fn runScenario(self: *Vm, spec: []const u8, out: *std.ArrayList(EventStat)) Error!void {
+        const a = self.arena.allocator();
+        var it = std.mem.tokenizeScalar(u8, spec, ',');
+        while (it.next()) |tok| {
+            const star = std.mem.indexOfScalar(u8, tok, '*');
+            const name = std.mem.trim(u8, if (star) |i| tok[0..i] else tok, " ");
+            const runs: u32 = if (star) |i| std.fmt.parseInt(u32, tok[i + 1 ..], 10) catch return self.raise("bad repeat count in scenario step '{s}'", .{tok}) else 1;
+            const before = self.stats;
+            var found = true;
+            const is_update = std.mem.eql(u8, name, "_update");
+            for (0..runs) |_| {
+                if (is_update) try self.tick() else found = try self.runEvent(name);
+                if (!found) break;
+            }
+            if (is_update) found = self.prog.label_index.contains("_update");
+            try out.append(a, .{ .name = name, .runs = runs, .found = found, .stats = self.stats.sub(before) });
+        }
     }
 
     /// Advance one frame: bump the clock and fire `_update`.

@@ -68,7 +68,7 @@ fn isPrimitive(t: []const u8) bool {
 
 fn isThisTarget(t: []const u8) bool {
     const targets = [_][]const u8{
-        "UnityEngineGameObject",                      "UnityEngineTransform",
+        "UnityEngineGameObject",                     "UnityEngineTransform",
         "VRCUdonCommonInterfacesIUdonEventReceiver", "VRCUdonUdonBehaviour",
     };
     for (targets) |x| if (std.mem.eql(u8, t, x)) return true;
@@ -120,6 +120,10 @@ pub fn check(gpa: std.mem.Allocator, prog: *const Program) std.mem.Allocator.Err
     report.named_vars = prog.named_count;
     report.code_bytes = prog.code_size;
     report.instructions = @intCast(prog.code.len);
+    if (prog.declared_heap_size) |declared| {
+        if (declared != report.heap_size)
+            try ctx.err(0, "the heap-size comment says {d} slots but the program needs {d}", .{ declared, report.heap_size });
+    }
     if (report.heap_size > max_heap_size)
         try ctx.err(0, "program needs {d} heap slots; the Udon VM caps the heap at {d}", .{ report.heap_size, max_heap_size });
     report.errors = try ctx.errors.toOwnedSlice(ctx.a);
@@ -507,6 +511,11 @@ test "instance calls take one extra leading operand" {
         \\EXTERN, "UnityEngineTransform.__get_position__UnityEngineVector3"
         \\JUMP, 0xFFFFFFFC
     ));
+}
+
+test "a wrong heap-size comment is an error" {
+    try expectError(".data_start\n    # wasdon-zig heap-size: 7\n    a: %SystemInt32, 0\n.data_end\n.code_start\nJUMP, 0xFFFFFFFC\n.code_end\n", "heap-size comment says 7");
+    try expectClean(".data_start\n    # wasdon-zig heap-size: 1\n    a: %SystemInt32, 0\n.data_end\n.code_start\nJUMP, 0xFFFFFFFC\n.code_end\n");
 }
 
 test "report counts heap usage" {

@@ -1,15 +1,10 @@
-//! Thin Zig wrappers around the Udon "bare node" externs used by udon-orbit.
+//! Thin Zig wrappers around the Udon externs used by udon-orbit.
 //!
-//! Each Udon extern is declared here with its verbatim signature from
+//! Each extern is declared with its verbatim signature from
 //! `docs/udon_nodes.txt` and re-exposed under a small Unity-shaped namespace
-//! so call sites read like normal Unity API code instead of one-line
-//! `@"UnityEngine..."(...)` walls.
-//!
-//! Every Udon object type crosses the WASM boundary as an opaque `i32`
-//! heap-handle — never do arithmetic on those values. See
-//! `docs/spec_host_import_conversion.md` for the calling convention
-//! (instance methods take the receiver as the first WASM arg when the WASM
-//! arity is one greater than the signature's arg-list length).
+//! so call sites read like Unity API code. Instance methods take the
+//! receiver as the first WASM argument
+//! (`docs/spec_host_import_conversion.md`).
 
 // ---------- Raw externs (verbatim from docs/udon_nodes.txt) ----------
 
@@ -50,20 +45,25 @@ extern "env" fn @"VRCInstantiate.__Instantiate__UnityEngineGameObject__UnityEngi
     go: i32,
 ) i32;
 
-// `self` is a Udon-only singleton bound through a WASM **function** import.
-// Zig (Zig 0.16, MVP target) does not emit `(import "env" "x" (global ...))`
-// declarations, but it does emit `(import "env" "x" (func ...))` correctly
-// for `extern fn`. The translator's `__udon_meta.fields[*]` entry declares
-// this nullary import to be a pure read of the data slot
-// `__G__self: %UnityEngineTransform, this` — the call lowers to
-// `PUSH __G__self ; PUSH retslot ; COPY` rather than to a real Udon EXTERN.
-// No linear-memory backing, no `i32.load` chain through a fake address.
+// Udon variables bound through `__udon_meta.fields` (`kind: "import"`):
+// these imports are not externs. The translator turns each call into a read
+// or write of the named Udon variable.
 extern "env" fn @"udon.self"() i32;
+extern "env" fn @"udon.clone_count"() i32;
+extern "env" fn @"udon.set_clone_count"(n: i32) void;
 
 // ---------- Wrappers ----------
 
 pub inline fn self() i32 {
     return @"udon.self"();
+}
+
+pub inline fn cloneCount() i32 {
+    return @"udon.clone_count"();
+}
+
+pub inline fn setCloneCount(n: i32) void {
+    @"udon.set_clone_count"(n);
 }
 
 pub const Debug = struct {

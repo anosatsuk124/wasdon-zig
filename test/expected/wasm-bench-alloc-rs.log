@@ -1,0 +1,47 @@
+S0: alive
+S1: bump_reset ok
+S2: alloc 16/4 ok
+S3: store ok
+S4: read back hex = cafebabe
+S5: bump_reset ok (#2)
+S6: Vec::new ok
+S7: push(42) ok; v[0] = 42
+S8: pushed 64 more; len = 65
+=== on_start end ===
+== vec_push_sum ==
+len = 1000
+cap = 1024
+sum lo32 = 500500
+bump used (bytes) = 8176
+== box_chain ==
+nodes = 200
+sum lo32 = 20100
+bump used (bytes) = 1600
+== string_concat ==
+len = 256
+checksum = 75b78dc0
+bump used (bytes) = 504
+== nested_vec ==
+rows = 32
+total len = 528
+total lo32 = 87296
+bump used (bytes) = 5712
+== btree_sum ==
+entries = 100
+sum lo32 = 328350
+bump used (bytes) = 1776
+== grow_probe ==
+memory.size before pages = 21
+memory.grow returned = 21
+memory.size after  pages = 22
+peak bump (bytes) = 0
+(no more steps)
+(no more steps)
+(no more steps)
+(no more steps)
+(no more steps)
+(no more steps)
+(no more steps)
+(no more steps)
+(no more steps)
+(no more steps)

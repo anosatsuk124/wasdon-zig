@@ -2,23 +2,20 @@
 
 const std = @import("std");
 
-pub const names = @import("names.zig");
-pub const numeric = @import("lower_numeric.zig");
-pub const extern_sig = @import("extern_sig.zig");
-pub const lower_import = @import("lower_import.zig");
-pub const recursion = @import("recursion.zig");
-pub const translate = @import("translate.zig");
+pub const callgraph = @import("callgraph.zig");
+pub const translate_ = @import("translate.zig");
+pub const lower = @import("lower.zig");
 
-pub const translateModule = translate.translate;
-pub const Options = translate.Options;
-pub const Error = translate.Error;
+pub const translate = translate_.translate;
+pub const Options = translate_.Options;
+pub const Diagnostics = translate_.Diagnostics;
+pub const Stats = translate_.Stats;
+pub const Error = translate_.Error;
 
 test {
     std.testing.refAllDecls(@This());
-    _ = names;
-    _ = numeric;
-    _ = extern_sig;
-    _ = lower_import;
-    _ = recursion;
-    _ = translate;
+    _ = callgraph;
+    _ = translate_;
+    _ = lower;
+    _ = @import("tests.zig");
 }

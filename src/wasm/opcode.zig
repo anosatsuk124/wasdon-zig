@@ -1,4 +1,5 @@
-//! Opcode table for WASM Core 1 / MVP.
+//! Opcode table: WASM Core 1 (MVP) plus the sign-extension, non-trapping
+//! float-to-int and bulk-memory proposals.
 //!
 //! This module is the single source of truth for every opcode this parser
 //! recognises. Anything that needs a full enumeration — decoder dispatch,
@@ -26,11 +27,21 @@ pub const Immediate = enum {
     block,
     loop,
     if_,
-    memory_op, // memory.size / memory.grow — consumes a reserved 0x00 byte
+    memory_op, // memory.size / memory.grow / memory.fill — consumes a reserved 0x00 byte
+    dataidx, // data.drop
+    dataidx_reserved, // memory.init (dataidx followed by 0x00)
+    two_reserved, // memory.copy (two reserved 0x00 bytes)
 };
+
+/// First byte of the two-byte opcode space used by the saturating
+/// truncation and bulk-memory instructions; the second part is a LEB128
+/// sub-opcode stored in `OpSpec.ext`.
+pub const prefix_fc: u8 = 0xFC;
 
 pub const OpSpec = struct {
     opcode: u8,
+    /// Sub-opcode when `opcode == prefix_fc`.
+    ext: u32 = 0,
     tag: []const u8,
     mnemonic: []const u8,
     imm: Immediate,
@@ -234,11 +245,35 @@ pub const spec = [_]OpSpec{
     .{ .opcode = 0xBD, .tag = "i64_reinterpret_f64", .mnemonic = "i64.reinterpret_f64", .imm = .none },
     .{ .opcode = 0xBE, .tag = "f32_reinterpret_i32", .mnemonic = "f32.reinterpret_i32", .imm = .none },
     .{ .opcode = 0xBF, .tag = "f64_reinterpret_i64", .mnemonic = "f64.reinterpret_i64", .imm = .none },
+
+    // --- sign-extension operators ---
+    .{ .opcode = 0xC0, .tag = "i32_extend8_s", .mnemonic = "i32.extend8_s", .imm = .none },
+    .{ .opcode = 0xC1, .tag = "i32_extend16_s", .mnemonic = "i32.extend16_s", .imm = .none },
+    .{ .opcode = 0xC2, .tag = "i64_extend8_s", .mnemonic = "i64.extend8_s", .imm = .none },
+    .{ .opcode = 0xC3, .tag = "i64_extend16_s", .mnemonic = "i64.extend16_s", .imm = .none },
+    .{ .opcode = 0xC4, .tag = "i64_extend32_s", .mnemonic = "i64.extend32_s", .imm = .none },
+
+    // --- non-trapping float-to-int conversions (0xFC 0..7) ---
+    .{ .opcode = 0xFC, .ext = 0, .tag = "i32_trunc_sat_f32_s", .mnemonic = "i32.trunc_sat_f32_s", .imm = .none },
+    .{ .opcode = 0xFC, .ext = 1, .tag = "i32_trunc_sat_f32_u", .mnemonic = "i32.trunc_sat_f32_u", .imm = .none },
+    .{ .opcode = 0xFC, .ext = 2, .tag = "i32_trunc_sat_f64_s", .mnemonic = "i32.trunc_sat_f64_s", .imm = .none },
+    .{ .opcode = 0xFC, .ext = 3, .tag = "i32_trunc_sat_f64_u", .mnemonic = "i32.trunc_sat_f64_u", .imm = .none },
+    .{ .opcode = 0xFC, .ext = 4, .tag = "i64_trunc_sat_f32_s", .mnemonic = "i64.trunc_sat_f32_s", .imm = .none },
+    .{ .opcode = 0xFC, .ext = 5, .tag = "i64_trunc_sat_f32_u", .mnemonic = "i64.trunc_sat_f32_u", .imm = .none },
+    .{ .opcode = 0xFC, .ext = 6, .tag = "i64_trunc_sat_f64_s", .mnemonic = "i64.trunc_sat_f64_s", .imm = .none },
+    .{ .opcode = 0xFC, .ext = 7, .tag = "i64_trunc_sat_f64_u", .mnemonic = "i64.trunc_sat_f64_u", .imm = .none },
+
+    // --- bulk memory (0xFC 8..11) ---
+    .{ .opcode = 0xFC, .ext = 8, .tag = "memory_init", .mnemonic = "memory.init", .imm = .dataidx_reserved },
+    .{ .opcode = 0xFC, .ext = 9, .tag = "data_drop", .mnemonic = "data.drop", .imm = .dataidx },
+    .{ .opcode = 0xFC, .ext = 10, .tag = "memory_copy", .mnemonic = "memory.copy", .imm = .two_reserved },
+    .{ .opcode = 0xFC, .ext = 11, .tag = "memory_fill", .mnemonic = "memory.fill", .imm = .memory_op },
 };
 
-/// Find the spec entry for a byte. Returns `null` if the byte is not a known
-/// Core 1 opcode.
+/// Find the spec entry for a single-byte opcode. Returns `null` if the byte
+/// is not one (including the `0xFC` prefix itself).
 pub fn find(opcode: u8) ?OpSpec {
+    if (opcode == prefix_fc) return null;
     inline for (spec) |s| {
         if (s.opcode == opcode) return s;
     }
@@ -263,18 +298,18 @@ test "opcode table: all opcodes unique" {
     comptime {
         for (spec, 0..) |a, i| {
             for (spec[i + 1 ..]) |b| {
-                if (a.opcode == b.opcode) @compileError("duplicate opcode");
+                if (a.opcode == b.opcode and a.ext == b.ext) @compileError("duplicate opcode");
             }
         }
     }
 }
 
-test "opcode table: expected count (Core 1 MVP)" {
-    // 11 control + 2 parametric + 5 variable + 25 memory + 4 numeric-const
+test "opcode table: expected count" {
+    // Core 1: 11 control + 2 parametric + 5 variable + 25 memory + 4 const
     // + 11 i32 cmp + 11 i64 cmp + 6 f32 cmp + 6 f64 cmp
     // + 18 i32 arith + 18 i64 arith + 14 f32 arith + 14 f64 arith + 25 conv
-    // = 170
-    try std.testing.expectEqual(@as(usize, 170), spec.len);
+    // = 170; plus 5 sign-extension, 8 saturating truncation, 4 bulk memory.
+    try std.testing.expectEqual(@as(usize, 170 + 5 + 8 + 4), spec.len);
 }
 
 test "opcode table: critical entries present" {
@@ -288,7 +323,9 @@ test "opcode table: critical entries present" {
     // Unknown
     try std.testing.expect(find(0x05) == null);
     try std.testing.expect(find(0x12) == null);
-    try std.testing.expect(find(0xC0) == null);
+    try std.testing.expect(std.mem.eql(u8, find(0xC0).?.tag, "i32_extend8_s"));
+    try std.testing.expect(find(0xC5) == null);
+    try std.testing.expect(find(0xFC) == null);
 }
 
 test "mnemonicFor returns canonical mnemonic" {

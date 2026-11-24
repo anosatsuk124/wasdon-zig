@@ -20,25 +20,32 @@ pub const FieldSyncMode = enum { none, linear, smooth };
 /// `export` is a Zig keyword so the enum field is escaped; `stringToEnum`
 /// matches on the unescaped name "export".
 pub const SourceKind = enum { global, symbol, name, @"export", import };
-/// Types a `__udon_meta.fields[*].type` JSON value may declare.
-///
-/// `gameobject`, `transform`, and `udon_behaviour` are the three reference
-/// types the Udon runtime accepts as `this`-init targets — see
-/// `src/udon/type_name.zig` for the runtime constraint that motivates each
-/// variant. Use them when the field needs to be initialised to `this`.
-pub const FieldType = enum {
-    bool_,
-    int,
-    uint,
-    float,
-    string,
-    object,
-    gameobject,
-    transform,
-    udon_behaviour,
-};
+/// Resolve a `__udon_meta.fields[*].type` value to an Udon type name. The
+/// short aliases cover the common cases; anything else is taken to already
+/// be an Udon type name (`UnityEngineTexture2D`, `SystemByteArray`, …) and is
+/// validated against the node list by the translator.
+pub fn udonTypeName(s: []const u8) []const u8 {
+    const aliases = [_]struct { []const u8, []const u8 }{
+        .{ "bool", "SystemBoolean" },
+        .{ "int", "SystemInt32" },
+        .{ "uint", "SystemUInt32" },
+        .{ "float", "SystemSingle" },
+        .{ "string", "SystemString" },
+        .{ "object", "SystemObject" },
+        .{ "gameobject", "UnityEngineGameObject" },
+        .{ "transform", "UnityEngineTransform" },
+        .{ "udonBehaviour", "VRCUdonCommonInterfacesIUdonEventReceiver" },
+        .{ "udon_behaviour", "VRCUdonCommonInterfacesIUdonEventReceiver" },
+    };
+    for (aliases) |a| if (std.mem.eql(u8, s, a[0])) return a[1];
+    return s;
+}
+
 pub const EventKind = enum { Start, Update, Interact, custom };
 pub const UnknownPolicy = enum { ignore, warn, error_ };
+/// `stack`: functions on a call-graph cycle save their frame around calls
+/// that may re-enter them. `disabled`: the producer asserts no function is
+/// ever re-entered, and no frames are saved.
 pub const RecursionMode = enum { disabled, stack };
 
 pub const Source = struct {
@@ -49,6 +56,9 @@ pub const Source = struct {
     /// to a `(import "<module>" "<name>" (global …))` declaration in
     /// the WASM binary.
     module: ?[]const u8 = null,
+    /// Name of a second function import (same module) that writes the
+    /// field. Only meaningful when `kind == .import`.
+    setter: ?[]const u8 = null,
 };
 
 pub const FieldSync = struct {
@@ -60,7 +70,8 @@ pub const Field = struct {
     key: []const u8,
     source: Source,
     udon_name: ?[]const u8 = null,
-    type: ?FieldType = null,
+    /// Udon type name (aliases already resolved).
+    type_name: ?[]const u8 = null,
     is_export: bool = false,
     sync: FieldSync = .{},
     default: ?std.json.Value = null,
@@ -92,7 +103,9 @@ pub const Options = struct {
     unknown_field_policy: ?UnknownPolicy = null,
     unknown_function_policy: ?UnknownPolicy = null,
     memory: MemoryOptions = .{},
-    recursion: RecursionMode = .disabled,
+    recursion: RecursionMode = .stack,
+    /// Slots in the frame stack used by recursive functions.
+    call_stack_size: ?u32 = null,
 };
 
 pub const UdonMeta = struct {
@@ -147,22 +160,6 @@ fn enumFromStringOrError(comptime E: type, s: []const u8, comptime err: errors.P
     return std.meta.stringToEnum(E, s) orelse return err;
 }
 
-// The field enum uses `bool_` / `error_` because those words are Zig keywords.
-// JSON emits the real names; translate manually.
-fn parseFieldType(s: []const u8) errors.ParseError!FieldType {
-    if (std.mem.eql(u8, s, "bool")) return .bool_;
-    if (std.mem.eql(u8, s, "int")) return .int;
-    if (std.mem.eql(u8, s, "uint")) return .uint;
-    if (std.mem.eql(u8, s, "float")) return .float;
-    if (std.mem.eql(u8, s, "string")) return .string;
-    if (std.mem.eql(u8, s, "object")) return .object;
-    if (std.mem.eql(u8, s, "gameobject")) return .gameobject;
-    if (std.mem.eql(u8, s, "transform")) return .transform;
-    if (std.mem.eql(u8, s, "udonBehaviour")) return .udon_behaviour;
-    if (std.mem.eql(u8, s, "udon_behaviour")) return .udon_behaviour;
-    return error.InvalidFieldType;
-}
-
 fn parseUnknownPolicy(s: []const u8) errors.ParseError!UnknownPolicy {
     if (std.mem.eql(u8, s, "ignore")) return .ignore;
     if (std.mem.eql(u8, s, "warn")) return .warn;
@@ -183,6 +180,7 @@ fn parseSource(obj: std.json.ObjectMap) errors.ParseError!Source {
     var src: Source = .{ .kind = kind };
     if (obj.get("name")) |nv| src.name = try getStringFromValue(nv);
     if (obj.get("module")) |mv| src.module = try getStringFromValue(mv);
+    if (obj.get("setter")) |sv| src.setter = try getStringFromValue(sv);
     return src;
 }
 
@@ -215,8 +213,7 @@ fn parseField(allocator: std.mem.Allocator, key: []const u8, v: std.json.Value) 
     var f: Field = .{ .key = key, .source = source };
     if (obj.get("udonName")) |uv| f.udon_name = try getStringFromValue(uv);
     if (obj.get("type")) |tv| {
-        const ts = try getStringFromValue(tv);
-        f.type = try parseFieldType(ts);
+        f.type_name = udonTypeName(try getStringFromValue(tv));
     }
     if (obj.get("export")) |ev| f.is_export = try getBoolFromValue(ev);
     if (obj.get("sync")) |sv| {
@@ -284,6 +281,7 @@ fn parseOptions(obj: std.json.ObjectMap) errors.ParseError!Options {
         const rs = try getStringFromValue(rv);
         o.recursion = try parseRecursionMode(rs);
     }
+    if (obj.get("callStackSize")) |cv| o.call_stack_size = try getU32FromValue(cv);
     return o;
 }
 
@@ -527,12 +525,12 @@ test "parse options.recursion=stack" {
     try std.testing.expectEqual(RecursionMode.stack, m.options.recursion);
 }
 
-test "parse options.recursion default is disabled" {
+test "parse options.recursion default is stack" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const j = "{\"version\":1,\"options\":{}}";
     const m = try parse(arena.allocator(), j);
-    try std.testing.expectEqual(RecursionMode.disabled, m.options.recursion);
+    try std.testing.expectEqual(RecursionMode.stack, m.options.recursion);
 }
 
 test "parse options.recursion invalid string" {

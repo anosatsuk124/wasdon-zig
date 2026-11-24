@@ -136,6 +136,8 @@ pub const Program = struct {
     label_index: std.StringHashMapUnmanaged(u32) = .empty,
     code_size: u32 = 0,
     issues: []Issue = &.{},
+    /// Value of a `# wasdon-zig heap-size: N` comment, if the text has one.
+    declared_heap_size: ?u32 = null,
 
     pub fn deinit(self: *Program) void {
         self.arena.deinit();
@@ -193,7 +195,14 @@ pub fn parse(gpa: std.mem.Allocator, text: []const u8, diag: ?*Diagnostic) Parse
     while (lines.next()) |raw_line| {
         line_no += 1;
         const line = std.mem.trim(u8, stripComment(raw_line), " \t\r");
-        if (line.len == 0) continue;
+        if (line.len == 0) {
+            const marker = "# wasdon-zig heap-size:";
+            if (std.mem.indexOf(u8, raw_line, marker)) |at| {
+                const digits = std.mem.trim(u8, raw_line[at + marker.len ..], " \t\r");
+                prog.declared_heap_size = std.fmt.parseInt(u32, digits, 10) catch null;
+            }
+            continue;
+        }
         const fail = struct {
             fn f(d: ?*Diagnostic, n: u32, msg: []const u8) ParseError {
                 if (d) |p| p.* = .{ .line = n, .message = msg };

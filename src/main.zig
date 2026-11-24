@@ -9,8 +9,10 @@ const udon = wasdon_zig.udon;
 
 const usage =
     \\Usage:
-    \\  wasdon-zig translate <input.wasm> [-o <output.uasm>] [--mem-oob-diagnostics]
+    \\  wasdon-zig translate <input.wasm> [-o <output.uasm>] [--strict] [--stats]
     \\      Translate a WebAssembly module to Udon Assembly (stdout without -o).
+    \\      --strict rejects imports that are not Udon externs; --stats prints
+    \\      the size of the result, including the heap size it needs.
     \\  wasdon-zig check <program.uasm>
     \\      Validate Udon Assembly against the spec and the Udon node list, and
     \\      report the heap size it needs.
@@ -61,7 +63,9 @@ fn readFile(cli: *Cli, path: []const u8) ![]u8 {
 fn runTranslate(cli: *Cli, args: []const []const u8) !u8 {
     var input: ?[]const u8 = null;
     var output: ?[]const u8 = null;
-    var options: wasdon_zig.Options = .{};
+    var diagnostics: wasdon_zig.Diagnostics = .init(cli.arena);
+    var options: wasdon_zig.Options = .{ .diagnostics = &diagnostics };
+    var show_stats = false;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const a = args[i];
@@ -69,8 +73,10 @@ fn runTranslate(cli: *Cli, args: []const []const u8) !u8 {
             i += 1;
             if (i == args.len) return cli.fail("-o requires a path", .{});
             output = args[i];
-        } else if (std.mem.eql(u8, a, "--mem-oob-diagnostics")) {
-            options.mem_oob_diagnostics = true;
+        } else if (std.mem.eql(u8, a, "--strict")) {
+            options.strict = true;
+        } else if (std.mem.eql(u8, a, "--stats")) {
+            show_stats = true;
         } else if (a.len > 0 and a[0] == '-') {
             return cli.fail("unknown option '{s}'", .{a});
         } else input = a;
@@ -81,8 +87,15 @@ fn runTranslate(cli: *Cli, args: []const []const u8) !u8 {
     // Translate fully before touching the output so a failure leaves no
     // half-written file behind.
     var text: Io.Writer.Allocating = .init(cli.arena);
-    wasdon_zig.translateBytes(cli.arena, wasm_bytes, &text.writer, options) catch |e|
-        return cli.fail("translation failed: {t}", .{e});
+    const stats = wasdon_zig.translateBytes(cli.arena, wasm_bytes, &text.writer, options) catch |e|
+        return cli.fail("{s}: {t}{s}{s}", .{ in_path, e, if (diagnostics.message.len != 0) ": " else "", diagnostics.message });
+    const err = &cli.err.interface;
+    for (diagnostics.warnings.items) |w| try err.print("warning: {s}\n", .{w});
+    if (show_stats) try err.print(
+        "{s}: heap {d} slots ({d} variables + {d} extern signatures), {d} instructions ({d} externs), {d} code bytes\n",
+        .{ in_path, stats.heapSize(), stats.vars, stats.unique_externs, stats.instructions, stats.externs, stats.code_bytes },
+    );
+    try err.flush();
     if (output) |p| {
         try std.Io.Dir.cwd().writeFile(cli.init.io, .{ .sub_path = p, .data = text.written() });
     } else {
@@ -114,32 +127,18 @@ fn runCheck(cli: *Cli, args: []const []const u8) !u8 {
     for (report.errors) |e| try w.print("{s}:{d}: {s}\n", .{ args[0], e.line, e.message });
     try w.print(
         \\{s}: {d} error(s)
-        \\  heap slots     {d}  ({d} variables + {d} string literals; stock assembler heap is {d})
+        \\  heap slots     {d}  ({d} variables + {d} string literals; the stock assembler heap is {d})
         \\  instructions   {d}  ({d} EXTERN, {d} distinct signatures)
         \\  code bytes     {d}
         \\
     , .{
-        args[0],              report.errors.len,
-        report.heap_size,     report.named_vars,
+        args[0],                              report.errors.len,
+        report.heap_size,                     report.named_vars,
         report.heap_size - report.named_vars, udon.check.default_heap_size,
-        report.instructions,  report.externs,
-        report.unique_externs, report.code_bytes,
+        report.instructions,                  report.externs,
+        report.unique_externs,                report.code_bytes,
     });
     return @intFromBool(!report.ok());
-}
-
-const EventStep = struct { name: []const u8, count: u32 };
-
-fn parseEvents(arena: std.mem.Allocator, spec: []const u8) ![]EventStep {
-    var steps: std.ArrayList(EventStep) = .empty;
-    var it = std.mem.tokenizeScalar(u8, spec, ',');
-    while (it.next()) |tok| {
-        const star = std.mem.indexOfScalar(u8, tok, '*');
-        const name = if (star) |s| tok[0..s] else tok;
-        const count = if (star) |s| try std.fmt.parseInt(u32, tok[s + 1 ..], 10) else 1;
-        try steps.append(arena, .{ .name = name, .count = count });
-    }
-    return steps.items;
 }
 
 fn runProgram(cli: *Cli, args: []const []const u8) !u8 {
@@ -172,42 +171,30 @@ fn runProgram(cli: *Cli, args: []const []const u8) !u8 {
         } else input = a;
     }
     const path = input orelse return cli.fail("run requires a .uasm path", .{});
-    const steps = parseEvents(cli.arena, events) catch return cli.fail("bad --events list", .{});
     const prog = (try loadProgram(cli, path)) orelse return 1;
     for (prog.issues) |issue| return cli.fail("{s}:{d}: {s}", .{ path, issue.line, issue.message });
 
     const vm = try udon.vm.Vm.init(cli.arena, &prog, options);
     const w = &cli.out.interface;
-    var printed: usize = 0;
-    var status: u8 = 0;
+    var steps: std.ArrayList(udon.vm.EventStat) = .empty;
+    const outcome = vm.runScenario(events, &steps);
+    if (!quiet) for (vm.logs.items) |l| try w.print("[{t}] {s}\n", .{ l.level, l.text });
     try w.print("{s}: heap {d} slots ({d} named), code {d} bytes\n", .{ path, prog.heapSize(), prog.named_count, prog.code_size });
-    try w.print("{s:<14} {s:>6} {s:>14} {s:>12} {s:>12}\n", .{ "event", "runs", "instructions", "externs", "per run" });
-    outer: for (steps) |step| {
-        const before = vm.stats;
-        var ran: u32 = 0;
-        while (ran < step.count) : (ran += 1) {
-            const is_update = std.mem.eql(u8, step.name, "_update");
-            const found = (if (is_update) blk: {
-                vm.tick() catch |e| break :blk e;
-                break :blk true;
-            } else vm.runEvent(step.name)) catch |e| {
-                if (!quiet) for (vm.logs.items[printed..]) |l| try w.print("  [{t}] {s}\n", .{ l.level, l.text });
-                const f = vm.fault orelse udon.vm.Fault{ .pc = 0, .message = "" };
-                try w.flush();
-                status = cli.fail("{s} halted at pc=0x{X:0>8}: {t}: {s}", .{ step.name, f.pc, e, f.message });
-                break :outer;
-            };
-            if (!found) {
-                try w.print("{s:<14} (not exported)\n", .{step.name});
-                continue :outer;
-            }
-            if (!quiet) for (vm.logs.items[printed..]) |l| try w.print("  [{t}] {s}\n", .{ l.level, l.text });
-            printed = vm.logs.items.len;
+    try w.print("{s:<16} {s:>6} {s:>14} {s:>12} {s:>12}\n", .{ "event", "runs", "instructions", "externs", "per run" });
+    for (steps.items) |st| {
+        if (!st.found) {
+            try w.print("{s:<16} (not exported)\n", .{st.name});
+            continue;
         }
-        const d = vm.stats.sub(before);
-        try w.print("{s:<14} {d:>6} {d:>14} {d:>12} {d:>12}\n", .{ step.name, step.count, d.instrs, d.externs, d.instrs / @max(step.count, 1) });
+        try w.print("{s:<16} {d:>6} {d:>14} {d:>12} {d:>12}\n", .{ st.name, st.runs, st.stats.instrs, st.stats.externs, st.stats.instrs / @max(st.runs, 1) });
     }
-    try w.print("{s:<14} {s:>6} {d:>14} {d:>12}\n", .{ "total", "", vm.stats.instrs, vm.stats.externs });
+    try w.print("{s:<16} {s:>6} {d:>14} {d:>12}\n", .{ "total", "", vm.stats.instrs, vm.stats.externs });
+    var status: u8 = 0;
+    outcome catch |e| {
+        const f = vm.fault orelse udon.vm.Fault{ .pc = 0, .message = "" };
+        try w.flush();
+        status = cli.fail("halted at pc=0x{X:0>8}: {t}: {s}", .{ f.pc, e, f.message });
+    };
     if (profile_top) |top| {
         try w.writeAll("\nextern profile (executions):\n");
         for ((try vm.profile())[0..@min(top, vm.resolved.len)]) |r| {
@@ -216,13 +203,4 @@ fn runProgram(cli: *Cli, args: []const []const u8) !u8 {
         }
     }
     return status;
-}
-
-test "parseEvents" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const steps = try parseEvents(arena.allocator(), "_start,_interact*3,_update*60");
-    try std.testing.expectEqual(@as(usize, 3), steps.len);
-    try std.testing.expectEqualStrings("_interact", steps[1].name);
-    try std.testing.expectEqual(@as(u32, 60), steps[2].count);
 }

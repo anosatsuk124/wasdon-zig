@@ -36,7 +36,7 @@ pub const If = struct {
     else_body: ?[]const Instruction,
 };
 
-/// One variant per Core 1 opcode. Keep in lockstep with `opcode.spec`.
+/// One variant per entry of `opcode.spec`; keep the two in lockstep.
 pub const Instruction = union(enum) {
     // control
     unreachable_,
@@ -235,6 +235,30 @@ pub const Instruction = union(enum) {
     i64_reinterpret_f64,
     f32_reinterpret_i32,
     f64_reinterpret_i64,
+
+    // sign-extension operators
+    i32_extend8_s,
+    i32_extend16_s,
+    i64_extend8_s,
+    i64_extend16_s,
+    i64_extend32_s,
+
+    // non-trapping float-to-int conversions
+    i32_trunc_sat_f32_s,
+    i32_trunc_sat_f32_u,
+    i32_trunc_sat_f64_s,
+    i32_trunc_sat_f64_u,
+    i64_trunc_sat_f32_s,
+    i64_trunc_sat_f32_u,
+    i64_trunc_sat_f64_s,
+    i64_trunc_sat_f64_u,
+
+    // bulk memory
+    /// Operand is the data segment index.
+    memory_init: u32,
+    data_drop: u32,
+    memory_copy,
+    memory_fill,
 };
 
 // Compile-time invariant: every opcode in `spec` has a matching union tag,
@@ -285,8 +309,10 @@ pub fn decodeInstruction(allocator: std.mem.Allocator, r: *Reader) errors.ParseE
     if (op == 0x0B) return error.UnexpectedEndOpcode;
     if (op == 0x05) return error.UnexpectedElseOpcode;
 
+    const ext: u32 = if (op == opcode.prefix_fc) try leb128.readULEB128(u32, r) else 0;
+
     inline for (opcode.spec) |s| {
-        if (s.opcode == op) {
+        if (s.opcode == op and s.ext == ext) {
             switch (s.imm) {
                 .none => return @unionInit(Instruction, s.tag, {}),
                 .labelidx, .funcidx, .localidx, .globalidx => {
@@ -311,6 +337,19 @@ pub fn decodeInstruction(allocator: std.mem.Allocator, r: *Reader) errors.ParseE
                     const reserved = try r.readByte();
                     if (reserved != 0x00) return error.MalformedReserved;
                     return @unionInit(Instruction, s.tag, {});
+                },
+                .two_reserved => {
+                    if (try r.readByte() != 0x00 or try r.readByte() != 0x00) return error.MalformedReserved;
+                    return @unionInit(Instruction, s.tag, {});
+                },
+                .dataidx => {
+                    const idx = try leb128.readULEB128(u32, r);
+                    return @unionInit(Instruction, s.tag, idx);
+                },
+                .dataidx_reserved => {
+                    const idx = try leb128.readULEB128(u32, r);
+                    if (try r.readByte() != 0x00) return error.MalformedReserved;
+                    return @unionInit(Instruction, s.tag, idx);
                 },
                 .i32_imm => {
                     const v = try leb128.readSLEB128(i32, r);
@@ -521,8 +560,28 @@ test "decode unknown opcode rejected" {
         error.UnexpectedElseOpcode,
         decodeInstruction(std.testing.allocator, &r),
     );
-    var r2 = mk(&[_]u8{0xC0});
+    var r2 = mk(&[_]u8{0xC5});
     try std.testing.expectError(error.UnknownOpcode, decodeInstruction(std.testing.allocator, &r2));
+    // 0xFC 12 is table.init, which this parser does not support.
+    var r3 = mk(&[_]u8{ 0xFC, 0x0C });
+    try std.testing.expectError(error.UnknownOpcode, decodeInstruction(std.testing.allocator, &r3));
+}
+
+test "decode sign-extension, saturating truncation and bulk memory" {
+    var r = mk(&[_]u8{0xC0});
+    try std.testing.expect(try decodeInstruction(std.testing.allocator, &r) == .i32_extend8_s);
+    var r2 = mk(&[_]u8{ 0xFC, 0x02 });
+    try std.testing.expect(try decodeInstruction(std.testing.allocator, &r2) == .i32_trunc_sat_f64_s);
+    var r3 = mk(&[_]u8{ 0xFC, 0x0A, 0x00, 0x00 });
+    try std.testing.expect(try decodeInstruction(std.testing.allocator, &r3) == .memory_copy);
+    var r4 = mk(&[_]u8{ 0xFC, 0x0B, 0x00 });
+    try std.testing.expect(try decodeInstruction(std.testing.allocator, &r4) == .memory_fill);
+    var r5 = mk(&[_]u8{ 0xFC, 0x08, 0x03, 0x00 });
+    try std.testing.expectEqual(@as(u32, 3), (try decodeInstruction(std.testing.allocator, &r5)).memory_init);
+    var r6 = mk(&[_]u8{ 0xFC, 0x09, 0x02 });
+    try std.testing.expectEqual(@as(u32, 2), (try decodeInstruction(std.testing.allocator, &r6)).data_drop);
+    var r7 = mk(&[_]u8{ 0xFC, 0x0A, 0x00, 0x01 });
+    try std.testing.expectError(error.MalformedReserved, decodeInstruction(std.testing.allocator, &r7));
 }
 
 test "decodeExpr empty" {

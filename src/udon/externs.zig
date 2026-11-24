@@ -69,11 +69,11 @@ fn raw(comptime argc: u8, comptime f: Fn) Impl {
 
 const NumType = struct { name: []const u8, T: type };
 const num_types = [_]NumType{
-    .{ .name = "SystemInt32", .T = i32 },   .{ .name = "SystemUInt32", .T = u32 },
-    .{ .name = "SystemInt64", .T = i64 },   .{ .name = "SystemUInt64", .T = u64 },
-    .{ .name = "SystemSingle", .T = f32 },  .{ .name = "SystemDouble", .T = f64 },
-    .{ .name = "SystemByte", .T = u8 },     .{ .name = "SystemSByte", .T = i8 },
-    .{ .name = "SystemInt16", .T = i16 },   .{ .name = "SystemUInt16", .T = u16 },
+    .{ .name = "SystemInt32", .T = i32 },  .{ .name = "SystemUInt32", .T = u32 },
+    .{ .name = "SystemInt64", .T = i64 },  .{ .name = "SystemUInt64", .T = u64 },
+    .{ .name = "SystemSingle", .T = f32 }, .{ .name = "SystemDouble", .T = f64 },
+    .{ .name = "SystemByte", .T = u8 },    .{ .name = "SystemSByte", .T = i8 },
+    .{ .name = "SystemInt16", .T = i16 },  .{ .name = "SystemUInt16", .T = u16 },
 };
 
 fn isInt(comptime T: type) bool {
