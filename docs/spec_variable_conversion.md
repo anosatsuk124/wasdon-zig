@@ -41,7 +41,9 @@ itself reserves for event parameters or with names the producer chooses in
 | linear memory, its size | `__G__memory`, `__G__memory_size_pages` | `spec_linear_memory.md` §2 |
 | data segment *n*, decode scratch | `__data_{n}`, `__data_bytes` | §8 |
 | store arrays | `__st_{type}` | §4 |
+| derived-value cache slot *k* (0–7) | `__derived{k}` | §5 |
 | `i32` constant | `__c_i32_{value}` (`n` prefix for negatives) | `spec_numeric_conversion.md` §5 |
+| byte constant | `__c_u8_{value}` | `spec_linear_memory.md` §3 |
 | other constant | `__c_{type}_{hex bits}` | |
 | constant pool | `__kpool`, `__kpool_b64` | |
 | UTF-8 encoding object | `__utf8` | `spec_host_import_conversion.md` §3 |

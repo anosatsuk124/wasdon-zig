@@ -56,6 +56,44 @@ The intermediate value of a two-step load lives in a temporary of its own
 .NET type (`SystemByte`, `SystemUInt16`, …): slots are never read as a type
 other than the one last written (`docs/udon_vm.md` §3).
 
+### Pending loads
+
+A load is not emitted when its instruction is lowered. It stays on the
+translation-time operand stack as a *pending* entry — "the value at this
+address" — and is emitted only when something needs the value. That lets
+the consumer do better than "read, then use":
+
+| The loaded value is… | Emitted instead | Externs |
+|---|---|---:|
+| stored straight back (`load` then `store` of at most the loaded width) | `Buffer.BlockCopy(mem, src, mem, dst, n)` | 1, not 3–4 |
+| a byte tested for zero (`if`, `br_if`, `select`, `eqz`, `== 0`, `!= 0`) | `BitConverter.ToBoolean(mem, a)` | 1, not 3 |
+| a byte combined with another byte or a constant 0–255 by `+ - * & \| ^ << >>` or a comparison | `SystemByteArray.Get` then the `SystemByte` operator | 2, not 3 |
+| anything else | the load from the table above | |
+
+`SystemByte` operators take two bytes and return `Int32` (or `Boolean`), as
+C# computes them on `int`s; they are the i32 results, and they absorb the
+`Convert.ToInt32` each operand would otherwise need. Byte constants cannot
+be literals, so each one used is converted from an `Int32` constant during
+initialization (`__c_u8_{value}`).
+
+A pending load must still read memory as it was when the load instruction
+ran. It is emitted before anything that could change the answer:
+
+- any store, `memory.copy`, `memory.fill`, `memory.grow`;
+- any call, direct, indirect or to an extern (an extern can write memory
+  through the array, `docs/spec_host_import_conversion.md`);
+- the start of a `block`, `loop` or `if`;
+- an assignment to the local its address is based on.
+
+Its address must be stable for it to stay pending at all: a constant, a
+local, or a temporary the entry owns. A load from any other address (a
+global, say) is emitted at once.
+
+Deferral means an out-of-bounds load whose value is never used (`drop`)
+does not fault, and one that is used faults where it is used rather than
+where it was written. WASM traps at the load; here the event ends either
+way.
+
 ## 4. Stores
 
 .NET has no "write these four bytes" call that takes an `int`. The
@@ -89,6 +127,16 @@ Buffer.BlockCopy(__kpool, <offset>, mem, a, n)
 `a = base + memarg.offset`. When the base is a constant the sum is folded;
 when the offset is zero the base slot is used directly; otherwise one
 `SystemInt32.op_Addition` computes it.
+
+**Derived values are remembered.** When the base is a local, the sum goes
+to one of eight shared slots (`__derived0` … `__derived7`) together with a
+note of which local and offset it is. A later access to the same field —
+the store of `p.x += v` after its load, say — finds the note and reuses the
+slot. The same cache holds `local ^ 0x80000000`, the operand of an unsigned
+comparison (`docs/spec_numeric_conversion.md` §3). A note is dropped when
+its local is assigned, and all of them at every label (other paths lead
+there) and after every call (the callee uses the same slots, and an extern
+may run another event of the behaviour).
 
 ## 6. Bulk memory
 

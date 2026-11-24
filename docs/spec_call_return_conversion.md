@@ -154,7 +154,7 @@ function performs an indirect call.
 | `loop` | label at the start; branches jump to it |
 | `if` / `else` | `PUSH cond; JUMP_IF_FALSE else`, then arm, `JUMP end`, else arm |
 | `br` | move carried values to the target's join slots, `JUMP` |
-| `br_if` (no values) | `PUSH !cond; JUMP_IF_FALSE target` |
+| `br_if` (no values) | `PUSH !cond; JUMP_IF_FALSE target` — or, with only `cond` at hand, `PUSH cond; JUMP_IF_FALSE skip; JUMP target; skip:` |
 | `br_if` (values / return) | `PUSH cond; JUMP_IF_FALSE skip`, copy values, `JUMP target` |
 | `br_table` | one equality test per non-default case |
 | `return` | results to return registers, then return (§4) |
@@ -171,6 +171,20 @@ the others differ on NaN) instead of negating at run time. A condition is
 converted to `Int32` (`Convert.ToInt32(Boolean)`) only if it is used as a
 number. Compare-and-branch is therefore one extern plus `PUSH` and
 `JUMP_IF_FALSE`.
+
+**A Boolean is never negated to branch on it.** `JUMP_IF_FALSE` jumps on
+false, so each branch wants its condition in one particular sense. When the
+slot holds the other sense and the comparison cannot be swapped (a float
+`<`, a Boolean returned by an extern, a comparison that is no longer the
+last instruction), the branch is emitted as a `JUMP_IF_FALSE` over an
+unconditional `JUMP`. That is one extra cheap instruction on one of the two
+paths, where `SystemBoolean.op_UnaryNegation` would be an extern on both.
+`if` and `select` do the same.
+
+**A byte in memory is tested where it lies.** A condition that is an
+unsigned byte load (`if (flags[i])`, `while (*p)`) becomes one
+`BitConverter.ToBoolean(memory, address)` rather than a load, a conversion
+and a comparison (`docs/spec_linear_memory.md` §3).
 
 After emission, `Asm.optimize` threads jumps to jumps, removes jumps to the
 next instruction, and drops instructions no jump or fall-through can reach.

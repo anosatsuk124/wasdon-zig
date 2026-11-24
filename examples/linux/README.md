@@ -20,7 +20,7 @@ support, where `translate` stops at the first. It was added for this.
 
 ## The census
 
-`joelseverin/linux-wasm` (Linux 6.4, LLVM; target features: atomics,
+`joelseverin/linux-wasm` (Linux 6.4.16, clang 18.1.2; target features: atomics,
 bulk-memory, mutable-globals, sign-ext):
 
 ```
@@ -45,9 +45,10 @@ Not supported by the translator:
       …
 ```
 
-`tombl/linux` does not get that far: its module also uses exception
-handling, reference types, multi-value and SIMD (per its `target_features`
-section), which the parser does not read.
+`tombl/linux` (Linux 6.1.132, clang 19.1.7; 10010 functions, 2216 data
+segments) does not get that far: its module also uses exception handling,
+reference types, multi-value and SIMD (per its `target_features` section),
+which the parser does not read.
 
 ## What stands in the way
 

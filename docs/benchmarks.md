@@ -277,13 +277,13 @@ slots, byte constants one each).
    `local ^ 0x80000000` (the operand of an unsigned comparison) are kept in
    eight shared slots while the local is unchanged, so a load and a store of
    the same field, or several unsigned comparisons of the same local,
-   compute the value once (`docs/spec_linear_memory.md` §8).
+   compute the value once (`docs/spec_linear_memory.md` §5).
 3. **Pending loads.** A load is not emitted until its value is needed.
    A value loaded only to be stored becomes one `Buffer.BlockCopy` within
    memory (3–4 externs → 1); a byte tested for zero is one
    `BitConverter.ToBoolean`; a byte combined with another byte or a small
    constant uses the `SystemByte` operators, which return `Int32` and so
-   absorb the conversion (`docs/spec_linear_memory.md` §9).
+   absorb the conversion (`docs/spec_linear_memory.md` §3).
 
 The profile at step 0 showed where the rest goes — address arithmetic
 (`Int32` addition is 25–30 % of all externs in every example), the two

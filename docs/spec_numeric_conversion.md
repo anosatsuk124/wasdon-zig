@@ -58,6 +58,23 @@ constants, results of `load8_u` / `load16_u`, logical shifts by a constant
 When both operands are known non-negative the signed operation is used
 unchanged.
 
+A local remembers the flag of the value last assigned to it, so the
+knowledge survives `local.set` / `local.get` — but only along straight-line
+code: every label clears it for all locals, since other paths reach the
+label with other values. Declared locals start non-negative (they start at
+zero); parameters do not.
+
+The sign-flipped form of a local is kept in the derived-value cache
+(`docs/spec_linear_memory.md` §5), so comparing the same local unsigned
+several times flips it once.
+
+**Masks merge.** `(x & m) & c` with constant `m` and `c` is emitted as one
+`&` with `m & c`: when the second `&` arrives and the first is still the
+last instruction, its constant operand is replaced. This is what
+`(x >>> k) & c` — a bit-field extraction — turns into, the logical shift
+being an arithmetic shift and a mask. For commutative operators a constant
+operand is moved to the right first, so `c & x` is recognized too.
+
 | WASM | Lowering | Externs |
 |---|---|---:|
 | `lt_u le_u gt_u ge_u` | flip the sign bit of both operands (`xor MIN`), then the signed comparison; a constant operand is flipped at translation time | 1–3 |
