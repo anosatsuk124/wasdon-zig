@@ -121,7 +121,16 @@ uses) with the semantics above:
 It is stricter than the real VM in one respect: by default it faults when
 heap indices are left on the stack after a consuming instruction
 (`Options.strict_stack`). The real VM tolerates that; translated code never
-does it, so it is treated as a translator bug.
+does it — with one deliberate exception, which the emulator recognizes: a
+return address left standing at a `JUMP` and popped later by a `COPY` with
+a single operand (`docs/spec_call_return_conversion.md` §4, `stack` mode).
+
+Udon Assembly from other compilers can be run with the check off. That is
+how the UdonSharp side of the benchmark is measured
+(`examples/bench/usharp`): UdonSharp parks every return address on the
+stack, and sets heap defaults that have no literal form — the stack of a
+`[RecursiveMethod]`, for one — directly on the heap, which the caller of
+the emulator has to do as well.
 
 Externs (`src/udon/externs.zig`):
 
@@ -132,6 +141,14 @@ Externs (`src/udon/externs.zig`):
 - A few Unity members with real behaviour (`Vector3` math, `Time`,
   `Transform.GetChild`, `Texture2D.LoadRawTextureData`, `VRCInstantiate`,
   `SendCustomEvent`, …).
+- Scene state the examples' tests assert on: textures (size, format, mip
+  chain, uploaded bytes), line renderer points, child transforms, UI text,
+  ownership and manual sync (`RequestSerialization` runs
+  `_onPreSerialization` after the event, for the owner only), the clocks
+  WASI reads.
+- A .NET member with no implementation **faults** rather than returning a
+  default — translated programs depend on those bit for bit, and a default
+  silently changes their behaviour.
 - Everything else on a Unity/VRChat type goes to a **generic object model**:
   `get_X`/`set_X` read and write a per-object property bag, arrays of any
   element type work, and other calls are recorded in `Vm.calls` and return

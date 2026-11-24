@@ -339,6 +339,83 @@ and 1628.)
 `blockfall` over the whole log: 186976 → 122632 executed externs (−34 %);
 per button press 1363 → 727; per frame while a trio falls 213 → 151.
 
+### Steps 7–9 — recursion; against UdonSharp
+
+`examples/bench` holds one benchmark in four programs: UdonSharp, Zig,
+Rust, and Rust with `std` built for WASI (`examples/bench/README.md`). The
+UdonSharp side is the assembly its compiler emits, reproduced from the
+compiler's emit routines, and run in the same emulator.
+
+The first measurement had the translated recursion *slower* than
+UdonSharp's: every local, every block-result slot and the return address
+were saved around a recursive call, two externs each way per slot.
+
+Executed externs per workload:
+
+| | UdonSharp | Zig: before | 7: live slots, columns, Boolean locals | 8: return address on the VM stack | Rust (after 8) |
+|---|---:|---:|---:|---:|---:|
+| `Fib` | 251748 | 317413 | 164185 | 142294 | 164185 |
+| `Mandel` | 20657 | 16920 | 16920 | 16920 | 16920 |
+| `Str` | 194 | 69 | 69 | 69 | 69 |
+| total | 272599 | 334402 | 181174 | 159283 | 181174 |
+| instructions | 1438788 | 1603224 | 1001255 | 913692 | 951694 |
+
+7. **Frames.** A liveness pass finds, for every call, the locals read
+   again before they are overwritten; only those are saved. The recursion
+   stack is stored by column (`__frame{k}[depth]`), so a slot costs one
+   extern to save and one to restore, plus one counter update each way.
+   A local that only ever holds a condition is declared `SystemBoolean`,
+   which removes a conversion at its store and a comparison at its test —
+   here the loop condition LLVM computes before the last statements of the
+   loop body. `Fib`: 27 externs per iteration → 14.
+8. **Return addresses.** A recursive function's callers `PUSH` the return
+   address and leave it on the VM stack; the function pops it to return, as
+   UdonSharp's methods do. The address no longer needs a slot, so it no
+   longer needs saving: 14 → 12.
+9. **WASI.** `wasi_snapshot_preview1` imports are linked in as functions
+   written in WebAssembly (`docs/spec_wasi_preview_1.md`). The Rust `std`
+   program `examples/bench/wasi-rs` — `println!`, `String`, `Instant` — runs
+   185933 externs for all three workloads and their output, and Zig's
+   `examples/wasi-hello` 15437.
+
+Effect of steps 7–8 on the other examples (executed externs): `wasm-bench`
+8649 → 8122, `wasm-bench-rs` 8778 → 8251, the rest unchanged (no
+recursion, no condition locals in hot code).
+
+All examples after step 9 (`zig build stats -Drust`):
+
+| Example | heap | instr | externs | executed instr | executed externs |
+|---|---:|---:|---:|---:|---:|
+| `wasm-bench` | 711 | 10171 | 1829 | 44813 | 8122 |
+| `udon-orbit` | 68 | 188 | 40 | 8123 | 1926 |
+| `pi` | 102 | 621 | 120 | 316040 | 65314 |
+| `mandelbrot` | 205 | 974 | 190 | 4149134 | 858461 |
+| `image-codec` | 288 | 3097 | 603 | 1757824 | 374798 |
+| `ragdoll` | 301 | 2733 | 546 | 10243870 | 2355817 |
+| `blockfall` | 358 | 3154 | 574 | 595429 | 122632 |
+| `wasi-hello` | 1923 | 34405 | 6286 | 79584 | 15437 |
+| `bench-usharp` (UdonSharp) | 86 | 332 | 57 | 1438788 | 272599 |
+| `bench-zig` | 113 | 1751 | 338 | 913692 | 159283 |
+| `bench-rs` | 113 | 1755 | 341 | 951694 | 181174 |
+| `bench-wasi-rs` | 2480 | 59574 | 11404 | 976631 | 185933 |
+| `wasm-bench-rs` | 388 | 2741 | 398 | 42224 | 8251 |
+| `wasm-bench-alloc-rs` | 670 | 9458 | 1659 | 618190 | 118466 |
+| `udon-orbit-rs` | 64 | 167 | 36 | 6928 | 1628 |
+
+Against the very first baseline (commit `7d44799`), on the examples that
+existed then: `wasm-bench` 77567 → 8122 executed externs (9.6×),
+`wasm-bench-rs` 56129 → 8251 (6.8×), `wasm-bench-alloc-rs` 417177 → 118466
+(3.5×), `udon-orbit-rs` 6891 → 1628 (4.2×); heap 3042 → 711, 1363 → 388,
+2072 → 670, 620 → 64.
+
+### An experiment not adopted: every example at `ReleaseFast`
+
+Building the Zig examples for speed instead of size, measured after step 2:
+`wasm-bench` 8841 → 5809 executed externs, `blockfall` 186976 → 129305,
+the numeric ones 2–5 % fewer — at 1.5–3.3× the code. The benchmark is
+built that way; the others stay small, and `docs/producer_guide.md` §9a
+says when the trade is worth making.
+
 ## How the numbers are produced
 
 ```sh

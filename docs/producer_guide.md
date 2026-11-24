@@ -198,9 +198,9 @@ Every function has one static frame. Functions on a call-graph cycle save
 and restore their frame around the recursive call automatically
 (`docs/spec_call_return_conversion.md` §6). Only what is still needed after
 the call is saved, at two externs per value plus two per call — the
-recursive Fibonacci of `examples/bench` spends 8 of its 14 externs per call
-on it. That is cheaper than UdonSharp's `[RecursiveMethod]`, but a loop is
-cheaper still.
+recursive Fibonacci of `examples/bench` spends 6 of its 12 externs per call
+on it. That is well under what UdonSharp's `[RecursiveMethod]` costs
+(`docs/benchmarks.md`), but a loop is cheaper still.
 
 A program whose only "cycles" come from function pointers that never
 actually recurse can set `"options": { "recursion": "disabled" }`.
@@ -220,12 +220,63 @@ actually recurse can set `"options": { "recursion": "disabled" }`.
 
 ---
 
+## 9a. What is cheap and what is not
+
+On the Udon VM time is the number of externs executed. What that means for
+source code, from the examples' optimization log (`docs/benchmarks.md`):
+
+- **Use 32-bit fields and variables.** A word is read with one extern, a
+  byte with two; `u8`/`i8` arithmetic needs masking and sign extension that
+  `i32` does not. Keep bytes for bulk data (pixels, a board), not for
+  counters and coordinates.
+- **Do not iterate arrays by value.** Zig's `for (a.xs, a.ys) |x, y|`
+  copies both arrays to the stack first; index them, or iterate pointers.
+- **Keep hot values in locals.** A local is free; a field in memory costs
+  an extern per access, and after every store the compiler must reload
+  anything a pointer might alias — including a slice's own pointer. Copy
+  such things into locals before a loop and write them back after it.
+- **Tables beat tests.** A lookup indexed by a byte is two or three
+  externs; each `if` in front of it is at least one more.
+- **Draw only what changed**, and let the GPU scale: a 10 × 12 texture with
+  point filtering is a crisp board.
+- **Strings Udon will consume are best built by Udon.** One
+  `String.Concat` extern concatenates any two strings; doing it in linear
+  memory costs an allocator and a copy. `examples/udon/udon.zig` has
+  `udon.str` for this. Handles to strings live in locals like any handle.
+- **Speed over size for hot code.** `-O ReleaseFast` / `opt-level = 3`
+  unrolls and inlines, which removes loop-control externs; the code grows.
+  The benchmark is built that way, the other examples for size.
+- **Recursion is affordable, loops are cheaper** (§8).
+
+## 9b. WASI programs
+
+A module built for `wasm32-wasi` / `wasm32-wasip1` translates as it is:
+`println!`, `printf`, `String`, clocks and `exit` work, files and sockets
+answer "not available" (`docs/spec_wasi_preview_1.md`).
+
+```sh
+cargo build --release --target wasm32-wasip1
+wasdon_zig translate target/wasm32-wasip1/release/app.wasm -o app.uasm --stats
+wasdon_zig run app.uasm --events _start
+```
+
+- `main` runs inside the Start event and so under Udon's ten-second limit.
+- Each line written to stdout is one `Debug.Log`; stderr lines are
+  warnings. End the last line with a newline.
+- A portable runtime costs externs — formatting an integer for `println!`
+  is thousands — so use this for code that has to stay portable, and the
+  direct style of §4 for code that only targets Udon.
+- Options without touching the program: `--meta app.udon_meta.json`.
+
+---
+
 ## 10. Build, translate, check, run
 
 ```sh
 zig build                      # the translator: zig-out/bin/wasdon_zig
 zig build examples             # example modules: zig-out/wasm/*.wasm
 
+wasdon_zig inspect app.wasm    # size, imports, and anything unsupported
 wasdon_zig translate app.wasm -o app.uasm --stats
 wasdon_zig check app.uasm      # Udon Assembly rules + node list + heap size
 wasdon_zig run app.uasm --events "_start,_update*60,_interact" --profile

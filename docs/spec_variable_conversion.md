@@ -30,6 +30,7 @@ itself reserves for event parameters or with names the producer chooses in
 | temporary *n* | `__{fn}_T{n}__` | |
 | return address slot | `__{fn}_RA__` | §4 |
 | return-address constant *n* | `__ra_{n}`, `__ra_halt` | §4, §7 |
+| where a `stack`-mode function pops its return address | `__return_to` | §4 |
 | result register *k* | `__ret{k}_{type}` | §4 |
 | indirect-call argument *k*, return address | `__ia{k}_{type}`, `__ind_RA` | §4 |
 | function table and its image | `__table`, `__table_b64`, `__table_bytes` | §4 |

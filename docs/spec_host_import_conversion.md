@@ -115,13 +115,31 @@ Rules for producers:
 Results of handle type are written to temporaries declared with the Udon
 type the signature names, so each slot keeps one type.
 
+**Strings are handles too** when they are not marshalled: a `SystemString`
+result, or a string argument in the one-parameter-per-argument form, is a
+.NET string held by Udon. A program can build text entirely on the Udon
+side — `String.Concat(a, b)`, `Int32.ToString()`, `Debug.Log(object)` — at
+one extern per operation, which is how UdonSharp code does it and is far
+cheaper than assembling bytes in linear memory. `String.Copy(ptr, len)`
+turns bytes into such a handle.
+
 ## 5. Enum arguments
 
 Udon Assembly cannot create a non-zero enum value: the assembler only
 initializes enum variables to `null` (the default, 0), and Udon exposes no
-conversion from integer to enum. Prefer overloads without enum parameters
-(`Texture2D(int, int)` rather than `Texture2D(int, int, TextureFormat,
-bool)`), or receive the value in an Udon variable assigned in the Inspector.
+conversion from integer to enum. Three ways around it:
+
+- an overload without the enum parameter (`Texture2D(int, int)`);
+- **the enum's zero value**, from a variable that is never assigned: a
+  field of the enum's type bound to a getter import
+  (`"type": "UnityEngineFilterMode"` reads as `FilterMode.Point`);
+- **a value read from an object that has it**: `Texture2D.format` of a
+  texture made by the two-argument constructor is `RGBA32`, which can then
+  be passed to the four-argument one.
+
+`examples/udon/udon.zig` (`newTexture`) uses the last two to make an
+RGBA32, mipmap-free, point-filtered texture at run time. Failing all that,
+receive the value in an Udon variable assigned in the Inspector.
 
 ## 6. Udon variables as imports
 

@@ -12,10 +12,11 @@ Read the `docs/` specs before designing or changing any translation logic; the W
 
 - Zig is pinned via `mise` (`mise.toml`); `build.zig.zon` requires `minimum_zig_version = "0.16.0"`.
 - Build the CLI: `zig build` → `zig-out/bin/wasdon_zig`
-- Run the CLI: `zig build run -- <args>` (`translate`, `check`, `run`)
-- Run all tests: `zig build test` (add `-Drust` to include the Rust examples; needs `cargo` + `wasm32v1-none`)
+- Run the CLI: `zig build run -- <args>` (`inspect`, `translate`, `check`, `run`)
+- Run all tests: `zig build test` (add `-Drust` to include the Rust examples; needs `cargo` + the `wasm32v1-none` and `wasm32-wasip1` targets)
 - Build the example modules: `zig build examples`
 - Size / executed-instruction table for every example: `zig build stats` (`-- --profile <example>` for an extern profile)
+- Regenerate the examples' Unity assets: `zig build unity` — required after any change to the translator's output; `zig build test` fails while `unity/Wasdon/Examples/*.uasm.txt` is stale
 - There is no separate lint step; rely on `zig fmt` / the compiler.
 
 ## Module layout
@@ -24,11 +25,13 @@ Read the `docs/` specs before designing or changing any translation logic; the W
 
 - `src/wasm/` — WASM binary parser and `__udon_meta` decoding. Knows nothing about Udon.
 - `src/udon/` — Udon Assembly. `asm.zig` builds and writes programs; `program.zig` reads the text back; `check.zig` validates it; `vm.zig` + `externs.zig` execute it; `nodes.zig` is the node list and signature parser. Knows nothing about WASM.
-- `src/translator/` — the lowering. `translate.zig` is module level (what exists, events, init); `lower.zig` lowers function bodies; `callgraph.zig` finds recursion.
+- `src/translator/` — the lowering. `translate.zig` is module level (what exists, events, init); `lower.zig` lowers function bodies; `callgraph.zig` finds recursion; `liveness.zig` finds the locals live at each call and the ones that are only conditions; `wasi.zig` links WASI preview 1 into a module as WebAssembly; `inspect.zig` reports what a module needs.
 - `src/root.zig` — the public library module (`@import("wasdon_zig")`).
 - `src/main.zig` — the CLI; the only place that touches `std.process.Init`/stdio.
 
-Unit tests live next to the code. Integration tests live in `test/`: `fixtures.zig` lists the examples (their WASM binaries are built by `build.zig` and imported by name — nothing generated is checked in or copied into `src/`), `examples_test.zig` verifies them, `stats.zig` measures them.
+Unit tests live next to the code. Integration tests live in `test/`: `fixtures.zig` lists the examples (their WASM binaries are built by `build.zig` and imported by name — nothing generated is copied into `src/`), `examples_test.zig` verifies them, `stats.zig` measures them. `tools/unity_assets.zig` writes the examples' translations to `unity/Wasdon/Examples/`, the one place generated output is checked in.
+
+Examples (`examples/README.md`) keep their logic in a `core.zig` with no Udon in it; the tests compile that natively and compare the Udon run with it bit for bit. `examples/bench` is the benchmark against UdonSharp, whose assembly is reproduced by `examples/bench/usharp/emit_usharp.py`.
 
 ## Testing policy
 
@@ -37,6 +40,7 @@ A translation is not "tested" until it has been **checked and executed**:
 - Every program the tests translate must pass `udon.check.check` (Udon Assembly rules, node list, stack discipline, heap size) with zero findings.
 - Behaviour is verified by running the result in `udon.vm.Vm` and comparing logs / heap variables / recorded calls — not by matching substrings of the assembly text.
 - New WASM features get a test that executes them; new examples go in `test/fixtures.zig` with a scenario and expected output.
+- The emulator faults on a .NET extern it does not implement; implement it (`src/udon/externs.zig`) rather than letting a default through.
 - Performance work is recorded in `docs/benchmarks.md`: add a row with the numbers before and after (`zig build stats`).
 
 ## Udon constraints that drive design
@@ -88,7 +92,8 @@ Rule of thumb: if a file appears only because of *your* tool / editor / OS, it's
 - `docs/spec_linear_memory.md` — linear memory as a `byte[]`: loads, stores, bulk operations, growth, data segments.
 - `docs/spec_host_import_conversion.md` — imports as Udon externs: receivers, argument/result type mapping, strings, handles, Udon variables as imports.
 - `docs/spec_udonmeta_conversion.md` — the `__udon_meta` JSON: fields (`global` / `import` / `symbol`), event bindings, options.
+- `docs/spec_wasi_preview_1.md` — WASI preview 1: which functions exist, what each does on Udon, how they are linked in.
 - `docs/spec_variable_conversion.md` — naming of every variable the translator emits.
 - `docs/spec_heap_size.md` — why programs failed with a heap-size error, and how the size is now computed and applied.
 - `docs/producer_guide.md` — producer-side guide: target features, host imports, sharing state, events, recursion, memory, and the build → translate → check → run pipeline.
-- `docs/benchmarks.md` — the running record of output size and executed-instruction counts per example.
+- `docs/benchmarks.md` — the running record of output size and executed-instruction counts per example, including the comparison with UdonSharp.

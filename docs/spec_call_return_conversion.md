@@ -98,7 +98,17 @@ their entry is consumed, so a slot is only ever used at one type
 |---|---|---|---|
 | `halt` | only Udon events call the function | `JUMP, 0xFFFFFFFC` | nothing |
 | `direct` | exactly one call site, not in the function table | `JUMP` to the label after that call site | nothing |
+| `stack` | the function can be active more than once (it is on a call-graph cycle, §6) and is not in the function table | `PUSH, __return_to; COPY; JUMP_INDIRECT, __return_to` | `PUSH` a return-address constant and leave it there |
 | `indirect` | everything else | `JUMP_INDIRECT, __{fn}_RA__` | `COPY` a return-address constant into `__{fn}_RA__` |
+
+In `stack` mode the return address lives on the Udon VM's own stack — the
+one place in the VM that is a stack. The caller's `PUSH` stays below
+whatever the callee pushes and pops for its own instructions; at the end
+the callee pushes one more operand and executes `COPY`, which pops both:
+the destination `__return_to` and, as source, the address the caller left.
+UdonSharp returns from every method this way. Nothing has to be saved
+around a recursive call, where a per-function slot would be overwritten.
+The VM's stack grows on demand (initial capacity 1024).
 
 A **return-address constant** is a `SystemUInt32` variable `__ra_{N}` whose
 initial value is the bytecode address of the label after the call. Layout
@@ -232,13 +242,14 @@ way.
   loops, recording the live set at every call instruction);
 - the temporaries of operands still on the stack below the call's
   arguments;
-- `__{fn}_RA__`, if the function returns through it.
+- `__{fn}_RA__`, if the function returns through it — only recursive
+  functions in the function table do; the others use `stack` mode (§4) and
+  have no such slot.
 
 Join slots of enclosing blocks and the lowering's scratch slots are never
 live across a call and are not saved. For the textbook
 `fib(n) = fib(n-1) + fib(n-2)` — which the compiler turns into a loop
-around one recursive call — that is three slots: `n`, the running sum and
-the return address.
+around one recursive call — that is two slots: `n` and the running sum.
 
 Saving is done by the caller, before the arguments are written, because a
 self-recursive call writes its arguments into the very parameters being

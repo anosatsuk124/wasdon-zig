@@ -22,8 +22,9 @@ verified and measured without Unity.
 - **No raw memory.** Linear memory is a .NET `byte[]`.
 
 Because `EXTERN` dominates run time on the Udon VM, the translator is built
-around emitting as few of them as possible. See `docs/benchmarks.md` for
-measurements.
+around emitting as few of them as possible. On the same workloads, Zig and
+Rust translated this way execute 1.5–1.7× fewer externs than UdonSharp
+(`examples/bench`); `docs/benchmarks.md` has every measurement.
 
 ## Status
 
@@ -41,10 +42,17 @@ measurements.
       `docs/spec_host_import_conversion.md`
 - [x] `__udon_meta`: events, Inspector/synced fields, options —
       `docs/spec_udonmeta_conversion.md`
+- [x] WASI preview 1: programs built for `wasm32-wasi` / `wasm32-wasip1`
+      (Rust and Zig `std`, wasi-libc) run as they are, stdout to the Unity
+      console — `docs/spec_wasi_preview_1.md`
 - [x] Udon Assembly conformance checker and Udon VM emulator —
       `docs/udon_vm.md`
+- [x] Unity editor support and the examples as ready-made assets —
+      `unity/Wasdon/`
 - [ ] Not supported: passive data segments, multi-value block parameters,
-      reference types, SIMD, threads, tail calls, exceptions
+      reference types beyond the `call_indirect` encoding, SIMD, threads,
+      tail calls, exceptions (`wasdon_zig inspect` lists what a module
+      needs)
 
 ## Getting started
 
@@ -55,19 +63,24 @@ zig build                      # the CLI: zig-out/bin/wasdon_zig
 zig build test                 # unit + integration tests
 zig build examples             # example modules: zig-out/wasm/*.wasm
 zig build stats                # size and executed-instruction table for every example
+zig build unity                # regenerate unity/Wasdon/Examples from the examples
 ```
 
 Add `-Drust` to include the Rust examples (needs `cargo` and the
-`wasm32v1-none` target).
+`wasm32v1-none` and `wasm32-wasip1` targets).
 
 ```sh
+wasdon_zig inspect app.wasm
 wasdon_zig translate app.wasm -o app.uasm --stats
 wasdon_zig check app.uasm
 wasdon_zig run app.uasm --events "_start,_update*60,_interact" --profile
 ```
 
+- `inspect` reports a module's size, its imports, and everything in it the
+  translator does not support.
 - `translate` writes Udon Assembly and, with `--stats`, the heap size and
-  instruction counts of the result.
+  instruction counts of the result. `--meta file.json` supplies
+  `__udon_meta` from a file.
 - `check` validates Udon Assembly against the language rules and the Udon
   node list.
 - `run` executes it in the emulator and reports the instructions and
@@ -89,6 +102,26 @@ exported function named after an Udon event becomes that event. Metadata is
 only needed for Inspector fields, synced variables and options
 (`docs/producer_guide.md`).
 
+Or, with no Udon in the source at all:
+
+```rust
+fn main() {
+    println!("hello from Rust's std");
+}
+```
+
+```sh
+cargo build --release --target wasm32-wasip1
+wasdon_zig translate target/wasm32-wasip1/release/app.wasm -o app.uasm
+```
+
+### Examples
+
+`examples/` has the programs the tests run and measure: digits of π, a
+Mandelbrot renderer, a QOI image codec, a physically simulated humanoid, a
+networked falling-block puzzle, WASI programs, and a benchmark against
+UdonSharp. See `examples/README.md`.
+
 ### In Unity
 
 Copy `unity/Wasdon/` into your project's `Assets/` folder and create a
@@ -107,12 +140,16 @@ src/
 ├─ translator/               WASM → Udon lowering
 │  ├─ translate.zig              module level: reachability, memory, globals, events, init
 │  ├─ lower.zig                  function bodies: operand stack, control flow, calls, memory
-│  └─ callgraph.zig              call graph and recursion detection
+│  ├─ callgraph.zig              call graph and recursion detection
+│  ├─ liveness.zig               live locals at calls; locals that are only conditions
+│  ├─ wasi.zig                   WASI preview 1, linked in as WebAssembly
+│  └─ inspect.zig                what a module needs (`wasdon_zig inspect`)
 ├─ root.zig                  library surface (`@import("wasdon_zig")`)
 └─ main.zig                  CLI
 test/                        integration tests and the statistics tool over examples/
-examples/                    producer-side examples (Zig and Rust)
-unity/Wasdon/                Unity editor support
+tools/                       generator for the examples' Unity assets
+examples/                    producer-side examples (Zig, Rust, UdonSharp for comparison)
+unity/Wasdon/                Unity editor support and the examples as assets
 ```
 
 ## Using it as a library

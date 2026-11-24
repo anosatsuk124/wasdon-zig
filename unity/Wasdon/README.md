@@ -46,9 +46,11 @@ open scene, wired up and ready to enter Play mode or build:
 | `ragdoll` | sixteen joint spheres and a line renderer: a figure that walks about | interact to knock it over |
 | `blockfall` | a quad showing the well, a score line, five UI buttons | the buttons; synced for everyone in the instance |
 
-`wasm-bench` and `udon-orbit` have assets too; they only log
-(`wasm-bench`) or need an object to orbit and a prefab to clone
-(`udon-orbit` — see the comments in `examples/udon-orbit/main.zig`).
+The other examples have assets too, without scene objects of their own:
+`wasm-bench` and `wasi-hello` only log (put them on any UdonBehaviour and
+read the console); `bench-zig` runs a workload for each of the custom
+events `Fib`, `Mandel` and `Str`; `udon-orbit` needs an object to orbit and
+a prefab to clone (see the comments in `examples/udon-orbit/main.zig`).
 
 Notes:
 
