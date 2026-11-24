@@ -5602,7 +5602,7 @@ test "bench: every emitted EXTERN exists in Udon node list" {
     // ダンプした全 EXTERN ノード一覧 (LF 正規化済)。
     // 翻訳器が emit する EXTERN はすべてこのリストに含まれていなければ
     // 実機で "Function '...' is not implemented yet" で失敗する。
-    const nodes_raw = @embedFile("testdata/udon_nodes.txt");
+    const nodes_raw = @embedFile("udon_nodes");
 
     var nodes = std.StringHashMap(void).init(std.testing.allocator);
     defer nodes.deinit();
@@ -6846,7 +6846,7 @@ test "i64.rem_u expansion routes operands and result through BitConverter" {
 test "gate: every EXTERN emitted by bench resolves to a real Udon node" {
     const out = try translateBench(std.testing.allocator);
     defer std.testing.allocator.free(out);
-    const node_list = @embedFile("testdata/udon_nodes.txt");
+    const node_list = @embedFile("udon_nodes");
 
     var it = std.mem.splitScalar(u8, out, '\n');
     while (it.next()) |line| {
