@@ -33,3 +33,43 @@ Column meanings:
 Observation: every example needs more than 512 heap slots, which is the heap
 size the stock `UdonAssemblyProgramAsset` assembles with. This is the root of
 the "heap size" failures seen in Unity (see `docs/spec_heap_size.md`).
+
+## Dynamic cost
+
+Executed instruction counts in the bundled Udon VM emulator
+(`docs/udon_vm.md`). `EXTERN` is the expensive instruction on the real VM —
+each one is a delegate call plus one typed heap access per operand — so it is
+tracked separately.
+
+Scenarios:
+
+- bench-style examples: `_onEnable, _start, _interact ×16, _update ×10`
+- orbit examples: `_onEnable, _start, _update ×100, _interact ×2`
+
+### Baseline — commit `7d44799`
+
+| Example | instructions | externs | `_update` instr/frame | `_update` externs/frame |
+|---|---:|---:|---:|---:|
+| `wasm-bench` (Zig) | 386169 | 77567 | 105 | 21 |
+| `udon-orbit` (Zig) | 47972 | 10174 | 421 | 88 |
+| `udon-orbit-rs` (Rust) | 34885 | 6891 | 289 | 55 |
+| `wasm-bench-rs` (Rust) | 278686 | 56129 | 151 | 31 |
+| `wasm-bench-alloc-rs` (Rust) | 2315494 | 417177 | 105 | 21 |
+
+Top externs executed by `wasm-bench` at the baseline, which is where the
+redesign aims first — address arithmetic for the two-level memory, and the
+`BitConverter` round trips between `Int32` and `UInt32`:
+
+| executions | signature |
+|---:|---|
+| 8235 | `SystemInt32.__op_Addition__…` |
+| 8184 | `SystemInt32.__op_RightShift__…` |
+| 7455 | `SystemInt32.__op_LogicalAnd__…` |
+| 5777 | `SystemInt32.__op_LessThan__…` |
+| 4340 | `SystemObjectArray.__GetValue__…` |
+| 4074 | `SystemInt32.__op_LessThanOrEqual__…` |
+| 4060 | `SystemUInt32.__op_LogicalAnd__…` |
+| 3804 | `SystemUInt32Array.__Get__…` |
+| 3248 | `SystemInt32.__op_LeftShift__…` |
+| 2666 | `SystemBitConverter.__GetBytes__SystemInt32__…` |
+| 2666 | `SystemBitConverter.__ToUInt32__…` |

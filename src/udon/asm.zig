@@ -118,15 +118,15 @@ pub const Opcode = enum {
     jump_if_false, // 8 (addr)
     jump, // 8 (addr)
     extern_, // 8 (name string)
-    annotation, // 4 (param)
+    annotation, // 8 (param)
     jump_indirect, // 8 (var)
     copy, // 4
 };
 
 pub fn opcodeSize(op: Opcode) u32 {
     return switch (op) {
-        .nop, .pop, .annotation, .copy => 4,
-        .push, .jump_if_false, .jump, .extern_, .jump_indirect => 8,
+        .nop, .pop, .copy => 4,
+        .push, .jump_if_false, .jump, .extern_, .annotation, .jump_indirect => 8,
     };
 }
 

@@ -279,11 +279,11 @@ A parameter may be any of the following.
 | `JUMP_IF_FALSE` | 4 | 8 | 1 |
 | `JUMP` | 5 | 8 | 1 |
 | `EXTERN` | 6 | 8 | 1 |
-| `ANNOTATION` | 7 | 4 | 1 |
+| `ANNOTATION` | 7 | 8 | 1 |
 | `JUMP_INDIRECT` | 8 | 8 | 1 |
 | `COPY` | 9 | 4 | 0 |
 
-**Remarks:** Opcode number 3 is unused (reserved). Every instruction occupies either 4 or 8 bytes; consequently, when a code address is written in hexadecimal, its least-significant nibble is always one of `0`, `4`, `8`, or `C`.
+**Remarks:** Opcode number 3 is unused (reserved). Every instruction occupies either 4 bytes (no parameter) or 8 bytes (one parameter); consequently, when a code address is written in hexadecimal, its least-significant nibble is always one of `0`, `4`, `8`, or `C`.
 
 ### 6.2 Per-Instruction Specifications
 
@@ -381,9 +381,9 @@ EXTERN, "<externName>"
 
 - **Opcode:** 7
 - **Parameters:** 1
-- **Size:** 4 bytes
+- **Size:** 8 bytes
 
-Effectively a "parameterized NOP"; the parameter is ignored and there is no runtime effect.
+Effectively a "long NOP"; the parameter is ignored and there is no runtime effect. Like every other instruction with a parameter it occupies 8 bytes — the VM advances the program counter by 8 (`docs/udon_vm.md`). Treating it as 4 bytes shifts every later address by 4 and breaks all jumps after it.
 
 #### 6.2.8 `JUMP_INDIRECT, <parameter>`
 
@@ -652,7 +652,7 @@ EXTERN, "SomeType.__Foo__SystemInt32_SystemInt32__SystemInt32"
 | 4 | `JUMP_IF_FALSE, addr` | 8 | Conditional jump (Boolean == false) |
 | 5 | `JUMP, addr` | 8 | Unconditional jump |
 | 6 | `EXTERN, name` | 8 | External function call |
-| 7 | `ANNOTATION, x` | 4 | No effect (parameter ignored) |
+| 7 | `ANNOTATION, x` | 8 | No effect (parameter ignored) |
 | 8 | `JUMP_INDIRECT, var` | 8 | Indirect jump (uses `var`'s UInt32 value as the address) |
 | 9 | `COPY` | 4 | Heap-value copy |
 

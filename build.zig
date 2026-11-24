@@ -56,6 +56,7 @@ pub fn build(b: *std.Build) void {
     // against it; importing it by name keeps `zig build test` working on a
     // fresh clone (no generated copy under `testdata/` required).
     translator_mod.addAnonymousImport("udon_nodes", .{ .root_source_file = b.path("docs/udon_nodes.txt") });
+    udon_mod.addAnonymousImport("udon_nodes", .{ .root_source_file = b.path("docs/udon_nodes.txt") });
 
     const mod = b.addModule("wasdon_zig", .{
         // The root source file is the "entry point" of this module. Users of
