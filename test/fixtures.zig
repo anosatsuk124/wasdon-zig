@@ -381,6 +381,12 @@ pub const Result = struct {
     }
 };
 
+/// The Zig examples ship as Unity assets (`unity/Wasdon/Examples/`); the
+/// Rust ones need a toolchain not every build has.
+pub fn hasUnityAsset(ex: Example) bool {
+    return !std.mem.endsWith(u8, ex.name, "-rs");
+}
+
 /// Translate an example, check the output against the Udon Assembly rules,
 /// and run its scenario in the emulator.
 pub fn run(gpa: std.mem.Allocator, ex: Example, options: wasdon.Options) !Result {

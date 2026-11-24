@@ -139,8 +139,28 @@ pub fn build(b: *std.Build) void {
             .imports = &.{ .{ .name = "wasdon_zig", .module = lib_mod }, .{ .name = "fixtures", .module = fixtures } },
         }),
     });
+    // The checked-in Unity assets must be what the translator produces now.
+    for (zig_examples) |ex| {
+        integration.root_module.addAnonymousImport(b.fmt("unity/{s}.uasm.txt", .{ex.name}), .{
+            .root_source_file = b.path(b.fmt("unity/Wasdon/Examples/{s}.uasm.txt", .{ex.name})),
+        });
+    }
     test_step.dependOn(&b.addRunArtifact(integration).step);
     test_step.dependOn(core_tests);
+
+    // ---- Unity assets ----
+    const unity_exe = b.addExecutable(.{
+        .name = "unity_assets",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/unity_assets.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{ .{ .name = "wasdon_zig", .module = lib_mod }, .{ .name = "fixtures", .module = fixtures } },
+        }),
+    });
+    const unity_run = b.addRunArtifact(unity_exe);
+    unity_run.addArg(b.pathFromRoot("unity/Wasdon/Examples"));
+    b.step("unity", "Regenerate the examples' Unity assets in unity/Wasdon/Examples/").dependOn(&unity_run.step);
 
     // ---- statistics ----
     const stats_exe = b.addExecutable(.{

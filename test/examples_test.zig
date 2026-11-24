@@ -46,6 +46,24 @@ test "every example translates to valid Udon Assembly and behaves as expected" {
     }
 }
 
+test "the Unity assets hold what the translator produces now" {
+    inline for (.{ "wasm-bench", "udon-orbit", "pi", "mandelbrot", "image-codec", "ragdoll", "blockfall" }) |name| {
+        const ex = fixtures.find(name).?;
+        try testing.expect(fixtures.hasUnityAsset(ex));
+        var fresh: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer fresh.deinit();
+        _ = try wasdon.translateBytes(testing.allocator, ex.wasm, &fresh.writer, .{});
+        if (!std.mem.eql(u8, @embedFile("unity/" ++ name ++ ".uasm.txt"), fresh.written())) {
+            std.debug.print("unity/Wasdon/Examples/{s}.uasm.txt is out of date: run `zig build unity`\n", .{name});
+            return error.TestUnexpectedResult;
+        }
+    }
+    // Every example with an asset is in the list above.
+    var with_asset: usize = 0;
+    for (fixtures.examples) |ex| with_asset += @intFromBool(fixtures.hasUnityAsset(ex));
+    try testing.expectEqual(@as(usize, 7), with_asset);
+}
+
 test "the bench fixture parses as a WASM module" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

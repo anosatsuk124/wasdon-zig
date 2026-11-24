@@ -1,0 +1,3479 @@
+.data_start
+    # wasdon-zig heap-size: 358
+    __G__memory: %SystemByteArray, null
+    __G__memory_size_pages: %SystemInt32, 17
+    __G__g0: %SystemInt32, 1048576
+    __G__seed: %SystemInt32, 1051300
+    __point_filter: %UnityEngineFilterMode, null
+    .export _seed
+    _seed: %SystemInt32, 1
+    __this_object: %UnityEngineGameObject, this
+    __this_behaviour: %VRCUdonUdonBehaviour, this
+    .sync _state, none
+    _state: %SystemByteArray, null
+    .export _renderer
+    _renderer: %UnityEngineRenderer, null
+    .export _scoreText
+    _scoreText: %UnityEngineUIText, null
+    _texture: %UnityEngineTexture2D, null
+    _pixels: %SystemByteArray, null
+    ___onDeserialization_L0__: %SystemInt32, 0
+    __f33_L0__: %SystemInt32, 0
+    __f33_L1__: %SystemInt32, 0
+    __f33_L2__: %SystemInt32, 0
+    __f33_L3__: %SystemInt32, 0
+    __f33_L4__: %SystemInt32, 0
+    __f33_L5__: %SystemInt32, 0
+    __f33_L6__: %SystemInt32, 0
+    __f33_RA__: %SystemUInt32, 0
+    __f34_P0__: %SystemInt32, 0
+    __f34_P1__: %SystemInt32, 0
+    __f34_P2__: %SystemInt32, 0
+    __f34_RA__: %SystemUInt32, 0
+    __f35_P0__: %SystemInt32, 0
+    __f35_P1__: %SystemInt32, 0
+    __f35_L2__: %SystemInt32, 0
+    __f35_L3__: %SystemInt32, 0
+    __f35_L4__: %SystemInt32, 0
+    __f35_L5__: %SystemInt32, 0
+    __f35_RA__: %SystemUInt32, 0
+    __f38_P0__: %SystemInt32, 0
+    __f38_L1__: %SystemInt32, 0
+    __f38_L2__: %SystemInt32, 0
+    __f38_L3__: %SystemInt32, 0
+    __f38_L4__: %SystemInt32, 0
+    __f38_L5__: %SystemInt32, 0
+    __f38_RA__: %SystemUInt32, 0
+    __f39_RA__: %SystemUInt32, 0
+    __f40_P0__: %SystemInt32, 0
+    __f40_RA__: %SystemUInt32, 0
+    __f41_P0__: %SystemInt32, 0
+    __f41_P1__: %SystemInt32, 0
+    __f41_L2__: %SystemInt32, 0
+    __f41_L3__: %SystemInt32, 0
+    __f41_L4__: %SystemInt32, 0
+    __f41_L5__: %SystemInt32, 0
+    __f41_L6__: %SystemInt32, 0
+    __f41_RA__: %SystemUInt32, 0
+    __f42_P0__: %SystemInt32, 0
+    __f42_L1__: %SystemInt32, 0
+    __f42_RA__: %SystemUInt32, 0
+    __f43_L0__: %SystemInt32, 0
+    __f43_RA__: %SystemUInt32, 0
+    __f44_RA__: %SystemUInt32, 0
+    __f45_L0__: %SystemInt32, 0
+    __f45_L1__: %SystemInt32, 0
+    __f45_RA__: %SystemUInt32, 0
+    __f46_L0__: %SystemInt32, 0
+    __f46_L1__: %SystemInt32, 0
+    __f46_RA__: %SystemUInt32, 0
+    ___update_L0__: %SystemInt32, 0
+    ___update_L1__: %SystemSingle, 0
+    ___update_L2__: %SystemInt32, 0
+    ___update_L3__: %SystemInt32, 0
+    ___update_L4__: %SystemInt32, 0
+    ___update_L5__: %SystemInt32, 0
+    ___update_L6__: %SystemInt32, 0
+    ___update_L7__: %SystemInt32, 0
+    ___update_L8__: %SystemInt32, 0
+    ___update_L9__: %SystemInt32, 0
+    ___update_L10__: %SystemInt32, 0
+    ___update_L11__: %SystemInt32, 0
+    ___start_L0__: %SystemInt32, 0
+    ___start_L1__: %SystemInt32, 0
+    ___onDeserialization_T1__: %SystemBoolean, null
+    ___onDeserialization_T2__: %SystemInt32, 0
+    __c_i32_1: %SystemInt32, 1
+    __c_i32_0: %SystemInt32, 0
+    __c_i32_172: %SystemInt32, 172
+    __c_i32_1051304: %SystemInt32, 1051304
+    __ra_1: %SystemUInt32, 296
+    __c_i32_128: %SystemInt32, 128
+    __f33_T1__: %SystemInt32, 0
+    __f33_T2__: %SystemBoolean, null
+    __c_i32_1051436: %SystemInt32, 1051436
+    __c_i32_3: %SystemInt32, 3
+    __c_i32_1050128: %SystemInt32, 1050128
+    __c_i32_1050660: %SystemInt32, 1050660
+    __c_i32_1051476: %SystemInt32, 1051476
+    __derived0: %SystemInt32, 0
+    __c_i32_n2147483648: %SystemInt32, 0x80000000
+    __c_i32_n2147483577: %SystemInt32, -2147483577
+    __c_i32_24: %SystemInt32, 24
+    __f33_T3__: %SystemInt32, 0
+    __f33_T4__: %SystemByte, null
+    __c_u8_2: %SystemByte, null
+    __c_i32_4: %SystemInt32, 4
+    __c_i32_1051432: %SystemInt32, 1051432
+    __c_i32_1051428: %SystemInt32, 1051428
+    __c_i32_n12: %SystemInt32, -12
+    __c_i32_1051400: %SystemInt32, 1051400
+    __c_i32_40: %SystemInt32, 40
+    __c_i32_1051388: %SystemInt32, 1051388
+    __c_i32_2: %SystemInt32, 2
+    __c_i32_1051412: %SystemInt32, 1051412
+    __c_i32_1051240: %SystemInt32, 1051240
+    __c_i32_1051912: %SystemInt32, 1051912
+    __kpool: %SystemByteArray, null
+    __c_i32_8: %SystemInt32, 8
+    __c_i32_1051904: %SystemInt32, 1051904
+    __c_i32_1051872: %SystemInt32, 1051872
+    __c_i32_1051864: %SystemInt32, 1051864
+    __c_i32_1051424: %SystemInt32, 1051424
+    __c_i32_1051192: %SystemInt32, 1051192
+    __c_i32_108: %SystemInt32, 108
+    __c_i32_120: %SystemInt32, 120
+    __c_i32_1051868: %SystemInt32, 1051868
+    __c_i32_480: %SystemInt32, 480
+    __ra_2: %SystemUInt32, 2812
+    __c_i32_116: %SystemInt32, 116
+    __c_i32_1050122: %SystemInt32, 1050122
+    __c_i32_12: %SystemInt32, 12
+    __c_i32_1050118: %SystemInt32, 1050118
+    __derived1: %SystemInt32, 0
+    __c_i32_1051456: %SystemInt32, 1051456
+    __ra_3: %SystemUInt32, 3448
+    __ret0_i32: %SystemInt32, 0
+    __c_i32_n2147483640: %SystemInt32, -2147483640
+    __c_i32_1050109: %SystemInt32, 1050109
+    __st_i32: %SystemInt32Array, null
+    __c_i32_1051448: %SystemInt32, 1051448
+    __ra_4: %SystemUInt32, 4064
+    __c_i32_1051440: %SystemInt32, 1051440
+    __c_i32_n2147483647: %SystemInt32, -2147483647
+    __c_i32_n2147483639: %SystemInt32, -2147483639
+    __c_i32_9: %SystemInt32, 9
+    __c_i32_1050087: %SystemInt32, 1050087
+    __ra_5: %SystemUInt32, 4748
+    __c_i32_n2147483637: %SystemInt32, -2147483637
+    __c_i32_11: %SystemInt32, 11
+    __c_i32_1050097: %SystemInt32, 1050097
+    __f33_T5__: %SystemString, null
+    __utf8: %SystemObject, null
+    __c_i32_16: %SystemInt32, 16
+    __f35_T1__: %SystemInt32, 0
+    __c_i32_5: %SystemInt32, 5
+    __c_i32_10: %SystemInt32, 10
+    __f35_T2__: %SystemInt64, null
+    __c_i64_ffffffff: %SystemInt64, null
+    __c_i64_a: %SystemInt64, null
+    __c_i32_32: %SystemInt32, 32
+    __f35_T3__: %SystemInt32, 0
+    __c_i32_48: %SystemInt32, 48
+    __c_i32_n1: %SystemInt32, -1
+    __f35_T4__: %SystemBoolean, null
+    __ra_6: %SystemUInt32, 7012
+    __ra_7: %SystemUInt32, 7068
+    __ra_8: %SystemUInt32, 7144
+    __f38_T1__: %SystemInt32, 0
+    __f38_T2__: %SystemBoolean, null
+    __f38_T3__: %VRCSDKBaseVRCPlayerApi, null
+    __f38_T4__: %SystemByteArray, null
+    __c_i32_255: %SystemInt32, 255
+    __c_i32_1051464: %SystemInt32, 1051464
+    __ra_9: %SystemUInt32, 7576
+    __c_i32_n40: %SystemInt32, -40
+    __c_i32_1051300: %SystemInt32, 1051300
+    __ra_10: %SystemUInt32, 8740
+    __ra_11: %SystemUInt32, 9332
+    __ra_12: %SystemUInt32, 9468
+    __ra_13: %SystemUInt32, 9720
+    __ra_14: %SystemUInt32, 9948
+    __c_i32_1051468: %SystemInt32, 1051468
+    __ra_15: %SystemUInt32, 10120
+    __f39_T1__: %SystemBoolean, null
+    __f40_T1__: %SystemInt32, 0
+    __c_i32_160: %SystemInt32, 160
+    __ra_16: %SystemUInt32, 10404
+    __ra_17: %SystemUInt32, 10432
+    __c_i32_1051376: %SystemInt32, 1051376
+    __f41_T1__: %SystemBoolean, null
+    __f41_T2__: %SystemInt32, 0
+    __c_i32_n2147483643: %SystemInt32, -2147483643
+    __c_i32_6: %SystemInt32, 6
+    __c_i32_n2147483646: %SystemInt32, -2147483646
+    __f42_T1__: %SystemInt32, 0
+    __ra_18: %SystemUInt32, 11336
+    __f42_T2__: %SystemBoolean, null
+    __f43_T1__: %SystemBoolean, null
+    __f43_T2__: %SystemInt32, 0
+    __f43_T3__: %SystemInt32, 0
+    __f43_T4__: %SystemInt32, 0
+    __c_i32_1051444: %SystemInt32, 1051444
+    __c_i32_44: %SystemInt32, 44
+    __ra_19: %SystemUInt32, 12216
+    __f45_T1__: %SystemInt32, 0
+    __c_i32_1664525: %SystemInt32, 1664525
+    __c_i32_1013904223: %SystemInt32, 1013904223
+    __c_i32_65535: %SystemInt32, 65535
+    __f45_T2__: %SystemBoolean, null
+    __f45_T3__: %SystemInt32, 0
+    __f46_T1__: %SystemInt32, 0
+    __f46_T2__: %SystemBoolean, null
+    __f46_T3__: %SystemInt32, 0
+    __c_i32_52: %SystemInt32, 52
+    __c_i32_1051420: %SystemInt32, 1051420
+    __c_i32_1051408: %SystemInt32, 1051408
+    __ra_20: %SystemUInt32, 13660
+    __ra_21: %SystemUInt32, 13792
+    __ra_22: %SystemUInt32, 14204
+    __ra_23: %SystemUInt32, 14260
+    __ra_24: %SystemUInt32, 14316
+    __ra_25: %SystemUInt32, 14372
+    __c_i32_208: %SystemInt32, 208
+    ___update_T1__: %SystemInt32, 0
+    __ra_26: %SystemUInt32, 14500
+    ___update_T2__: %SystemBoolean, null
+    ___update_T3__: %SystemSingle, 0
+    __c_i32_1051472: %SystemInt32, 1051472
+    ___update_T4__: %SystemSingle, 0
+    __st_f32: %SystemSingleArray, null
+    __c_f32_3d088889: %SystemSingle, 0
+    __c_f32_bd088889: %SystemSingle, 0
+    ___update_T5__: %SystemByte, null
+    __c_i32_68: %SystemInt32, 68
+    __c_i32_72: %SystemInt32, 72
+    __c_i32_69: %SystemInt32, 69
+    __c_i32_1051292: %SystemInt32, 1051292
+    __c_i32_n2147483644: %SystemInt32, -2147483644
+    __c_u8_128: %SystemByte, null
+    __c_i32_148: %SystemInt32, 148
+    __c_i32_144: %SystemInt32, 144
+    __derived2: %SystemInt32, 0
+    __c_i32_156: %SystemInt32, 156
+    __c_i32_152: %SystemInt32, 152
+    __c_i32_164: %SystemInt32, 164
+    __c_i32_n6: %SystemInt32, -6
+    __c_i32_n2147483582: %SystemInt32, -2147483582
+    __c_i32_168: %SystemInt32, 168
+    __c_i32_176: %SystemInt32, 176
+    __c_i32_184: %SystemInt32, 184
+    __c_i32_192: %SystemInt32, 192
+    __derived3: %SystemInt32, 0
+    __c_i32_200: %SystemInt32, 200
+    __c_i32_1051460: %SystemInt32, 1051460
+    __c_i32_1051452: %SystemInt32, 1051452
+    ___update_T6__: %SystemInt32, 0
+    ___update_T7__: %SystemInt64, null
+    __c_i64_5: %SystemInt64, null
+    __c_i32_78: %SystemInt32, 78
+    __c_i32_82: %SystemInt32, 82
+    __c_i32_86: %SystemInt32, 86
+    __ra_27: %SystemUInt32, 21320
+    __ra_28: %SystemUInt32, 21628
+    __ra_29: %SystemUInt32, 21736
+    __c_i32_n72: %SystemInt32, -72
+    __c_u8_24: %SystemByte, null
+    __c_i32_90: %SystemInt32, 90
+    __ra_30: %SystemUInt32, 22624
+    __c_i32_n480: %SystemInt32, -480
+    ___start_T1__: %SystemBoolean, null
+    __c_i32_1051988: %SystemInt32, 1051988
+    ___start_T2__: %SystemInt32, 0
+    __c_i32_1051980: %SystemInt32, 1051980
+    __c_i32_94: %SystemInt32, 94
+    ___start_T3__: %UnityEngineTexture2D, null
+    ___start_T4__: %UnityEngineTextureFormat, null
+    ___start_T5__: %SystemByteArray, null
+    ___start_T6__: %UnityEngineMaterial, null
+    __ra_31: %SystemUInt32, 23352
+    __ra_32: %SystemUInt32, 23516
+    __ra_33: %SystemUInt32, 23544
+    __ra_34: %SystemUInt32, 23580
+    __init_RA: %SystemUInt32, 0
+    __inited: %SystemBoolean, null
+    __ra_35: %SystemUInt32, 23604
+    __ra_36: %SystemUInt32, 23628
+    __ra_37: %SystemUInt32, 23652
+    __ra_38: %SystemUInt32, 23676
+    __ra_39: %SystemUInt32, 23700
+    __ra_40: %SystemUInt32, 23724
+    __ra_41: %SystemUInt32, 23748
+    __ra_42: %SystemUInt32, 23772
+    __ra_43: %SystemUInt32, 23796
+    __c_i32_1114112: %SystemInt32, 1114112
+    __data_0: %SystemString, "eyAidmVyc2lvbiI6IDEsICJiZWhhdmlvdXIiOiB7ICJzeW5jTW9kZSI6ICJtYW51YWwiIH0sICJmaWVsZHMiOiB7Im1lbW9yeSI6IHsgInNvdXJjZSI6IHsia2luZCI6ImltcG9ydCIsIm5hbWUiOiJ1ZG9uLm1lbW9yeSJ9LCAidWRvbk5hbWUiOiJfX0dfX21lbW9yeSIsICJ0eXBlIjoiU3lzdGVtQnl0ZUFycmF5IiB9LCJwb2ludF9maWx0ZXIiOiB7ICJzb3VyY2UiOiB7ImtpbmQiOiJpbXBvcnQiLCJuYW1lIjoidWRvbi5wb2ludF9maWx0ZXIifSwgInVkb25OYW1lIjoiX19wb2ludF9maWx0ZXIiLCAidHlwZSI6IlVuaXR5RW5naW5lRmlsdGVyTW9kZSIgfSwgInNlZWQiOiAgICAgIHsgInNvdXJjZSI6IHsia2luZCI6InN5bWJvbCIsIm5hbWUiOiJzZWVkIn0sICJ1ZG9uTmFtZSI6Il9zZWVkIiwgInR5cGUiOiJpbnQiLCAiZXhwb3J0IjogdHJ1ZSwgImRlZmF1bHQiOiAxIH0sCiAib2JqZWN0IjogICAgeyAic291cmNlIjogeyJraW5kIjoiaW1wb3J0IiwibmFtZSI6InVkb24udGhpc19vYmplY3QifSwgInVkb25OYW1lIjoiX190aGlzX29iamVjdCIsICJ0eXBlIjoiVW5pdHlFbmdpbmVHYW1lT2JqZWN0IiwgImRlZmF1bHQiOiAidGhpcyIgfSwKICJiZWhhdmlvdXIiOiB7ICJzb3VyY2UiOiB7ImtpbmQiOiJpbXBvcnQiLCJuYW1lIjoidWRvbi50aGlzX2JlaGF2aW91ciJ9LCAidWRvbk5hbWUiOiJfX3RoaXNfYmVoYXZpb3VyIiwgInR5cGUiOiJWUkNVZG9uVWRvbkJlaGF2aW91ciIsICJkZWZhdWx0IjogInRoaXMiIH0sCiAic3RhdGUiOiAgICAgeyAic291cmNlIjogeyJraW5kIjoiaW1wb3J0IiwibmFtZSI6InVkb24uc3RhdGUiLCJzZXR0ZXIiOiJ1ZG9uLnNldF9zdGF0ZSJ9LCAidWRvbk5hbWUiOiJfc3RhdGUiLCAidHlwZSI6IlN5c3RlbUJ5dGVBcnJheSIsICJzeW5jIjogeyJlbmFibGVkIjogdHJ1ZSwgIm1vZGUiOiAibm9uZSJ9IH0sCiAicmVuZGVyZXIiOiAgeyAic291cmNlIjogeyJraW5kIjoiaW1wb3J0IiwibmFtZSI6InVkb24ucmVuZGVyZXIifSwgInVkb25OYW1lIjoiX3JlbmRlcmVyIiwgInR5cGUiOiJVbml0eUVuZ2luZVJlbmRlcmVyIiwgImV4cG9ydCI6IHRydWUgfSwKICJzY29yZSI6ICAgICB7ICJzb3VyY2UiOiB7ImtpbmQiOiJpbXBvcnQiLCJuYW1lIjoidWRvbi5zY29yZV90ZXh0In0sICJ1ZG9uTmFtZSI6Il9zY29yZVRleHQiLCAidHlwZSI6IlVuaXR5RW5naW5lVUlUZXh0IiwgImV4cG9ydCI6IHRydWUgfSwKICJ0ZXh0dXJlIjogICB7ICJzb3VyY2UiOiB7ImtpbmQiOiJpbXBvcnQiLCJuYW1lIjoidWRvbi50ZXh0dXJlIiwic2V0dGVyIjoidWRvbi5zZXRfdGV4dHVyZSJ9LCAidWRvbk5hbWUiOiJfdGV4dHVyZSIsICJ0eXBlIjoiVW5pdHlFbmdpbmVUZXh0dXJlMkQiIH0sCiAicGl4ZWxzIjogICAgeyAic291cmNlIjogeyJraW5kIjoiaW1wb3J0IiwibmFtZSI6InVkb24ucGl4ZWxzIiwic2V0dGVyIjoidWRvbi5zZXRfcGl4ZWxzIn0sICJ1ZG9uTmFtZSI6Il9waXhlbHMiLCAidHlwZSI6IlN5c3RlbUJ5dGVBcnJheSIgfQp9fQAgIENoYWluIHgAICBHQU1FIE9WRVIAICBMZXZlbCAAU2NvcmUgAAAAABAYIP8wMDD/MDAw/zAwMP8wMDD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg//////////////////////8QGCD/4EBA/0DAQP9AgOD/8NAw/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP8QGCD/EBgg/xAYIP///////////////////////////wAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAABAAAAEBgg/+BAQP9AwED/QIDg//DQMP8AAAAAAAAAAP////8AAAAAAQAAAAAAAAAAAAAAAQ=="
+    __data_bytes: %SystemByteArray, null
+    __c_i32_1048576: %SystemInt32, 1048576
+    __c_i32_2713: %SystemInt32, 2713
+    __data_1: %SystemString, "AQ=="
+    __kpool_b64: %SystemString, "CAwQ/wgMEP8IDBD/BgAAAP////8AAAAACgAAAAAAAAAAAAAAAAAAAAMAAAABAAAAAAAAAAIAAAAKAAAAiYgIPYmICL0AAQUAAAAAAAAACAAAAAIAAAAAAAAAAQAAAEBQYP8IDBD/"
+    __c_i32_60: %SystemInt32, 60
+    __c_i32_64: %SystemInt32, 64
+    __c_i32_70: %SystemInt32, 70
+.data_end
+
+.code_start
+        PUSH, _state
+        PUSH, ___onDeserialization_L0__
+        COPY
+        PUSH, ___onDeserialization_L0__
+        PUSH, ___onDeserialization_T1__
+        EXTERN, "VRCSDKBaseUtilities.__IsValid__SystemObject__SystemBoolean"
+        PUSH, ___onDeserialization_T1__
+        PUSH, ___onDeserialization_T2__
+        EXTERN, "SystemConvert.__ToInt32__SystemBoolean__SystemInt32"
+        PUSH, ___onDeserialization_T2__
+        PUSH, __c_i32_1
+        PUSH, ___onDeserialization_T2__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___onDeserialization_T2__
+        PUSH, __c_i32_0
+        PUSH, ___onDeserialization_T1__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___onDeserialization_T1__
+        JUMP_IF_FALSE, 0xFFFFFFFC
+        PUSH, ___onDeserialization_L0__
+        PUSH, ___onDeserialization_T2__
+        EXTERN, "SystemByteArray.__get_Length__SystemInt32"
+        PUSH, ___onDeserialization_T2__
+        PUSH, __c_i32_172
+        PUSH, ___onDeserialization_T1__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___onDeserialization_T1__
+        JUMP_IF_FALSE, 0xFFFFFFFC
+        PUSH, ___onDeserialization_L0__
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051304
+        PUSH, __c_i32_172
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __ra_1
+        PUSH, __f33_RA__
+        COPY
+        JUMP, 0x00000130
+        JUMP, 0xFFFFFFFC
+        PUSH, __G__g0
+        PUSH, __c_i32_128
+        PUSH, __f33_L0__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_L0__
+        PUSH, __G__g0
+        COPY
+        PUSH, _texture
+        PUSH, __f33_L1__
+        COPY
+        PUSH, __f33_L1__
+        PUSH, __f33_T2__
+        EXTERN, "VRCSDKBaseUtilities.__IsValid__SystemObject__SystemBoolean"
+        PUSH, __f33_T2__
+        PUSH, __f33_T1__
+        EXTERN, "SystemConvert.__ToInt32__SystemBoolean__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __c_i32_1
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __c_i32_0
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x00001508
+        PUSH, __c_i32_0
+        PUSH, __f33_L2__
+        COPY
+        PUSH, __G__memory
+        PUSH, __c_i32_1051436
+        PUSH, __f33_L3__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_L3__
+        PUSH, __c_i32_3
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x00000278
+        PUSH, __c_i32_1050128
+        PUSH, __f33_T1__
+        COPY
+        JUMP, 0x0000028C
+        PUSH, __c_i32_1050660
+        PUSH, __f33_T1__
+        COPY
+        PUSH, __f33_T1__
+        PUSH, __f33_L4__
+        COPY
+        PUSH, __c_i32_1051476
+        PUSH, __f33_L5__
+        COPY
+        PUSH, __f33_L2__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __c_i32_n2147483577
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x00000460
+        PUSH, __c_i32_0
+        PUSH, __f33_L6__
+        COPY
+        PUSH, __f33_L6__
+        PUSH, __c_i32_24
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x0000072C
+        PUSH, __f33_L5__
+        PUSH, __f33_L6__
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_L2__
+        PUSH, __c_i32_1051304
+        PUSH, __f33_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f33_T3__
+        PUSH, __f33_T4__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, __f33_T4__
+        PUSH, __c_u8_2
+        PUSH, __f33_T3__
+        EXTERN, "SystemByte.__op_LeftShift__SystemByte_SystemByte__SystemInt32"
+        PUSH, __f33_L4__
+        PUSH, __f33_T3__
+        PUSH, __f33_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f33_T3__
+        PUSH, __G__memory
+        PUSH, __f33_T1__
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f33_L6__
+        PUSH, __c_i32_4
+        PUSH, __f33_L6__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_L2__
+        PUSH, __c_i32_1
+        PUSH, __f33_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00000318
+        PUSH, __f33_L3__
+        PUSH, __c_i32_0
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x00000754
+        PUSH, __G__memory
+        PUSH, __c_i32_1051432
+        PUSH, __f33_L2__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051428
+        PUSH, __f33_L5__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __c_i32_n12
+        PUSH, __f33_L6__
+        COPY
+        PUSH, __f33_L6__
+        PUSH, __c_i32_0
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x00000754
+        PUSH, __f33_L6__
+        PUSH, __c_i32_1051400
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f33_T1__
+        PUSH, __f33_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __f33_L2__
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __c_i32_40
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_L6__
+        PUSH, __c_i32_1051388
+        PUSH, __f33_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f33_T3__
+        PUSH, __f33_T3__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_T3__
+        PUSH, __f33_L5__
+        PUSH, __f33_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_T3__
+        PUSH, __c_i32_2
+        PUSH, __f33_T3__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __f33_T3__
+        PUSH, __f33_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_T3__
+        PUSH, __c_i32_1051476
+        PUSH, __f33_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_L6__
+        PUSH, __c_i32_1051412
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f33_T1__
+        PUSH, __f33_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __c_i32_2
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __c_i32_1051240
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f33_T1__
+        PUSH, __G__memory
+        PUSH, __f33_T3__
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f33_L6__
+        PUSH, __c_i32_4
+        PUSH, __f33_L6__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x000004E4
+        PUSH, __f33_L5__
+        PUSH, __c_i32_40
+        PUSH, __f33_L5__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x000002B4
+        PUSH, __kpool
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051912
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __kpool
+        PUSH, __c_i32_4
+        PUSH, __G__memory
+        PUSH, __c_i32_1051904
+        PUSH, __c_i32_8
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __kpool
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051872
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __kpool
+        PUSH, __c_i32_4
+        PUSH, __G__memory
+        PUSH, __c_i32_1051864
+        PUSH, __c_i32_8
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051424
+        PUSH, __f33_T3__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_T3__
+        PUSH, __c_i32_24
+        PUSH, __f33_T3__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_T3__
+        PUSH, __c_i32_1051192
+        PUSH, __f33_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_108
+        PUSH, __f33_L6__
+        COPY
+        PUSH, __f33_L6__
+        PUSH, __c_i32_120
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x00000A90
+        PUSH, __f33_L2__
+        PUSH, __c_i32_4
+        PUSH, __f33_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f33_T3__
+        PUSH, __f33_T3__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_T3__
+        PUSH, __c_i32_40
+        PUSH, __f33_T3__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f33_L2__
+        PUSH, __f33_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __c_i32_2
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_T3__
+        PUSH, __f33_T1__
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __c_i32_1051868
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_L6__
+        PUSH, __c_i32_1051304
+        PUSH, __f33_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f33_T3__
+        PUSH, __f33_T3__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_T3__
+        PUSH, __c_i32_2
+        PUSH, __f33_T3__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_T3__
+        PUSH, __c_i32_1051240
+        PUSH, __f33_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f33_T3__
+        PUSH, __G__memory
+        PUSH, __f33_T1__
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f33_L2__
+        PUSH, __c_i32_8
+        PUSH, __f33_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_L6__
+        PUSH, __c_i32_4
+        PUSH, __f33_L6__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00000888
+        PUSH, _pixels
+        PUSH, __f33_L6__
+        COPY
+        PUSH, __f33_L6__
+        PUSH, __f34_P2__
+        COPY
+        PUSH, __c_i32_480
+        PUSH, __f34_P1__
+        COPY
+        PUSH, __c_i32_1051476
+        PUSH, __f34_P0__
+        COPY
+        PUSH, __ra_2
+        PUSH, __f34_RA__
+        COPY
+        JUMP, 0x00001530
+        PUSH, __f33_L1__
+        PUSH, __f33_L6__
+        EXTERN, "UnityEngineTexture2D.__LoadRawTextureData__SystemByteArray__SystemVoid"
+        PUSH, __f33_L1__
+        EXTERN, "UnityEngineTexture2D.__Apply__SystemVoid"
+        PUSH, _scoreText
+        PUSH, __f33_L5__
+        COPY
+        PUSH, __f33_L5__
+        PUSH, __f33_T2__
+        EXTERN, "VRCSDKBaseUtilities.__IsValid__SystemObject__SystemBoolean"
+        PUSH, __f33_T2__
+        PUSH, __f33_T1__
+        EXTERN, "SystemConvert.__ToInt32__SystemBoolean__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __c_i32_1
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __c_i32_0
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x00001508
+        PUSH, __f33_L0__
+        PUSH, __c_i32_4
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __c_i32_8
+        PUSH, __f33_L6__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f33_L6__
+        PUSH, __c_i32_116
+        EXTERN, "SystemArray.__Clear__SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__memory
+        PUSH, __c_i32_1050122
+        PUSH, __G__memory
+        PUSH, __f33_L6__
+        PUSH, __c_i32_2
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f33_L0__
+        PUSH, __c_i32_4
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __kpool
+        PUSH, __c_i32_12
+        PUSH, __G__memory
+        PUSH, __derived0
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f33_L0__
+        PUSH, __c_i32_8
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1050118
+        PUSH, __G__memory
+        PUSH, __derived1
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f33_L0__
+        PUSH, __c_i32_8
+        PUSH, __f33_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_L0__
+        PUSH, __c_i32_4
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051456
+        PUSH, __f35_P1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __f35_P0__
+        COPY
+        PUSH, __ra_3
+        PUSH, __f35_RA__
+        COPY
+        JUMP, 0x00001568
+        PUSH, __ret0_i32
+        PUSH, __f33_L6__
+        COPY
+        PUSH, __G__memory
+        PUSH, __f33_L6__
+        PUSH, __f33_L1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __c_i32_120
+        PUSH, __f33_L1__
+        PUSH, __f33_L2__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_L2__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __c_i32_n2147483640
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x00000E38
+        PUSH, __f33_L2__
+        PUSH, __f33_T1__
+        COPY
+        JUMP, 0x00000E4C
+        PUSH, __c_i32_8
+        PUSH, __f33_T1__
+        COPY
+        PUSH, __f33_T1__
+        PUSH, __f33_L2__
+        COPY
+        PUSH, __f33_L2__
+        PUSH, __c_i32_0
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x00000EE0
+        PUSH, __f33_L4__
+        PUSH, __f33_L1__
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1050109
+        PUSH, __G__memory
+        PUSH, __f33_T1__
+        PUSH, __f33_L2__
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__memory
+        PUSH, __f33_L6__
+        PUSH, __f33_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __f33_L2__
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __f33_L6__
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051448
+        PUSH, __f33_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __c_i32_1
+        PUSH, __f35_P1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_L6__
+        PUSH, __f35_P0__
+        COPY
+        PUSH, __ra_4
+        PUSH, __f35_RA__
+        COPY
+        JUMP, 0x00001568
+        PUSH, __ret0_i32
+        PUSH, __f33_L6__
+        COPY
+        PUSH, __G__memory
+        PUSH, __c_i32_1051440
+        PUSH, __f33_L2__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_L2__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __c_i32_n2147483647
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x0000128C
+        PUSH, __G__memory
+        PUSH, __f33_L6__
+        PUSH, __f33_L3__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __c_i32_120
+        PUSH, __f33_L3__
+        PUSH, __f33_L1__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_L1__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived1
+        PUSH, __c_i32_n2147483639
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x00001110
+        PUSH, __f33_L1__
+        PUSH, __f33_T1__
+        COPY
+        JUMP, 0x00001124
+        PUSH, __c_i32_9
+        PUSH, __f33_T1__
+        COPY
+        PUSH, __f33_T1__
+        PUSH, __f33_L1__
+        COPY
+        PUSH, __f33_L1__
+        PUSH, __c_i32_0
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x000011B8
+        PUSH, __f33_L4__
+        PUSH, __f33_L3__
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1050087
+        PUSH, __G__memory
+        PUSH, __f33_T1__
+        PUSH, __f33_L1__
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__memory
+        PUSH, __f33_L6__
+        PUSH, __f33_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __f33_L1__
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __f33_L6__
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f33_L2__
+        PUSH, __f35_P1__
+        COPY
+        PUSH, __f33_L6__
+        PUSH, __f35_P0__
+        COPY
+        PUSH, __ra_5
+        PUSH, __f35_RA__
+        COPY
+        JUMP, 0x00001568
+        PUSH, __G__memory
+        PUSH, __f33_L6__
+        PUSH, __f33_L2__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051436
+        PUSH, __f33_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __c_i32_3
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x000014C0
+        PUSH, __c_i32_120
+        PUSH, __f33_L2__
+        PUSH, __f33_L1__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f33_L1__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __c_i32_n2147483637
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x00001388
+        PUSH, __f33_L1__
+        PUSH, __f33_T1__
+        COPY
+        JUMP, 0x0000139C
+        PUSH, __c_i32_11
+        PUSH, __f33_T1__
+        COPY
+        PUSH, __f33_T1__
+        PUSH, __f33_L1__
+        COPY
+        PUSH, __f33_L1__
+        PUSH, __c_i32_0
+        PUSH, __f33_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f33_T2__
+        JUMP_IF_FALSE, 0x00001430
+        PUSH, __f33_L4__
+        PUSH, __f33_L2__
+        PUSH, __f33_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1050097
+        PUSH, __G__memory
+        PUSH, __f33_T1__
+        PUSH, __f33_L1__
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__memory
+        PUSH, __f33_L6__
+        PUSH, __f33_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f33_T1__
+        PUSH, __f33_L1__
+        PUSH, __f33_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f33_L2__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __f33_L6__
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __utf8
+        PUSH, __G__memory
+        PUSH, __f33_L4__
+        PUSH, __f33_L2__
+        PUSH, __f33_T5__
+        EXTERN, "SystemTextEncoding.__GetString__SystemByteArray_SystemInt32_SystemInt32__SystemString"
+        PUSH, __f33_L5__
+        PUSH, __f33_T5__
+        EXTERN, "UnityEngineUIText.__set_text__SystemString__SystemVoid"
+        PUSH, __f33_L0__
+        PUSH, __c_i32_128
+        PUSH, __G__g0
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP_INDIRECT, __f33_RA__
+        PUSH, __G__memory
+        PUSH, __f34_P0__
+        PUSH, __f34_P2__
+        PUSH, __c_i32_0
+        PUSH, __f34_P1__
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP_INDIRECT, __f34_RA__
+        PUSH, __G__g0
+        PUSH, __c_i32_16
+        PUSH, __f35_L2__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f35_L2__
+        PUSH, __G__g0
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __f35_L3__
+        COPY
+        PUSH, __f35_L2__
+        PUSH, __c_i32_5
+        PUSH, __f35_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f35_T1__
+        PUSH, __f35_L3__
+        PUSH, __f35_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f35_T1__
+        PUSH, __c_i32_10
+        PUSH, __f35_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f35_P1__
+        PUSH, __f35_T2__
+        EXTERN, "SystemConvert.__ToInt64__SystemInt32__SystemInt64"
+        PUSH, __f35_T2__
+        PUSH, __c_i64_ffffffff
+        PUSH, __f35_T2__
+        EXTERN, "SystemInt64.__op_LogicalAnd__SystemInt64_SystemInt64__SystemInt64"
+        PUSH, __f35_T2__
+        PUSH, __c_i64_a
+        PUSH, __f35_T2__
+        EXTERN, "SystemInt64.__op_Division__SystemInt64_SystemInt64__SystemInt64"
+        PUSH, __f35_T2__
+        PUSH, __c_i32_32
+        PUSH, __f35_T2__
+        EXTERN, "SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64"
+        PUSH, __f35_T2__
+        PUSH, __c_i32_32
+        PUSH, __f35_T2__
+        EXTERN, "SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64"
+        PUSH, __f35_T2__
+        PUSH, __f35_L4__
+        EXTERN, "SystemConvert.__ToInt32__SystemInt64__SystemInt32"
+        PUSH, __f35_L4__
+        PUSH, __c_i32_10
+        PUSH, __f35_T3__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f35_P1__
+        PUSH, __f35_T3__
+        PUSH, __f35_T3__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f35_T3__
+        PUSH, __c_i32_48
+        PUSH, __f35_T3__
+        EXTERN, "SystemInt32.__op_LogicalOr__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f35_T3__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __f35_T1__
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f35_L3__
+        PUSH, __c_i32_n1
+        PUSH, __f35_L3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f35_P1__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __c_i32_n2147483639
+        PUSH, __f35_T4__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f35_T4__
+        PUSH, __f35_L5__
+        EXTERN, "SystemConvert.__ToInt32__SystemBoolean__SystemInt32"
+        PUSH, __f35_L4__
+        PUSH, __f35_P1__
+        COPY
+        PUSH, __f35_L5__
+        PUSH, __c_i32_0
+        PUSH, __f35_T4__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f35_T4__
+        JUMP_IF_FALSE, 0x000015B0
+        PUSH, __c_i32_0
+        PUSH, __f35_L3__
+        PUSH, __f35_P1__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f35_P0__
+        PUSH, __f35_L5__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __c_i32_120
+        PUSH, __f35_L5__
+        PUSH, __f35_L4__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f35_P1__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f35_L4__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __derived1
+        PUSH, __f35_T4__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f35_T4__
+        JUMP_IF_FALSE, 0x00001918
+        PUSH, __f35_P1__
+        PUSH, __f35_T1__
+        COPY
+        JUMP, 0x0000192C
+        PUSH, __f35_L4__
+        PUSH, __f35_T1__
+        COPY
+        PUSH, __f35_T1__
+        PUSH, __f35_P1__
+        COPY
+        PUSH, __f35_P1__
+        PUSH, __c_i32_0
+        PUSH, __f35_T4__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f35_T4__
+        JUMP_IF_FALSE, 0x00001A40
+        PUSH, __f35_P0__
+        PUSH, __f35_L5__
+        PUSH, __f35_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f35_T1__
+        PUSH, __c_i32_4
+        PUSH, __f35_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f35_L2__
+        PUSH, __c_i32_5
+        PUSH, __f35_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f35_T3__
+        PUSH, __f35_L3__
+        PUSH, __f35_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f35_T3__
+        PUSH, __c_i32_11
+        PUSH, __f35_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f35_T3__
+        PUSH, __G__memory
+        PUSH, __f35_T1__
+        PUSH, __f35_P1__
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__memory
+        PUSH, __f35_P0__
+        PUSH, __f35_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f35_T1__
+        PUSH, __f35_P1__
+        PUSH, __f35_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f35_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __f35_P0__
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f35_L2__
+        PUSH, __c_i32_16
+        PUSH, __G__g0
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f35_P0__
+        PUSH, __ret0_i32
+        COPY
+        JUMP_INDIRECT, __f35_RA__
+        PUSH, _state
+        PUSH, __f34_P2__
+        COPY
+        PUSH, __c_i32_172
+        PUSH, __f34_P1__
+        COPY
+        PUSH, __c_i32_1051304
+        PUSH, __f34_P0__
+        COPY
+        PUSH, __ra_6
+        PUSH, __f34_RA__
+        COPY
+        JUMP, 0x00001530
+        JUMP, 0xFFFFFFFC
+        PUSH, __c_i32_4
+        PUSH, __f38_P0__
+        COPY
+        PUSH, __ra_7
+        PUSH, __f38_RA__
+        COPY
+        JUMP, 0x00001BA4
+        JUMP, 0xFFFFFFFC
+        PUSH, __c_i32_0
+        PUSH, __f38_L1__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __f38_L4__
+        COPY
+        PUSH, __ra_8
+        PUSH, __f39_RA__
+        COPY
+        JUMP, 0x00002790
+        PUSH, __ret0_i32
+        PUSH, __c_i32_1
+        PUSH, __f38_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f38_T1__
+        PUSH, __c_i32_0
+        PUSH, __f38_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f38_T2__
+        JUMP_IF_FALSE, 0x00001D0C
+        PUSH, __this_object
+        PUSH, __f38_L1__
+        COPY
+        PUSH, __f38_T3__
+        EXTERN, "VRCSDKBaseNetworking.__get_LocalPlayer__VRCSDKBaseVRCPlayerApi"
+        PUSH, __f38_T3__
+        PUSH, __f38_L1__
+        EXTERN, "VRCSDKBaseNetworking.__SetOwner__VRCSDKBaseVRCPlayerApi_UnityEngineGameObject__SystemVoid"
+        PUSH, _state
+        PUSH, __f38_T2__
+        EXTERN, "VRCSDKBaseUtilities.__IsValid__SystemObject__SystemBoolean"
+        PUSH, __f38_T2__
+        PUSH, __f38_T1__
+        EXTERN, "SystemConvert.__ToInt32__SystemBoolean__SystemInt32"
+        PUSH, __f38_T1__
+        PUSH, __c_i32_1
+        PUSH, __f38_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f38_T1__
+        PUSH, __c_i32_0
+        PUSH, __f38_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f38_T2__
+        JUMP_IF_FALSE, 0x00001D0C
+        PUSH, __c_i32_172
+        PUSH, _state
+        EXTERN, "SystemByteArray.__ctor__SystemInt32__SystemByteArray"
+        PUSH, __f38_P0__
+        PUSH, __c_i32_255
+        PUSH, __f38_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f38_T1__
+        PUSH, __c_i32_4
+        PUSH, __f38_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f38_T2__
+        JUMP_IF_FALSE, 0x00001DA0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051464
+        PUSH, __f40_P0__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __ra_9
+        PUSH, __f40_RA__
+        COPY
+        JUMP, 0x000027C8
+        JUMP, 0x000026DC
+        PUSH, __G__memory
+        PUSH, __c_i32_1051436
+        PUSH, __f38_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f38_T1__
+        PUSH, __c_i32_0
+        PUSH, __f38_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f38_T2__
+        JUMP_IF_FALSE, 0x0000254C
+        PUSH, __f38_P0__
+        PUSH, __c_i32_255
+        PUSH, __f38_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f38_T1__
+        PUSH, __c_i32_1
+        PUSH, __f38_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f38_T2__
+        JUMP_IF_FALSE, 0x00001E48
+        JUMP, 0x000024CC
+        PUSH, __f38_T1__
+        PUSH, __c_i32_2
+        PUSH, __f38_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f38_T2__
+        JUMP_IF_FALSE, 0x00001E80
+        JUMP, 0x00001EB8
+        PUSH, __f38_T1__
+        PUSH, __c_i32_3
+        PUSH, __f38_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f38_T2__
+        JUMP_IF_FALSE, 0x00002444
+        JUMP, 0x00002554
+        PUSH, __c_i32_n12
+        PUSH, __f38_P0__
+        COPY
+        PUSH, __f38_P0__
+        PUSH, __c_i32_0
+        PUSH, __f38_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f38_T2__
+        JUMP_IF_FALSE, 0x0000231C
+        PUSH, __G__memory
+        PUSH, __c_i32_1051432
+        PUSH, __f38_L2__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051428
+        PUSH, __f38_L3__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __c_i32_n40
+        PUSH, __f38_P0__
+        COPY
+        PUSH, __f38_P0__
+        PUSH, __c_i32_8
+        PUSH, __f38_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f38_L1__
+        PUSH, __c_i32_0
+        PUSH, __f38_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f38_T2__
+        JUMP_IF_FALSE, 0x0000210C
+        PUSH, __c_i32_n12
+        PUSH, __f38_P0__
+        COPY
+        PUSH, __f38_P0__
+        PUSH, __c_i32_0
+        PUSH, __f38_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f38_T2__
+        JUMP_IF_FALSE, 0x0000254C
+        PUSH, __f38_P0__
+        PUSH, __c_i32_1051400
+        PUSH, __f38_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f38_L1__
+        PUSH, __f38_L4__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f38_P0__
+        PUSH, __c_i32_1051388
+        PUSH, __f38_L5__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f38_L5__
+        PUSH, __G__memory
+        PUSH, __f38_L1__
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __c_i32_0
+        PUSH, __f38_L4__
+        PUSH, __f38_T1__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f38_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __f38_L5__
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f38_P0__
+        PUSH, __c_i32_4
+        PUSH, __f38_P0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00001FB4
+        PUSH, __f38_P0__
+        PUSH, __c_i32_1051304
+        PUSH, __f38_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f38_P0__
+        PUSH, __c_i32_1051300
+        PUSH, __f38_L5__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f38_L1__
+        PUSH, __f38_P0__
+        COPY
+        PUSH, __G__memory
+        PUSH, __f38_L5__
+        PUSH, __f38_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f38_T1__
+        PUSH, __f38_L3__
+        PUSH, __f38_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f38_L4__
+        PUSH, __f38_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f38_T1__
+        PUSH, __f38_L2__
+        PUSH, __f38_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f38_L4__
+        PUSH, __f41_P1__
+        COPY
+        PUSH, __f38_L1__
+        PUSH, __f41_P0__
+        COPY
+        PUSH, __ra_10
+        PUSH, __f41_RA__
+        COPY
+        JUMP, 0x000028C8
+        PUSH, __ret0_i32
+        PUSH, __c_i32_1
+        PUSH, __f38_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f38_T1__
+        PUSH, __c_i32_0
+        PUSH, __f38_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f38_T2__
+        JUMP_IF_FALSE, 0x00001F50
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f38_L4__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051432
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f38_L1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051428
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP, 0x000026DC
+        PUSH, __f38_P0__
+        PUSH, __c_i32_1051388
+        PUSH, __f38_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f38_L1__
+        PUSH, __f38_L4__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f38_P0__
+        PUSH, __c_i32_1051400
+        PUSH, __f38_L5__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f38_L5__
+        PUSH, __G__memory
+        PUSH, __f38_L1__
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __c_i32_0
+        PUSH, __f38_L4__
+        PUSH, __f38_T1__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f38_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __f38_L5__
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f38_P0__
+        PUSH, __c_i32_4
+        PUSH, __f38_P0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00001ECC
+        PUSH, __c_i32_n1
+        PUSH, __f42_P0__
+        COPY
+        PUSH, __ra_11
+        PUSH, __f42_RA__
+        COPY
+        JUMP, 0x00002BB8
+        PUSH, __ret0_i32
+        PUSH, __c_i32_1
+        PUSH, __f38_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f38_T1__
+        PUSH, __c_i32_0
+        PUSH, __f38_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f38_T2__
+        JUMP_IF_FALSE, 0x0000254C
+        JUMP, 0x000026DC
+        PUSH, __c_i32_1
+        PUSH, __f42_P0__
+        COPY
+        PUSH, __ra_12
+        PUSH, __f42_RA__
+        COPY
+        JUMP, 0x00002BB8
+        PUSH, __ret0_i32
+        PUSH, __c_i32_1
+        PUSH, __f38_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f38_T1__
+        PUSH, __c_i32_0
+        PUSH, __f38_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f38_T2__
+        JUMP_IF_FALSE, 0x000026DC
+        JUMP_INDIRECT, __f38_RA__
+        PUSH, __G__memory
+        PUSH, __c_i32_1051432
+        PUSH, __f38_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f38_T1__
+        PUSH, __c_i32_n1
+        PUSH, __f38_P0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051428
+        PUSH, __f38_L1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f38_P0__
+        PUSH, __f41_P1__
+        COPY
+        PUSH, __f38_L1__
+        PUSH, __f41_P0__
+        COPY
+        PUSH, __ra_13
+        PUSH, __f41_RA__
+        COPY
+        JUMP, 0x000028C8
+        PUSH, __ret0_i32
+        PUSH, __c_i32_1
+        PUSH, __f38_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f38_T1__
+        PUSH, __c_i32_0
+        PUSH, __f38_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f38_T2__
+        JUMP_IF_FALSE, 0x000026C0
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f38_P0__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051432
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f38_P0__
+        PUSH, __c_i32_n1
+        PUSH, __f38_P0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x000025B4
+        PUSH, __ra_14
+        PUSH, __f43_RA__
+        COPY
+        JUMP, 0x00002D18
+        PUSH, __G__memory
+        PUSH, __c_i32_1051468
+        PUSH, __f38_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f38_T1__
+        PUSH, __c_i32_1
+        PUSH, __f38_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f38_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051468
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __ra_15
+        PUSH, __f44_RA__
+        COPY
+        JUMP, 0x00002F9C
+        JUMP_INDIRECT, __f38_RA__
+        PUSH, __this_object
+        PUSH, __f39_T1__
+        EXTERN, "VRCSDKBaseNetworking.__IsOwner__UnityEngineGameObject__SystemBoolean"
+        PUSH, __f39_T1__
+        PUSH, __ret0_i32
+        EXTERN, "SystemConvert.__ToInt32__SystemBoolean__SystemInt32"
+        JUMP_INDIRECT, __f39_RA__
+        PUSH, __kpool
+        PUSH, __c_i32_32
+        PUSH, __G__memory
+        PUSH, __c_i32_1051468
+        PUSH, __c_i32_8
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f40_P0__
+        PUSH, __c_i32_1
+        PUSH, __f40_T1__
+        EXTERN, "SystemInt32.__op_LogicalOr__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f40_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051464
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051304
+        PUSH, __c_i32_160
+        EXTERN, "SystemArray.__Clear__SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __ra_16
+        PUSH, __f45_RA__
+        COPY
+        JUMP, 0x00002FD0
+        PUSH, __ra_17
+        PUSH, __f46_RA__
+        COPY
+        JUMP, 0x00003304
+        JUMP_INDIRECT, __f40_RA__
+        PUSH, __c_i32_0
+        PUSH, __f41_L4__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __f41_L2__
+        COPY
+        PUSH, __c_i32_1051376
+        PUSH, __f41_L3__
+        COPY
+        PUSH, __f41_L2__
+        PUSH, __f41_L4__
+        COPY
+        PUSH, __f41_L4__
+        PUSH, __c_i32_3
+        PUSH, __f41_T1__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f41_T1__
+        JUMP_IF_FALSE, 0x00002B58
+        PUSH, __G__memory
+        PUSH, __f41_L3__
+        PUSH, __f41_T2__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f41_T2__
+        PUSH, __f41_P0__
+        PUSH, __f41_L5__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f41_L5__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __c_i32_n2147483643
+        PUSH, __f41_T1__
+        EXTERN, "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f41_T1__
+        JUMP_IF_FALSE, 0x00002B58
+        PUSH, __f41_L3__
+        PUSH, __c_i32_12
+        PUSH, __f41_T2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f41_T2__
+        PUSH, __f41_T2__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f41_T2__
+        PUSH, __f41_P1__
+        PUSH, __f41_L6__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f41_L6__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived1
+        PUSH, __c_i32_n2147483637
+        PUSH, __f41_T1__
+        EXTERN, "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f41_T1__
+        JUMP_IF_FALSE, 0x00002B58
+        PUSH, __f41_L3__
+        PUSH, __c_i32_4
+        PUSH, __f41_L3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f41_L4__
+        PUSH, __c_i32_1
+        PUSH, __f41_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f41_L6__
+        PUSH, __c_i32_6
+        PUSH, __f41_T2__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f41_T2__
+        PUSH, __f41_L5__
+        PUSH, __f41_T2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f41_T2__
+        PUSH, __c_i32_1051304
+        PUSH, __f41_T2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f41_T2__
+        PUSH, __f41_T1__
+        EXTERN, "SystemBitConverter.__ToBoolean__SystemByteArray_SystemInt32__SystemBoolean"
+        PUSH, __f41_T1__
+        JUMP_IF_FALSE, 0x00002904
+        PUSH, __f41_L4__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __c_i32_n2147483646
+        PUSH, __f41_T1__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f41_T1__
+        PUSH, __ret0_i32
+        EXTERN, "SystemConvert.__ToInt32__SystemBoolean__SystemInt32"
+        JUMP_INDIRECT, __f41_RA__
+        PUSH, __G__memory
+        PUSH, __c_i32_1051428
+        PUSH, __f42_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f42_T1__
+        PUSH, __f42_P0__
+        PUSH, __f42_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051432
+        PUSH, __f41_P1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f42_L1__
+        PUSH, __f41_P0__
+        COPY
+        PUSH, __ra_18
+        PUSH, __f41_RA__
+        COPY
+        JUMP, 0x000028C8
+        PUSH, __ret0_i32
+        PUSH, __f42_P0__
+        COPY
+        PUSH, __f42_P0__
+        PUSH, __c_i32_1
+        PUSH, __f42_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f42_T1__
+        PUSH, __c_i32_0
+        PUSH, __f42_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f42_T2__
+        JUMP_IF_FALSE, 0x00002CFC
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f42_L1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051428
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f42_P0__
+        PUSH, __ret0_i32
+        COPY
+        JUMP_INDIRECT, __f42_RA__
+        PUSH, __c_i32_n12
+        PUSH, __f43_L0__
+        COPY
+        PUSH, __f43_L0__
+        PUSH, __c_i32_0
+        PUSH, __f43_T1__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f43_T1__
+        JUMP_IF_FALSE, 0x00002F34
+        PUSH, __f43_L0__
+        PUSH, __c_i32_1051400
+        PUSH, __f43_T2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f43_T2__
+        PUSH, __f43_T2__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051432
+        PUSH, __f43_T3__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f43_T2__
+        PUSH, __f43_T3__
+        PUSH, __f43_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f43_T3__
+        PUSH, __c_i32_6
+        PUSH, __f43_T3__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f43_L0__
+        PUSH, __c_i32_1051388
+        PUSH, __f43_T2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f43_T2__
+        PUSH, __f43_T2__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051428
+        PUSH, __f43_T4__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f43_T2__
+        PUSH, __f43_T4__
+        PUSH, __f43_T4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f43_T3__
+        PUSH, __f43_T4__
+        PUSH, __f43_T4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f43_L0__
+        PUSH, __c_i32_1051412
+        PUSH, __f43_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f43_T4__
+        PUSH, __c_i32_1051304
+        PUSH, __f43_T4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f43_T3__
+        PUSH, __G__memory
+        PUSH, __f43_T4__
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f43_L0__
+        PUSH, __c_i32_4
+        PUSH, __f43_L0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00002D2C
+        PUSH, __kpool
+        PUSH, __c_i32_40
+        PUSH, __G__memory
+        PUSH, __c_i32_1051444
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __kpool
+        PUSH, __c_i32_44
+        PUSH, __G__memory
+        PUSH, __c_i32_1051436
+        PUSH, __c_i32_8
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP_INDIRECT, __f43_RA__
+        PUSH, __ra_19
+        PUSH, __f33_RA__
+        COPY
+        JUMP, 0x00000130
+        PUSH, __this_behaviour
+        EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__RequestSerialization__SystemVoid"
+        JUMP_INDIRECT, __f44_RA__
+        PUSH, __G__memory
+        PUSH, __c_i32_1051464
+        PUSH, __f45_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f45_T1__
+        PUSH, __c_i32_1664525
+        PUSH, __f45_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f45_T1__
+        PUSH, __c_i32_1013904223
+        PUSH, __f45_L0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f45_L0__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051464
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f45_L0__
+        PUSH, __c_i32_16
+        PUSH, __f45_T1__
+        EXTERN, "SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f45_T1__
+        PUSH, __c_i32_1
+        PUSH, __f45_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f45_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051424
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __c_i32_108
+        PUSH, __f45_L0__
+        COPY
+        PUSH, __f45_L0__
+        PUSH, __c_i32_120
+        PUSH, __f45_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f45_T2__
+        JUMP_IF_FALSE, 0x000032FC
+        PUSH, __G__memory
+        PUSH, __c_i32_1051464
+        PUSH, __f45_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f45_T1__
+        PUSH, __c_i32_1664525
+        PUSH, __f45_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f45_T1__
+        PUSH, __c_i32_1013904223
+        PUSH, __f45_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f45_L1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051464
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f45_L0__
+        PUSH, __c_i32_1051304
+        PUSH, __f45_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f45_L1__
+        PUSH, __c_i32_16
+        PUSH, __f45_T3__
+        EXTERN, "SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f45_T3__
+        PUSH, __c_i32_3
+        PUSH, __f45_T3__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f45_T3__
+        PUSH, __c_i32_1
+        PUSH, __f45_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f45_T3__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __f45_T1__
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f45_L0__
+        PUSH, __c_i32_4
+        PUSH, __f45_L0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00003124
+        JUMP_INDIRECT, __f45_RA__
+        PUSH, __G__memory
+        PUSH, __c_i32_1051424
+        PUSH, __f46_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f46_T1__
+        PUSH, __c_i32_24
+        PUSH, __f46_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f46_T1__
+        PUSH, __c_i32_1051192
+        PUSH, __f46_L0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_n12
+        PUSH, __f46_L1__
+        COPY
+        PUSH, __f46_L1__
+        PUSH, __c_i32_0
+        PUSH, __f46_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f46_T2__
+        JUMP_IF_FALSE, 0x000034B0
+        PUSH, __f46_L1__
+        PUSH, __c_i32_1051388
+        PUSH, __f46_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f46_L0__
+        PUSH, __G__memory
+        PUSH, __f46_T1__
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f46_L1__
+        PUSH, __c_i32_1051400
+        PUSH, __f46_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f46_L0__
+        PUSH, __c_i32_4
+        PUSH, __f46_T3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __f46_T3__
+        PUSH, __G__memory
+        PUSH, __f46_T1__
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __f46_L0__
+        PUSH, __c_i32_8
+        PUSH, __f46_L0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f46_L1__
+        PUSH, __c_i32_4
+        PUSH, __f46_L1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00003378
+        PUSH, __kpool
+        PUSH, __c_i32_52
+        PUSH, __G__memory
+        PUSH, __c_i32_1051428
+        PUSH, __c_i32_8
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051420
+        PUSH, __G__memory
+        PUSH, __c_i32_1051408
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051412
+        PUSH, __G__memory
+        PUSH, __c_i32_1051400
+        PUSH, __c_i32_8
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __ra_20
+        PUSH, __f45_RA__
+        COPY
+        JUMP, 0x00002FD0
+        PUSH, __c_i32_3
+        PUSH, __f46_L1__
+        COPY
+        PUSH, __G__memory
+        PUSH, __c_i32_1051428
+        PUSH, __f46_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051432
+        PUSH, __f41_P1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f46_T1__
+        PUSH, __f41_P0__
+        COPY
+        PUSH, __ra_21
+        PUSH, __f41_RA__
+        COPY
+        JUMP, 0x000028C8
+        PUSH, __ret0_i32
+        PUSH, __c_i32_1
+        PUSH, __f46_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __f46_T1__
+        PUSH, __c_i32_0
+        PUSH, __f46_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __f46_T2__
+        JUMP_IF_FALSE, 0x000036F4
+        PUSH, __G__memory
+        PUSH, __c_i32_1051448
+        PUSH, __f46_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __f46_T1__
+        PUSH, __c_i32_1
+        PUSH, __f46_T1__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_24
+        PUSH, __f46_T1__
+        PUSH, __f46_T1__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f46_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051444
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __c_i32_0
+        PUSH, __f46_L1__
+        COPY
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __f46_L1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051436
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP_INDIRECT, __f46_RA__
+        PUSH, __c_i32_3
+        PUSH, __f38_P0__
+        COPY
+        PUSH, __ra_22
+        PUSH, __f38_RA__
+        COPY
+        JUMP, 0x00001BA4
+        JUMP, 0xFFFFFFFC
+        PUSH, __c_i32_2
+        PUSH, __f38_P0__
+        COPY
+        PUSH, __ra_23
+        PUSH, __f38_RA__
+        COPY
+        JUMP, 0x00001BA4
+        JUMP, 0xFFFFFFFC
+        PUSH, __c_i32_1
+        PUSH, __f38_P0__
+        COPY
+        PUSH, __ra_24
+        PUSH, __f38_RA__
+        COPY
+        JUMP, 0x00001BA4
+        JUMP, 0xFFFFFFFC
+        PUSH, __c_i32_0
+        PUSH, __f38_P0__
+        COPY
+        PUSH, __ra_25
+        PUSH, __f38_RA__
+        COPY
+        JUMP, 0x00001BA4
+        JUMP, 0xFFFFFFFC
+        PUSH, __c_i32_0
+        PUSH, ___update_L3__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, ___update_L7__
+        COPY
+        PUSH, __G__g0
+        PUSH, __c_i32_208
+        PUSH, ___update_L0__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L0__
+        PUSH, __G__g0
+        COPY
+        PUSH, __ra_26
+        PUSH, __f39_RA__
+        COPY
+        JUMP, 0x00002790
+        PUSH, __ret0_i32
+        PUSH, __c_i32_1
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, __c_i32_0
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00005860
+        PUSH, ___update_T3__
+        EXTERN, "UnityEngineTime.__get_deltaTime__SystemSingle"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051472
+        PUSH, ___update_T4__
+        EXTERN, "SystemBitConverter.__ToSingle__SystemByteArray_SystemInt32__SystemSingle"
+        PUSH, ___update_T3__
+        PUSH, ___update_T4__
+        PUSH, ___update_L1__
+        EXTERN, "SystemSingle.__op_Addition__SystemSingle_SystemSingle__SystemSingle"
+        PUSH, __st_f32
+        PUSH, __c_i32_0
+        PUSH, ___update_L1__
+        EXTERN, "SystemSingleArray.__Set__SystemInt32_SystemSingle__SystemVoid"
+        PUSH, __st_f32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051472
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L1__
+        PUSH, __c_f32_3d088889
+        PUSH, ___update_T2__
+        EXTERN, "SystemSingle.__op_LessThan__SystemSingle_SystemSingle__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x000039CC
+        JUMP, 0x00005860
+        PUSH, ___update_L1__
+        PUSH, __c_f32_bd088889
+        PUSH, ___update_L1__
+        EXTERN, "SystemSingle.__op_Addition__SystemSingle_SystemSingle__SystemSingle"
+        PUSH, ___update_L1__
+        PUSH, __c_f32_3d088889
+        PUSH, ___update_T2__
+        EXTERN, "SystemSingle.__op_GreaterThan__SystemSingle_SystemSingle__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00003A38
+        PUSH, __c_f32_3d088889
+        PUSH, ___update_T4__
+        COPY
+        JUMP, 0x00003A4C
+        PUSH, ___update_L1__
+        PUSH, ___update_T4__
+        COPY
+        PUSH, __st_f32
+        PUSH, __c_i32_0
+        PUSH, ___update_T4__
+        EXTERN, "SystemSingleArray.__Set__SystemInt32_SystemSingle__SystemVoid"
+        PUSH, __st_f32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051472
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051436
+        PUSH, ___update_L2__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, ___update_L2__
+        PUSH, __c_i32_3
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00005860
+        PUSH, __G__memory
+        PUSH, __c_i32_1051444
+        PUSH, ___update_L3__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, ___update_L3__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __c_i32_n2147483646
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00003BD4
+        PUSH, ___update_L3__
+        PUSH, __c_i32_n1
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051444
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP, 0x00005860
+        PUSH, ___update_L2__
+        PUSH, __c_i32_1
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00003C0C
+        JUMP, 0x00003C44
+        PUSH, ___update_L2__
+        PUSH, __c_i32_2
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x000053D8
+        JUMP, 0x000055F8
+        PUSH, __c_i32_1051304
+        PUSH, ___update_L4__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, ___update_L5__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, ___update_L6__
+        COPY
+        PUSH, ___update_L5__
+        PUSH, __c_i32_11
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00003EB0
+        PUSH, ___update_L5__
+        PUSH, __c_i32_1
+        PUSH, ___update_L5__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_0
+        PUSH, ___update_L2__
+        COPY
+        PUSH, ___update_L2__
+        PUSH, __c_i32_6
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x000053B0
+        PUSH, ___update_L4__
+        PUSH, ___update_L2__
+        PUSH, ___update_L3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L3__
+        PUSH, __c_i32_6
+        PUSH, ___update_L7__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, ___update_L7__
+        PUSH, ___update_T5__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, ___update_T5__
+        PUSH, ___update_L8__
+        EXTERN, "SystemConvert.__ToInt32__SystemByte__SystemInt32"
+        PUSH, ___update_L8__
+        PUSH, __c_i32_0
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00003E88
+        PUSH, __G__memory
+        PUSH, ___update_L3__
+        PUSH, ___update_T2__
+        EXTERN, "SystemBitConverter.__ToBoolean__SystemByteArray_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00003DF4
+        JUMP, 0x00003E88
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_L8__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, ___update_L3__
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __kpool
+        PUSH, __c_i32_68
+        PUSH, __G__memory
+        PUSH, ___update_L7__
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __c_i32_1
+        PUSH, ___update_L6__
+        COPY
+        PUSH, ___update_L2__
+        PUSH, __c_i32_1
+        PUSH, ___update_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00003CE4
+        PUSH, ___update_L6__
+        PUSH, __c_i32_1
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, __c_i32_0
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00005378
+        PUSH, __c_i32_0
+        PUSH, ___update_L9__
+        COPY
+        PUSH, __G__memory
+        PUSH, ___update_L0__
+        PUSH, __c_i32_72
+        EXTERN, "SystemArray.__Clear__SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __c_i32_0
+        PUSH, ___update_L10__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, ___update_L11__
+        COPY
+        PUSH, ___update_L9__
+        PUSH, __c_i32_72
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00004E14
+        PUSH, ___update_L9__
+        PUSH, __c_i32_1051304
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __derived0
+        PUSH, ___update_T5__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, ___update_T5__
+        PUSH, ___update_L4__
+        EXTERN, "SystemConvert.__ToInt32__SystemByte__SystemInt32"
+        PUSH, ___update_L4__
+        PUSH, __c_i32_0
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00005350
+        PUSH, ___update_L0__
+        PUSH, ___update_L9__
+        PUSH, ___update_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, ___update_L2__
+        PUSH, ___update_T2__
+        EXTERN, "SystemBitConverter.__ToBoolean__SystemByteArray_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x0000406C
+        JUMP, 0x00005350
+        PUSH, __c_i32_1
+        PUSH, ___update_L8__
+        COPY
+        PUSH, __kpool
+        PUSH, __c_i32_69
+        PUSH, __G__memory
+        PUSH, ___update_L2__
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L0__
+        PUSH, __c_i32_72
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_L9__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __derived1
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __c_i32_0
+        PUSH, ___update_L6__
+        COPY
+        PUSH, ___update_L6__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L8__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __derived1
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00004288
+        PUSH, ___update_L0__
+        PUSH, __c_i32_72
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, ___update_L6__
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, ___update_T1__
+        PUSH, ___update_T5__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, ___update_T5__
+        PUSH, ___update_L2__
+        EXTERN, "SystemConvert.__ToInt32__SystemByte__SystemInt32"
+        PUSH, ___update_L2__
+        PUSH, __c_i32_6
+        PUSH, ___update_L3__
+        EXTERN, "SystemInt32.__op_Remainder__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L3__
+        PUSH, __c_i32_0
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x0000446C
+        PUSH, __c_i32_1051292
+        PUSH, ___update_L7__
+        COPY
+        JUMP, 0x00004620
+        PUSH, ___update_L8__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __c_i32_n2147483644
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00005350
+        PUSH, ___update_L0__
+        PUSH, __c_i32_72
+        PUSH, ___update_L3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L8__
+        PUSH, ___update_L2__
+        COPY
+        PUSH, ___update_L2__
+        PUSH, __c_i32_0
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x000045D8
+        PUSH, __G__memory
+        PUSH, ___update_L3__
+        PUSH, ___update_T5__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, ___update_T5__
+        PUSH, ___update_L7__
+        EXTERN, "SystemConvert.__ToInt32__SystemByte__SystemInt32"
+        PUSH, ___update_L7__
+        PUSH, __c_i32_1051304
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __derived0
+        PUSH, ___update_T5__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, ___update_T5__
+        PUSH, __c_u8_128
+        PUSH, ___update_T1__
+        EXTERN, "SystemByte.__op_LogicalOr__SystemByte_SystemByte__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __derived0
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L2__
+        PUSH, __c_i32_n1
+        PUSH, ___update_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L3__
+        PUSH, __c_i32_1
+        PUSH, ___update_L3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x0000430C
+        PUSH, ___update_L0__
+        PUSH, __c_i32_148
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __kpool
+        PUSH, __c_i32_69
+        PUSH, __G__memory
+        PUSH, __derived0
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L2__
+        PUSH, __c_i32_n1
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L0__
+        PUSH, __c_i32_144
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __derived1
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L0__
+        PUSH, __c_i32_144
+        PUSH, ___update_L7__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L3__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived2
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived2
+        PUSH, __c_i32_n2147483643
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00004620
+        PUSH, __c_i32_1051292
+        PUSH, ___update_L5__
+        COPY
+        JUMP, 0x00004720
+        PUSH, ___update_L10__
+        PUSH, __c_i32_1
+        PUSH, ___update_L10__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L8__
+        PUSH, ___update_L11__
+        PUSH, ___update_L11__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00005350
+        PUSH, ___update_L0__
+        PUSH, __c_i32_156
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __kpool
+        PUSH, __c_i32_69
+        PUSH, __G__memory
+        PUSH, __derived0
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L2__
+        PUSH, __c_i32_1
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L0__
+        PUSH, __c_i32_152
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __derived1
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L0__
+        PUSH, __c_i32_152
+        PUSH, ___update_L5__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_1051292
+        PUSH, ___update_L3__
+        COPY
+        PUSH, ___update_L2__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __c_i32_n2147483643
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x000048D0
+        PUSH, ___update_L0__
+        PUSH, __c_i32_164
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __kpool
+        PUSH, __c_i32_69
+        PUSH, __G__memory
+        PUSH, __derived1
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L2__
+        PUSH, __c_i32_n6
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L0__
+        PUSH, __c_i32_160
+        PUSH, __derived2
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __derived2
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L0__
+        PUSH, __c_i32_160
+        PUSH, ___update_L3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __c_i32_n2147483582
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x000048D0
+        PUSH, __c_i32_1051292
+        PUSH, ___update_L2__
+        COPY
+        JUMP, 0x000049D0
+        PUSH, ___update_L0__
+        PUSH, __c_i32_172
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __kpool
+        PUSH, __c_i32_69
+        PUSH, __G__memory
+        PUSH, __derived0
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L2__
+        PUSH, __c_i32_6
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L0__
+        PUSH, __c_i32_168
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __derived1
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L0__
+        PUSH, __c_i32_168
+        PUSH, ___update_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L0__
+        PUSH, __c_i32_176
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, ___update_L7__
+        PUSH, __G__memory
+        PUSH, __derived0
+        PUSH, __c_i32_8
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L0__
+        PUSH, __c_i32_184
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, ___update_L5__
+        PUSH, __G__memory
+        PUSH, __derived1
+        PUSH, __c_i32_8
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L0__
+        PUSH, __c_i32_192
+        PUSH, __derived2
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, ___update_L3__
+        PUSH, __G__memory
+        PUSH, __derived2
+        PUSH, __c_i32_8
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L0__
+        PUSH, __c_i32_200
+        PUSH, __derived3
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, ___update_L2__
+        PUSH, __G__memory
+        PUSH, __derived3
+        PUSH, __c_i32_8
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __c_i32_0
+        PUSH, ___update_L2__
+        COPY
+        PUSH, ___update_L2__
+        PUSH, __c_i32_32
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00004DEC
+        PUSH, ___update_L0__
+        PUSH, __c_i32_176
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, ___update_L2__
+        PUSH, ___update_L3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L3__
+        PUSH, __c_i32_4
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, ___update_T1__
+        PUSH, ___update_T2__
+        EXTERN, "SystemBitConverter.__ToBoolean__SystemByteArray_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00004DC4
+        PUSH, __G__memory
+        PUSH, ___update_L3__
+        PUSH, ___update_L3__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, ___update_L0__
+        PUSH, ___update_L3__
+        PUSH, ___update_L7__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, ___update_L7__
+        PUSH, ___update_T2__
+        EXTERN, "SystemBitConverter.__ToBoolean__SystemByteArray_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00004C5C
+        JUMP, 0x00004DC4
+        PUSH, ___update_L3__
+        PUSH, __c_i32_1051304
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, ___update_T1__
+        PUSH, ___update_T5__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, ___update_T5__
+        PUSH, ___update_T1__
+        EXTERN, "SystemConvert.__ToInt32__SystemByte__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, ___update_L4__
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00004DC4
+        PUSH, __kpool
+        PUSH, __c_i32_69
+        PUSH, __G__memory
+        PUSH, ___update_L7__
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L0__
+        PUSH, __c_i32_72
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, ___update_L8__
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_L3__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, ___update_T1__
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L8__
+        PUSH, __c_i32_1
+        PUSH, ___update_L8__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_L2__
+        PUSH, __c_i32_8
+        PUSH, ___update_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00004B24
+        PUSH, ___update_L6__
+        PUSH, __c_i32_1
+        PUSH, ___update_L6__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00004134
+        PUSH, ___update_L11__
+        PUSH, __c_i32_0
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x000052FC
+        PUSH, __G__memory
+        PUSH, __c_i32_1051440
+        PUSH, ___update_L3__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, ___update_L3__
+        PUSH, __c_i32_1
+        PUSH, ___update_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_L2__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051440
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L3__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051460
+        PUSH, ___update_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, __c_i32_n2147483648
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, ___update_T1__
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00004FB4
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_L2__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051460
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051452
+        PUSH, ___update_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, ___update_L10__
+        PUSH, ___update_L3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_L3__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051452
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L11__
+        PUSH, ___update_L2__
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, __c_i32_10
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051456
+        PUSH, ___update_T6__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, ___update_T6__
+        PUSH, ___update_T1__
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051456
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___update_L3__
+        PUSH, ___update_T7__
+        EXTERN, "SystemConvert.__ToInt64__SystemInt32__SystemInt64"
+        PUSH, ___update_T7__
+        PUSH, __c_i64_ffffffff
+        PUSH, ___update_T7__
+        EXTERN, "SystemInt64.__op_LogicalAnd__SystemInt64_SystemInt64__SystemInt64"
+        PUSH, ___update_T7__
+        PUSH, __c_i64_5
+        PUSH, ___update_T7__
+        EXTERN, "SystemInt64.__op_Division__SystemInt64_SystemInt64__SystemInt64"
+        PUSH, ___update_T7__
+        PUSH, __c_i32_32
+        PUSH, ___update_T7__
+        EXTERN, "SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64"
+        PUSH, ___update_T7__
+        PUSH, __c_i32_32
+        PUSH, ___update_T7__
+        EXTERN, "SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64"
+        PUSH, ___update_T7__
+        PUSH, ___update_L2__
+        EXTERN, "SystemConvert.__ToInt32__SystemInt64__SystemInt32"
+        PUSH, ___update_L2__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __c_i32_n2147483639
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00005230
+        PUSH, ___update_L2__
+        PUSH, ___update_T1__
+        COPY
+        JUMP, 0x00005244
+        PUSH, __c_i32_9
+        PUSH, ___update_T1__
+        COPY
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051448
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __kpool
+        PUSH, __c_i32_78
+        PUSH, __G__memory
+        PUSH, __c_i32_1051444
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __kpool
+        PUSH, __c_i32_82
+        PUSH, __G__memory
+        PUSH, __c_i32_1051436
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP, 0x000057B4
+        PUSH, __kpool
+        PUSH, __c_i32_86
+        PUSH, __G__memory
+        PUSH, __c_i32_1051440
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __ra_27
+        PUSH, __f46_RA__
+        COPY
+        JUMP, 0x00003304
+        JUMP, 0x000057B4
+        PUSH, ___update_L9__
+        PUSH, __c_i32_1
+        PUSH, ___update_L9__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00003F5C
+        PUSH, __kpool
+        PUSH, __c_i32_40
+        PUSH, __G__memory
+        PUSH, __c_i32_1051444
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP, 0x000057B4
+        PUSH, ___update_L4__
+        PUSH, __c_i32_6
+        PUSH, ___update_L4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00003C80
+        PUSH, __G__memory
+        PUSH, __c_i32_1051432
+        PUSH, ___update_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, __c_i32_n1
+        PUSH, ___update_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051428
+        PUSH, ___update_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, ___update_L2__
+        PUSH, __f41_P1__
+        COPY
+        PUSH, ___update_T1__
+        PUSH, __f41_P0__
+        COPY
+        PUSH, __ra_28
+        PUSH, __f41_RA__
+        COPY
+        JUMP, 0x000028C8
+        PUSH, __ret0_i32
+        PUSH, __c_i32_1
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, __c_i32_0
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x000054F0
+        PUSH, __ra_29
+        PUSH, __f43_RA__
+        COPY
+        JUMP, 0x00002D18
+        JUMP, 0x000057B4
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_L2__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051432
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051448
+        PUSH, ___update_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, __c_i32_1
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __c_i32_24
+        PUSH, ___update_T1__
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051444
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP, 0x000057B4
+        PUSH, __c_i32_n72
+        PUSH, ___update_L2__
+        COPY
+        PUSH, ___update_L2__
+        PUSH, __c_i32_0
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x00005724
+        PUSH, ___update_L2__
+        PUSH, __c_i32_1051376
+        PUSH, ___update_L3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, ___update_L3__
+        PUSH, ___update_T5__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, ___update_T5__
+        PUSH, __c_u8_24
+        PUSH, ___update_T1__
+        EXTERN, "SystemByte.__op_LeftShift__SystemByte_SystemByte__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, __c_i32_24
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_RightShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, __c_i32_0
+        PUSH, ___update_T2__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___update_T2__
+        JUMP_IF_FALSE, 0x0000578C
+        PUSH, __kpool
+        PUSH, __c_i32_68
+        PUSH, __G__memory
+        PUSH, ___update_L3__
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP, 0x0000578C
+        PUSH, __kpool
+        PUSH, __c_i32_40
+        PUSH, __G__memory
+        PUSH, __c_i32_1051444
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __kpool
+        PUSH, __c_i32_90
+        PUSH, __G__memory
+        PUSH, __c_i32_1051436
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP, 0x000057B4
+        PUSH, ___update_L2__
+        PUSH, __c_i32_1
+        PUSH, ___update_L2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x0000560C
+        PUSH, __G__memory
+        PUSH, __c_i32_1051468
+        PUSH, ___update_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, ___update_T1__
+        PUSH, __c_i32_1
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, ___update_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051468
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __ra_30
+        PUSH, __f44_RA__
+        COPY
+        JUMP, 0x00002F9C
+        PUSH, ___update_L0__
+        PUSH, __c_i32_208
+        PUSH, __G__g0
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0xFFFFFFFC
+        PUSH, __c_i32_n480
+        PUSH, ___start_L0__
+        COPY
+        PUSH, ___start_L0__
+        PUSH, __c_i32_0
+        PUSH, ___start_T1__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___start_T1__
+        JUMP_IF_FALSE, 0x00005994
+        PUSH, ___start_L0__
+        PUSH, __c_i32_1051988
+        PUSH, ___start_T2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __kpool
+        PUSH, __c_i32_4
+        PUSH, __G__memory
+        PUSH, ___start_T2__
+        PUSH, __c_i32_8
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___start_L0__
+        PUSH, __c_i32_1051980
+        PUSH, ___start_T2__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __kpool
+        PUSH, __c_i32_94
+        PUSH, __G__memory
+        PUSH, ___start_T2__
+        PUSH, __c_i32_8
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, ___start_L0__
+        PUSH, __c_i32_40
+        PUSH, ___start_L0__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x0000589C
+        PUSH, __c_i32_1
+        PUSH, __c_i32_1
+        PUSH, ___start_T3__
+        EXTERN, "UnityEngineTexture2D.__ctor__SystemInt32_SystemInt32__UnityEngineTexture2D"
+        PUSH, ___start_T3__
+        PUSH, ___start_T4__
+        EXTERN, "UnityEngineTexture2D.__get_format__UnityEngineTextureFormat"
+        PUSH, __c_i32_0
+        PUSH, ___start_T1__
+        EXTERN, "SystemConvert.__ToBoolean__SystemInt32__SystemBoolean"
+        PUSH, __c_i32_10
+        PUSH, __c_i32_12
+        PUSH, ___start_T4__
+        PUSH, ___start_T1__
+        PUSH, ___start_L0__
+        EXTERN, "UnityEngineTexture2D.__ctor__SystemInt32_SystemInt32_UnityEngineTextureFormat_SystemBoolean__UnityEngineTexture2D"
+        PUSH, ___start_L0__
+        PUSH, __point_filter
+        EXTERN, "UnityEngineTexture.__set_filterMode__UnityEngineFilterMode__SystemVoid"
+        PUSH, ___start_L0__
+        PUSH, _texture
+        COPY
+        PUSH, __c_i32_480
+        PUSH, _pixels
+        EXTERN, "SystemByteArray.__ctor__SystemInt32__SystemByteArray"
+        PUSH, _renderer
+        PUSH, ___start_L1__
+        COPY
+        PUSH, ___start_L1__
+        PUSH, ___start_T1__
+        EXTERN, "VRCSDKBaseUtilities.__IsValid__SystemObject__SystemBoolean"
+        PUSH, ___start_T1__
+        PUSH, ___start_T2__
+        EXTERN, "SystemConvert.__ToInt32__SystemBoolean__SystemInt32"
+        PUSH, ___start_T2__
+        PUSH, __c_i32_1
+        PUSH, ___start_T2__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___start_T2__
+        PUSH, __c_i32_0
+        PUSH, ___start_T1__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___start_T1__
+        JUMP_IF_FALSE, 0x00005B1C
+        PUSH, ___start_L1__
+        PUSH, ___start_T6__
+        EXTERN, "UnityEngineRenderer.__get_material__UnityEngineMaterial"
+        PUSH, ___start_T6__
+        PUSH, ___start_L0__
+        EXTERN, "UnityEngineMaterial.__set_mainTexture__UnityEngineTexture__SystemVoid"
+        PUSH, __ra_31
+        PUSH, __f39_RA__
+        COPY
+        JUMP, 0x00002790
+        PUSH, __ret0_i32
+        PUSH, __c_i32_1
+        PUSH, ___start_T2__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, ___start_T2__
+        PUSH, __c_i32_0
+        PUSH, ___start_T1__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, ___start_T1__
+        JUMP_IF_FALSE, 0x00005C00
+        PUSH, __c_i32_172
+        PUSH, _state
+        EXTERN, "SystemByteArray.__ctor__SystemInt32__SystemByteArray"
+        PUSH, __G__memory
+        PUSH, __c_i32_1051300
+        PUSH, __f40_P0__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __ra_32
+        PUSH, __f40_RA__
+        COPY
+        JUMP, 0x000027C8
+        PUSH, __ra_33
+        PUSH, __f44_RA__
+        COPY
+        JUMP, 0x00002F9C
+        JUMP, 0xFFFFFFFC
+        PUSH, __ra_34
+        PUSH, __f33_RA__
+        COPY
+        JUMP, 0x00000130
+        JUMP, 0xFFFFFFFC
+    .export _onDeserialization
+    _onDeserialization:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x00005CFC
+        JUMP, 0x00000000
+    .export _onPreSerialization
+    _onPreSerialization:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x00005D18
+        JUMP, 0x00001B0C
+    .export Restart
+    Restart:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x00005D34
+        JUMP, 0x00001B6C
+    .export Drop
+    Drop:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x00005D50
+        JUMP, 0x0000374C
+    .export Rotate
+    Rotate:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x00005D6C
+        JUMP, 0x00003784
+    .export MoveRight
+    MoveRight:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x00005D88
+        JUMP, 0x000037BC
+    .export MoveLeft
+    MoveLeft:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x00005DA4
+        JUMP, 0x000037F4
+    .export _update
+    _update:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x00005DC0
+        JUMP, 0x0000382C
+    .export _start
+    _start:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x00005DDC
+        JUMP, 0x00005888
+        PUSH, __ra_35
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x00005DF0
+        PUSH, __ra_36
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x00005DF0
+        PUSH, __ra_37
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x00005DF0
+        PUSH, __ra_38
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x00005DF0
+        PUSH, __ra_39
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x00005DF0
+        PUSH, __ra_40
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x00005DF0
+        PUSH, __ra_41
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x00005DF0
+        PUSH, __ra_42
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x00005DF0
+        PUSH, __ra_43
+        PUSH, __init_RA
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __c_i32_0
+        PUSH, __inited
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __c_i32_1114112
+        PUSH, __G__memory
+        EXTERN, "SystemByteArray.__ctor__SystemInt32__SystemByteArray"
+        PUSH, __data_0
+        PUSH, __data_bytes
+        EXTERN, "SystemConvert.__FromBase64String__SystemString__SystemByteArray"
+        PUSH, __data_bytes
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1048576
+        PUSH, __c_i32_2713
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __data_1
+        PUSH, __data_bytes
+        EXTERN, "SystemConvert.__FromBase64String__SystemString__SystemByteArray"
+        PUSH, __data_bytes
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051300
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __kpool_b64
+        PUSH, __kpool
+        EXTERN, "SystemConvert.__FromBase64String__SystemString__SystemByteArray"
+        PUSH, __kpool
+        PUSH, __c_i32_16
+        PUSH, __c_i64_ffffffff
+        EXTERN, "SystemBitConverter.__ToInt64__SystemByteArray_SystemInt32__SystemInt64"
+        PUSH, __kpool
+        PUSH, __c_i32_24
+        PUSH, __c_i64_a
+        EXTERN, "SystemBitConverter.__ToInt64__SystemByteArray_SystemInt32__SystemInt64"
+        PUSH, __kpool
+        PUSH, __c_i32_60
+        PUSH, __c_f32_3d088889
+        EXTERN, "SystemBitConverter.__ToSingle__SystemByteArray_SystemInt32__SystemSingle"
+        PUSH, __kpool
+        PUSH, __c_i32_64
+        PUSH, __c_f32_bd088889
+        EXTERN, "SystemBitConverter.__ToSingle__SystemByteArray_SystemInt32__SystemSingle"
+        PUSH, __kpool
+        PUSH, __c_i32_70
+        PUSH, __c_i64_5
+        EXTERN, "SystemBitConverter.__ToInt64__SystemByteArray_SystemInt32__SystemInt64"
+        PUSH, __c_i32_2
+        PUSH, __c_u8_2
+        EXTERN, "SystemConvert.__ToByte__SystemInt32__SystemByte"
+        PUSH, __c_i32_24
+        PUSH, __c_u8_24
+        EXTERN, "SystemConvert.__ToByte__SystemInt32__SystemByte"
+        PUSH, __c_i32_128
+        PUSH, __c_u8_128
+        EXTERN, "SystemConvert.__ToByte__SystemInt32__SystemByte"
+        PUSH, __c_i32_1
+        PUSH, __st_i32
+        EXTERN, "SystemInt32Array.__ctor__SystemInt32__SystemInt32Array"
+        PUSH, __c_i32_1
+        PUSH, __st_f32
+        EXTERN, "SystemSingleArray.__ctor__SystemInt32__SystemSingleArray"
+        PUSH, __utf8
+        EXTERN, "SystemTextEncoding.__get_UTF8__SystemTextEncoding"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, _seed
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1051300
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP_INDIRECT, __init_RA
+.code_end
