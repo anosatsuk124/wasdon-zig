@@ -933,8 +933,14 @@ const unity = struct {
     fn localPlayer(vm: *Vm) *Object {
         return vm.host.local_player;
     }
-    fn isOwner(_: *Object) bool {
-        return true;
+    fn isOwner(vm: *Vm, _: *Object) bool {
+        return vm.host.is_owner;
+    }
+    fn setOwner(vm: *Vm, player: *Object, _: *Object) void {
+        vm.host.is_owner = player == vm.host.local_player;
+    }
+    fn requestSerialization(vm: *Vm, _: *Object) void {
+        vm.host.serialization_requested = true;
     }
     fn isMaster() bool {
         return true;
@@ -1160,6 +1166,8 @@ const fixed_entries = [_]KV{
     .{ "UnityEngineTexture2D.__LoadRawTextureData__SystemByteArray__SystemVoid", wrap(unity.loadRawTextureData) },
     .{ "VRCSDKBaseNetworking.__get_LocalPlayer__VRCSDKBaseVRCPlayerApi", wrap(unity.localPlayer) },
     .{ "VRCSDKBaseNetworking.__IsOwner__UnityEngineGameObject__SystemBoolean", wrap(unity.isOwner) },
+    .{ "VRCSDKBaseNetworking.__SetOwner__VRCSDKBaseVRCPlayerApi_UnityEngineGameObject__SystemVoid", wrap(unity.setOwner) },
+    .{ "VRCUdonCommonInterfacesIUdonEventReceiver.__RequestSerialization__SystemVoid", wrap(unity.requestSerialization) },
     .{ "VRCSDKBaseNetworking.__get_IsMaster__SystemBoolean", wrap(unity.isMaster) },
     .{ "UnityEngineRandom.__Range__SystemInt32_SystemInt32__SystemInt32", wrap(unity.randomRangeInt) },
     .{ "UnityEngineRandom.__Range__SystemSingle_SystemSingle__SystemSingle", wrap(unity.randomRangeFloat) },

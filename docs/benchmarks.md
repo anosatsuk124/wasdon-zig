@@ -156,6 +156,82 @@ alone: its formatting code copies short strings with `memcpy`.
 | `wasm-bench-alloc-rs` | `_interact` | 39963 | 7804 |
 | `udon-orbit-rs` | `_update` | 68 | 16 |
 
+## Application examples — optimization log
+
+The examples added after the redesign (`pi`, `mandelbrot`, `image-codec`,
+`ragdoll`, `blockfall`) are real workloads: long loops over linear memory,
+floating point, byte parsing. They are what the optimization work is
+measured on from here. Each step below is one change to the translator or to
+an example; the tables give every example's numbers after that step, so any
+row can be compared with any other.
+
+Scenarios (`test/fixtures.zig`):
+
+| Example | Scenario | What it covers |
+|---|---|---|
+| `pi` | `_start`, 30 frames | 100 digits: 25 spigot steps |
+| `mandelbrot` | `_start`, 33 frames, `_interact`, 33 frames | two 64x64 views at 96 iterations, uploaded every frame |
+| `image-codec` | `_start`, 50 frames, `_interact`, 50 frames | two 48x48 QOI pictures decoded, shown, re-encoded, compared |
+| `ragdoll` | `_start`, 150 frames, `_interact`, 250 frames | 333 physics steps: walking, a hit, the fall, getting up |
+| `blockfall` | `_start`, 610 frames, 28 button presses | a 13-trio game with clears and a chain, synced after every change |
+
+### Step 0 — first working version
+
+Every example translated and ran correctly on the first translator build it
+was tried on; the only gap found was in metadata validation (a field of
+type `VRCUdonUdonBehaviour` was rejected — `docs/udon_specs.md` §4.6).
+
+Static size:
+
+| Example | wasm bytes | heap | instr | externs | code bytes | uasm bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| `wasm-bench` | 12436 | 712 | 10338 | 1870 | 80228 | 415374 |
+| `udon-orbit` | 2513 | 68 | 188 | 40 | 1484 | 11160 |
+| `pi` | 1468 | 103 | 638 | 125 | 5020 | 28129 |
+| `mandelbrot` | 3491 | 212 | 1028 | 205 | 8064 | 47864 |
+| `image-codec` | 17564 | 276 | 3147 | 617 | 24712 | 146204 |
+| `ragdoll` | 6055 | 292 | 2783 | 562 | 21900 | 120585 |
+| `blockfall` | 8059 | 376 | 4297 | 871 | 33804 | 174393 |
+| `wasm-bench-rs` | 4408 | 392 | 2825 | 419 | 21380 | 110508 |
+| `wasm-bench-alloc-rs` | 11041 | 671 | 10231 | 1868 | 79412 | 395514 |
+| `udon-orbit-rs` | 1899 | 64 | 167 | 36 | 1320 | 9363 |
+
+Every program fits the stock 512-slot heap except the two that carry a
+formatting library (`wasm-bench`, `wasm-bench-alloc-rs`).
+
+Executed by the scenario:
+
+| Example | instructions | externs |
+|---|---:|---:|
+| `wasm-bench` | 47663 | 8841 |
+| `udon-orbit` | 8123 | 1926 |
+| `pi` | 317171 | 65624 |
+| `mandelbrot` | 4256741 | 889572 |
+| `image-codec` | 1781857 | 381012 |
+| `ragdoll` | 10710170 | 2500108 |
+| `blockfall` | 884123 | 186976 |
+| `wasm-bench-rs` | 52436 | 10977 |
+| `wasm-bench-alloc-rs` | 658023 | 128574 |
+| `udon-orbit-rs` | 6928 | 1628 |
+
+Per event (average over the scenario):
+
+| Example | event | runs | instr / run | externs / run |
+|---|---|---:|---:|---:|
+| `pi` | `_start` | 1 | 11758 | 2489 |
+| `pi` | `_update` | 30 | 10180 | 2104 |
+| `mandelbrot` | `_start` | 1 | 11846 | 2455 |
+| `mandelbrot` | `_update` | 66 | 64315 | 13440 |
+| `image-codec` | `_update` | 100 | 17810 | 3808 |
+| `ragdoll` | `_start` | 1 | 6356 | 1391 |
+| `ragdoll` | `_update` | 400 | 26755 | 6245 |
+| `ragdoll` | `_interact` | 1 | 1670 | 376 |
+| `blockfall` | `_start` | 1 | 9722 | 2068 |
+| `blockfall` | `_update` | 610 | 1011 | 213 |
+| `blockfall` | `MoveLeft` | 7 | 6458 | 1363 |
+| `blockfall` | `Rotate` | 4 | 9252 | 1966 |
+| `blockfall` | `Drop` | 11 | 11846 | 2546 |
+
 ## How the numbers are produced
 
 ```sh

@@ -154,10 +154,25 @@ The meaning of `this` is determined by the declared type of the variable as foll
 
 | Declared type | What `this` refers to |
 | --- | --- |
-| `GameObject` | The `GameObject` that owns the UdonBehaviour |
-| `Transform` | `gameObject.transform` of that `GameObject` |
-| `UdonBehaviour`, `IUdonBehaviour`, `Object` | The UdonBehaviour itself |
-| Any other type | **Error** |
+| `UnityEngineGameObject` | The `GameObject` that owns the UdonBehaviour |
+| `UnityEngineTransform` | `gameObject.transform` of that `GameObject` |
+| `VRCUdonUdonBehaviour`, `UnityEngineObject` | The UdonBehaviour itself |
+| Any other type | **Fails when the behaviour loads** |
+
+The assembler accepts `this` on a variable of any reference type; the
+restriction is applied at run time by
+`UdonBehaviour.ResolveUdonHeapReference`, which knows `GameObject`,
+`Transform`, `UdonBehaviour` / `IUdonBehaviour` and `UnityEngine.Object`
+and logs "Unsupported GameObject/Component reference type" for anything
+else. In particular:
+
+- `VRCUdonUdonBehaviour` is not in the node list — extern signatures name
+  the behaviour `VRCUdonCommonInterfacesIUdonEventReceiver` — but the
+  assembler resolves it (`UdonBehaviourTypeResolver`) and it is the type a
+  self-reference must be declared with. A variable of that type can be
+  passed wherever a signature asks for `IUdonEventReceiver`.
+- `%VRCUdonCommonInterfacesIUdonEventReceiver, this` and
+  `%SystemObject, this` assemble but do **not** resolve.
 
 ### 4.7 Per-Type Literal Restrictions (Strict)
 

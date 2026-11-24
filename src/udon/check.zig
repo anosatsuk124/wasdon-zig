@@ -66,19 +66,6 @@ fn isPrimitive(t: []const u8) bool {
     return false;
 }
 
-fn isThisTarget(t: []const u8) bool {
-    const targets = [_][]const u8{
-        "UnityEngineGameObject",                     "UnityEngineTransform",
-        "VRCUdonCommonInterfacesIUdonEventReceiver", "VRCUdonUdonBehaviour",
-    };
-    for (targets) |x| if (std.mem.eql(u8, t, x)) return true;
-    return false;
-}
-
-fn isKnownType(t: []const u8) bool {
-    return nodes.isType(t) or std.mem.eql(u8, t, "VRCUdonUdonBehaviour");
-}
-
 /// §4.4: first character a letter or `_`; the rest letters, digits, `_`,
 /// `[`, `]`, `<`, `>`.
 pub fn isValidName(name: []const u8) bool {
@@ -133,7 +120,7 @@ pub fn check(gpa: std.mem.Allocator, prog: *const Program) std.mem.Allocator.Err
 fn checkVars(ctx: *Ctx) !void {
     for (ctx.prog.vars[0..ctx.prog.named_count]) |v| {
         if (!isValidName(v.name)) try ctx.err(v.line, "invalid variable name '{s}'", .{v.name});
-        if (!isKnownType(v.type_name)) try ctx.err(v.line, "unknown Udon type '{s}'", .{v.type_name});
+        if (!nodes.isType(v.type_name)) try ctx.err(v.line, "unknown Udon type '{s}'", .{v.type_name});
         try checkLiteral(ctx, v);
     }
 }
@@ -143,7 +130,7 @@ fn checkLiteral(ctx: *Ctx, v: program.Var) !void {
     const eql = std.mem.eql;
     switch (v.init) {
         .null_ => {},
-        .this => if (!isThisTarget(t)) try ctx.err(v.line, "'{s}': `this` is not a valid initial value for {s}", .{ v.name, t }),
+        .this => if (!nodes.isThisTarget(t)) try ctx.err(v.line, "'{s}': `this` is not a valid initial value for {s}", .{ v.name, t }),
         .int => |i| {
             if (eql(u8, t, "SystemInt32")) {
                 // The assembler parses sign and magnitude separately, so the
@@ -155,7 +142,7 @@ fn checkLiteral(ctx: *Ctx, v: program.Var) !void {
                 if (i < 0 or i > std.math.maxInt(i32))
                     try ctx.err(v.line, "'{s}': {s} needs the `u` suffix to be a SystemUInt32", .{ v.name, v.init_text });
             } else if (!eql(u8, t, "SystemSingle") and !eql(u8, t, "SystemDouble")) {
-                try ctx.err(v.line, "'{s}': {s} cannot be initialized with a number (only null{s})", .{ v.name, t, if (isThisTarget(t)) " or this" else "" });
+                try ctx.err(v.line, "'{s}': {s} cannot be initialized with a number (only null{s})", .{ v.name, t, if (nodes.isThisTarget(t)) " or this" else "" });
             }
         },
         .uint => |u| {

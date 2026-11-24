@@ -78,6 +78,13 @@ const zig_examples = [_]Example{
         .setup = ragdollSetup,
         .verify = ragdollVerify,
     },
+    .{
+        .name = "blockfall",
+        .wasm = @embedFile("blockfall.wasm"),
+        .scenario = blockfallScenario(),
+        .setup = blockfallSetup,
+        .verify = blockfallVerify,
+    },
 };
 
 fn piSetup(vm: *Vm) !void {
@@ -193,6 +200,128 @@ fn ragdollVerify(vm: *Vm) !void {
     for (points.values, ragdoll.outline) |point, joint| {
         for (body.pos[joint], point.vec.v[0..3]) |x, y| try std.testing.expectEqual(x, y);
     }
+}
+
+const blockfall = @import("blockfall-core");
+
+/// A short game: steer and drop a dozen trios.
+const blockfall_script = [_][]const u8{
+    "_start",     "_update*30", "MoveLeft",   "MoveLeft",   "Rotate",     "_update*10", "Drop",       "_update*40",
+    "MoveRight",  "MoveRight",  "Drop",       "_update*40", "Rotate",     "Rotate",     "MoveLeft",   "Drop",
+    "_update*40", "Drop",       "_update*40", "MoveRight",  "Drop",       "_update*40", "MoveLeft",   "MoveLeft",
+    "MoveLeft",   "Drop",       "_update*40", "Rotate",     "Drop",       "_update*60", "Drop",       "_update*60",
+    "MoveRight",  "MoveRight",  "MoveRight",  "Drop",       "_update*60", "Drop",       "_update*60", "MoveLeft",
+    "Drop",       "_update*90",
+};
+
+fn blockfallScenario() []const u8 {
+    comptime {
+        var text: []const u8 = "";
+        for (blockfall_script, 0..) |step, i| text = text ++ (if (i == 0) "" else ",") ++ step;
+        return text;
+    }
+}
+
+fn blockfallSetup(vm: *Vm) !void {
+    try rendererSetup(vm);
+    try std.testing.expect(vm.setVar("_scoreText", .{ .object = try vm.newObject("UnityEngineUIText") }));
+}
+
+fn blockfallStatus(game: *const blockfall.Game, buf: []u8) ![]const u8 {
+    var w: std.Io.Writer = .fixed(buf);
+    try w.print("Score {d}  Level {d}", .{ game.score, game.level + 1 });
+    if (game.chain > 1) try w.print("  Chain x{d}", .{game.chain});
+    if (game.phase == .over) try w.writeAll("  GAME OVER");
+    return w.buffered();
+}
+
+fn expectShows(vm: *Vm, game: *const blockfall.Game) !void {
+    var picture: [blockfall.picture_width * blockfall.picture_height]u32 = undefined;
+    blockfall.draw(game, &picture);
+    const texture = vm.getVar("_texture").?.object;
+    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(&picture), texture.get("rawTextureData").?.array.bytes);
+    var buf: [96]u8 = undefined;
+    try std.testing.expectEqualStrings(try blockfallStatus(game, &buf), vm.getVar("_scoreText").?.object.get("text").?.string);
+}
+
+/// Plays the same script on the natively compiled game, then joins a
+/// second player to the Udon one.
+fn blockfallVerify(vm: *Vm) !void {
+    const Game = blockfall.Game;
+    var game: Game = .{};
+    // What the owner last published.
+    var sent: Game = .{};
+    var publishes: u32 = 0;
+    for (blockfall_script) |step| {
+        const star = std.mem.indexOfScalar(u8, step, '*');
+        const name = if (star) |i| step[0..i] else step;
+        const runs = if (star) |i| try std.fmt.parseInt(u32, step[i + 1 ..], 10) else 1;
+        for (0..runs) |_| {
+            const changed = if (std.mem.eql(u8, name, "_start")) start: {
+                game.init(1);
+                break :start true;
+            } else if (std.mem.eql(u8, name, "_update"))
+                game.advance(vm.host.delta_time)
+            else
+                game.input(std.meta.stringToEnum(blockfall.Command, switch (name[0]) {
+                    'M' => if (name[4] == 'L') "left" else "right",
+                    'R' => "rotate",
+                    else => "drop",
+                }).?);
+            if (changed) {
+                sent = game;
+                publishes += 1;
+            }
+        }
+    }
+    // The script is a real game: trios landed and at least one group cleared.
+    try std.testing.expect(game.score > 0);
+
+    try std.testing.expectEqual(publishes, vm.host.serializations);
+    const state = vm.getVar("_state").?.array;
+    try std.testing.expectEqualSlices(u8, sent.bytes(), state.bytes);
+    try expectShows(vm, &sent);
+
+    // A second player in the instance: not the owner, so it only draws
+    // what it is sent.
+    const remote = try Vm.init(std.heap.page_allocator, vm.prog, .{});
+    defer remote.deinit();
+    remote.host.is_owner = false;
+    try blockfallSetup(remote);
+    _ = try remote.runEvent("_start");
+    for (0..30) |_| try remote.tick();
+    try std.testing.expectEqual(@as(u32, 0), remote.host.serializations);
+
+    const received = try remote.newArray("SystemByteArray", state.len);
+    @memcpy(received.bytes, state.bytes);
+    try std.testing.expect(remote.setVar("_state", .{ .array = received }));
+    _ = try remote.runEvent("_onDeserialization");
+    try expectShows(remote, &sent);
+
+    // It presses a button: it becomes the owner, and the game goes on from
+    // the state it was given.
+    var theirs = sent;
+    var theirs_sent = sent;
+    var theirs_publishes: u32 = 0;
+    _ = try remote.runEvent("MoveLeft");
+    try remote.serialize();
+    try std.testing.expect(remote.host.is_owner);
+    if (theirs.input(.left)) {
+        theirs_sent = theirs;
+        theirs_publishes += 1;
+    }
+    for (0..240) |_| {
+        try remote.tick();
+        if (theirs.advance(remote.host.delta_time)) {
+            theirs_sent = theirs;
+            theirs_publishes += 1;
+        }
+    }
+    try std.testing.expect(theirs_publishes > 2);
+    try std.testing.expectEqual(theirs_publishes, remote.host.serializations);
+    try std.testing.expectEqualSlices(u8, theirs_sent.bytes(), remote.getVar("_state").?.array.bytes);
+    try expectShows(remote, &theirs_sent);
+    try std.testing.expect(remote.fault == null);
 }
 
 const rust_examples = if (build_options.with_rust) [_]Example{

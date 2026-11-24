@@ -103,6 +103,7 @@ const udonLog = log;
 
 extern "env" fn @"VRCSDKBaseUtilities.__IsValid__SystemObject__SystemBoolean"(o: Object) bool;
 extern "env" fn @"SystemByteArray.__ctor__SystemInt32__SystemByteArray"(len: i32) ByteArray;
+extern "env" fn @"SystemByteArray.__get_Length__SystemInt32"(self: ByteArray) i32;
 extern "env" fn @"SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"(src: ByteArray, src_offset: i32, dst: ByteArray, dst_offset: i32, count: i32) void;
 extern "env" fn @"UnityEngineTime.__get_deltaTime__SystemSingle"() f32;
 extern "env" fn @"UnityEngineMathf.__Sin__SystemSingle__SystemSingle"(x: f32) f32;
@@ -116,6 +117,10 @@ pub fn isValid(handle: anytype) bool {
 
 pub fn newByteArray(len: usize) ByteArray {
     return @"SystemByteArray.__ctor__SystemInt32__SystemByteArray"(@intCast(len));
+}
+
+pub fn byteLength(array: ByteArray) usize {
+    return @intCast(@"SystemByteArray.__get_Length__SystemInt32"(array));
 }
 
 /// `Buffer.BlockCopy` between two byte arrays.

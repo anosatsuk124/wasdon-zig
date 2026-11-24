@@ -525,6 +525,7 @@ pub const Translator = struct {
             },
             .string => |s| {
                 if (std.mem.eql(u8, s, "this")) {
+                    if (!nodes.isThisTarget(t)) return self.fail(error.Invalid, "field '{s}': \"this\" needs type UnityEngineGameObject, UnityEngineTransform or " ++ nodes.behaviour_type ++ ", not {s}", .{ f.key, t });
                     v.init = .this;
                 } else if (std.mem.eql(u8, t, "SystemString")) {
                     v.init = .{ .string = s };

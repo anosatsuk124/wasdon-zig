@@ -37,6 +37,10 @@ pub fn main(init: std.process.Init) !u8 {
 
     try w.writeAll("| Example | wasm bytes | heap | instr | externs (static) | code bytes | uasm bytes | executed instr | executed externs |\n");
     try w.writeAll("|---|---:|---:|---:|---:|---:|---:|---:|---:|\n");
+    // The second table is collected while the first is printed, so each
+    // example runs once.
+    var per_event: std.Io.Writer.Allocating = .init(arena);
+    const pe = &per_event.writer;
     var failed = false;
     for (fixtures.examples) |ex| {
         var r = fixtures.run(arena, ex, .{}) catch |e| {
@@ -59,23 +63,32 @@ pub fn main(init: std.process.Init) !u8 {
             const path = try std.fmt.allocPrint(arena, "{s}/{s}.uasm", .{ dir, ex.name });
             try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = path, .data = r.uasm });
         }
-    }
 
-    try w.writeAll("\nPer event:\n\n| Example | event | runs | instr / run | externs / run |\n|---|---|---:|---:|---:|\n");
-    for (fixtures.examples) |ex| {
-        var r = fixtures.run(arena, ex, .{}) catch continue;
+        // One row per event name, in order of first appearance.
+        const Row = struct { runs: u64 = 0, instrs: u64 = 0, externs: u64 = 0, max_externs: u64 = 0 };
+        var rows: std.StringArrayHashMapUnmanaged(Row) = .empty;
         for (r.steps) |s| {
             if (s.runs == 0) continue;
-            try w.print("| `{s}` | `{s}` | {d} | {d} | {d} |\n", .{ ex.name, s.name, s.runs, s.stats.instrs / s.runs, s.stats.externs / s.runs });
+            const row = try rows.getOrPutValue(arena, s.name, .{});
+            row.value_ptr.runs += s.runs;
+            row.value_ptr.instrs += s.stats.instrs;
+            row.value_ptr.externs += s.stats.externs;
+            row.value_ptr.max_externs = @max(row.value_ptr.max_externs, s.stats.externs / s.runs);
+        }
+        for (rows.keys(), rows.values()) |name, row| {
+            try pe.print("| `{s}` | `{s}` | {d} | {d} | {d} |\n", .{ ex.name, name, row.runs, row.instrs / row.runs, row.externs / row.runs });
         }
         if (profile) |p| if (std.mem.eql(u8, p, ex.name)) {
-            try w.print("\nExtern profile of `{s}`:\n\n| executions | signature |\n|---:|---|\n", .{ex.name});
+            try pe.print("\nExtern profile of `{s}`:\n\n| executions | signature |\n|---:|---|\n", .{ex.name});
             for (try r.vm.profile()) |e| {
                 if (e.count == 0) break;
-                try w.print("| {d} | `{s}` |\n", .{ e.count, e.text });
+                try pe.print("| {d} | `{s}` |\n", .{ e.count, e.text });
             }
-            try w.writeAll("\n");
+            try pe.writeAll("\n| Example | event | runs | instr / run | externs / run |\n|---|---|---:|---:|---:|\n");
         };
     }
+
+    try w.writeAll("\nPer event (average over the scenario):\n\n| Example | event | runs | instr / run | externs / run |\n|---|---|---:|---:|---:|\n");
+    try w.writeAll(per_event.written());
     return @intFromBool(failed);
 }

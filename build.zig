@@ -15,6 +15,7 @@ const zig_examples = [_]struct {
     .{ .name = "mandelbrot", .root = "examples/mandelbrot/main.zig", .core = "examples/mandelbrot/core.zig" },
     .{ .name = "image-codec", .root = "examples/image-codec/main.zig", .core = "examples/image-codec/core.zig" },
     .{ .name = "ragdoll", .root = "examples/ragdoll/main.zig", .core = "examples/ragdoll/core.zig" },
+    .{ .name = "blockfall", .root = "examples/blockfall/main.zig", .core = "examples/blockfall/core.zig" },
 };
 
 /// Rust examples (Cargo workspace members). Only built with `-Drust`.

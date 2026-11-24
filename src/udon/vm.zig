@@ -117,6 +117,12 @@ pub const Host = struct {
     transform: *Object,
     local_player: *Object,
     rng: u64 = 0x2545F4914F6CDD1D,
+    /// Whether the local player owns the behaviour's GameObject.
+    is_owner: bool = true,
+    /// `RequestSerialization` was called and has not been served yet.
+    serialization_requested: bool = false,
+    /// Times the synced variables were "sent".
+    serializations: u32 = 0,
 };
 
 pub const Vm = struct {
@@ -289,7 +295,10 @@ pub const Vm = struct {
             var found = true;
             const is_update = std.mem.eql(u8, name, "_update");
             for (0..runs) |_| {
-                if (is_update) try self.tick() else found = try self.runEvent(name);
+                if (is_update) try self.tick() else {
+                    found = try self.runEvent(name);
+                    try self.serialize();
+                }
                 if (!found) break;
             }
             if (is_update) found = self.prog.label_index.contains("_update");
@@ -302,6 +311,18 @@ pub const Vm = struct {
         self.host.frame += 1;
         self.host.time += self.host.delta_time;
         _ = try self.runEvent("_update");
+        try self.serialize();
+    }
+
+    /// Serve a pending `RequestSerialization` the way VRChat does for a
+    /// manually synced behaviour: the owner gets `_onPreSerialization` and
+    /// its synced variables go out; a request from anyone else is dropped.
+    pub fn serialize(self: *Vm) Error!void {
+        if (!self.host.serialization_requested) return;
+        self.host.serialization_requested = false;
+        if (!self.host.is_owner) return;
+        _ = try self.runEvent("_onPreSerialization");
+        self.host.serializations += 1;
     }
 
     pub fn getVar(self: *const Vm, name: []const u8) ?Value {

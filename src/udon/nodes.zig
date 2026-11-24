@@ -28,11 +28,29 @@ pub fn exists(name: []const u8) bool {
     return false;
 }
 
-/// True iff `type_name` is an Udon type name the node list knows.
+/// The type of the behaviour itself. It has no node — extern signatures
+/// call it `VRCUdonCommonInterfacesIUdonEventReceiver` — but the assembler
+/// resolves it for variable declarations, and it is the type a
+/// self-reference must be declared with (`isThisTarget`).
+pub const behaviour_type = "VRCUdonUdonBehaviour";
+
+/// True iff `type_name` can be the type of a variable: a type the node
+/// list knows, or the behaviour type.
 pub fn isType(type_name: []const u8) bool {
+    if (std.mem.eql(u8, type_name, behaviour_type)) return true;
     var buf: [256]u8 = undefined;
     const key = std.fmt.bufPrint(&buf, "Type_{s}", .{type_name}) catch return false;
     return exists(key);
+}
+
+/// True iff a variable of this type may be initialized with `this`. The
+/// assembler accepts `this` for any reference type, but when the behaviour
+/// loads, `UdonBehaviour.ResolveUdonHeapReference` only knows these; any
+/// other type fails initialization (`docs/udon_specs.md` §4.6).
+pub fn isThisTarget(type_name: []const u8) bool {
+    const targets = [_][]const u8{ "UnityEngineGameObject", "UnityEngineTransform", behaviour_type, "UnityEngineObject" };
+    for (targets) |t| if (std.mem.eql(u8, type_name, t)) return true;
+    return false;
 }
 
 /// True iff `label` is a standard event label (`_start`, `_onPlayerJoined`,
@@ -172,6 +190,12 @@ test "types and events" {
     try testing.expect(isType("SystemByteArray"));
     try testing.expect(isType("UnityEngineTransform"));
     try testing.expect(!isType("SystemNope"));
+    try testing.expect(isType(behaviour_type));
+    try testing.expect(isThisTarget("UnityEngineTransform"));
+    try testing.expect(isThisTarget(behaviour_type));
+    // The interface extern signatures use is not something `this` resolves to.
+    try testing.expect(!isThisTarget("VRCUdonCommonInterfacesIUdonEventReceiver"));
+    try testing.expect(!isThisTarget("SystemObject"));
     try testing.expect(isStandardEvent("_start"));
     try testing.expect(isStandardEvent("_onPlayerJoined"));
     try testing.expect(!isStandardEvent("_notAnEvent"));
