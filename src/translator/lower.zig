@@ -76,6 +76,12 @@ const Entry = struct {
     def: u32 = no_def,
     /// `Asm.here()` right after that extern.
     def_end: u32 = 0,
+    /// `.mem`: the load, the kind of its address operand (described by
+    /// `bits` / `sym` / `local` / `owned` / `pool` as for an entry of that
+    /// kind) and the offset still to be added to it.
+    load: ?*const Load = null,
+    base: Kind = .konst,
+    offset: u32 = 0,
 
     const Kind = enum {
         konst,
@@ -90,11 +96,71 @@ const Entry = struct {
         alias,
         /// A `SystemBoolean` standing for an i32 that is 0 or 1.
         cond,
+        /// A load that has not been emitted yet. Whoever consumes it can
+        /// then do better than "read, then use": a store copies memory to
+        /// memory, a test reads a Boolean, a byte feeds a byte operator.
+        /// Emitted before anything that can write memory.
+        mem,
     };
+
+    /// The address operand of a `.mem` entry, without `offset`.
+    fn address(e: Entry) Entry {
+        return switch (e.base) {
+            .konst => .{ .ty = .i32, .kind = .konst, .bits = e.bits },
+            .local => .{ .ty = .i32, .kind = .local, .sym = e.sym, .local = e.local },
+            else => .{ .ty = .i32, .kind = e.base, .sym = e.sym, .owned = e.owned, .pool = e.pool },
+        };
+    }
+
+    /// An unsigned byte that is still in memory.
+    fn isByte(e: Entry) bool {
+        return e.kind == .mem and e.load.?.byte and e.ty == .i32;
+    }
+
+    /// A constant a `SystemByte` can hold.
+    fn isByteConst(e: Entry) bool {
+        return e.kind == .konst and e.ty == .i32 and e.bits <= 0xFF;
+    }
 
     fn isZero(e: Entry) bool {
         return e.kind == .konst and e.bits == 0;
     }
+};
+
+/// What a load instruction reads and how that becomes its WASM type.
+const Load = struct {
+    ty: ValType,
+    /// Bytes read.
+    size: u8,
+    /// Extern reading the value at an address.
+    read: []const u8,
+    /// When `read` returns a narrower .NET type: that type, and the extern
+    /// widening it to `ty`.
+    raw: ?[]const u8 = null,
+    widen: ?[]const u8 = null,
+    nonneg: bool = false,
+    /// `read` returns a `SystemByte`.
+    byte: bool = false,
+};
+
+const loads = struct {
+    const byte_get = "SystemByteArray.__Get__SystemInt32__SystemByte";
+    const u16_get = "SystemBitConverter.__ToUInt16__SystemByteArray_SystemInt32__SystemUInt16";
+    const i16_get = "SystemBitConverter.__ToInt16__SystemByteArray_SystemInt32__SystemInt16";
+    const i32_get = "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32";
+
+    const i32_load: Load = .{ .ty = .i32, .size = 4, .read = i32_get };
+    const i64_load: Load = .{ .ty = .i64, .size = 8, .read = "SystemBitConverter.__ToInt64__SystemByteArray_SystemInt32__SystemInt64" };
+    const f32_load: Load = .{ .ty = .f32, .size = 4, .read = "SystemBitConverter.__ToSingle__SystemByteArray_SystemInt32__SystemSingle" };
+    const f64_load: Load = .{ .ty = .f64, .size = 8, .read = "SystemBitConverter.__ToDouble__SystemByteArray_SystemInt32__SystemDouble" };
+    const i32_load8_u: Load = .{ .ty = .i32, .size = 1, .read = byte_get, .raw = "SystemByte", .widen = "SystemConvert.__ToInt32__SystemByte__SystemInt32", .nonneg = true, .byte = true };
+    const i32_load16_u: Load = .{ .ty = .i32, .size = 2, .read = u16_get, .raw = "SystemUInt16", .widen = "SystemConvert.__ToInt32__SystemUInt16__SystemInt32", .nonneg = true };
+    const i32_load16_s: Load = .{ .ty = .i32, .size = 2, .read = i16_get, .raw = "SystemInt16", .widen = "SystemConvert.__ToInt32__SystemInt16__SystemInt32" };
+    const i64_load8_u: Load = .{ .ty = .i64, .size = 1, .read = byte_get, .raw = "SystemByte", .widen = "SystemConvert.__ToInt64__SystemByte__SystemInt64", .nonneg = true };
+    const i64_load16_u: Load = .{ .ty = .i64, .size = 2, .read = u16_get, .raw = "SystemUInt16", .widen = "SystemConvert.__ToInt64__SystemUInt16__SystemInt64", .nonneg = true };
+    const i64_load16_s: Load = .{ .ty = .i64, .size = 2, .read = i16_get, .raw = "SystemInt16", .widen = "SystemConvert.__ToInt64__SystemInt16__SystemInt64" };
+    const i64_load32_u: Load = .{ .ty = .i64, .size = 4, .read = "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32", .raw = "SystemUInt32", .widen = "SystemConvert.__ToInt64__SystemUInt32__SystemInt64", .nonneg = true };
+    const i64_load32_s: Load = .{ .ty = .i64, .size = 4, .read = i32_get, .raw = "SystemInt32", .widen = "SystemConvert.__ToInt64__SystemInt32__SystemInt64" };
 };
 
 const Ctrl = struct {
@@ -113,6 +179,17 @@ const Ctrl = struct {
 
 const Pool = struct { type_name: []const u8, free: std.ArrayList(Sym) = .empty };
 
+/// A value the translator itself derives from an i32 local and a constant:
+/// the address `local + offset` of a memory access, or the sign-flipped
+/// `local ^ 0x80000000` of an unsigned comparison. Remembered while the
+/// local is unchanged so that, for instance, a load and a store of the same
+/// field compute its address once.
+const Derived = struct {
+    op: enum { none, add, xor } = .none,
+    local: u32 = 0,
+    bits: u32 = 0,
+};
+
 pub fn lowerFunction(t: *Translator, func_index: u32) Error!void {
     var l: Lowerer = .{ .t = t, .a = &t.a, .f = &t.funcs[func_index], .f_idx = func_index };
     defer l.deinit();
@@ -129,6 +206,10 @@ const Lowerer = struct {
     pools: std.ArrayList(Pool) = .empty,
     temp_count: u32 = 0,
     scratch: [scratch_types.len]?Sym = @splat(null),
+    derived: [Translator.derived_slots]Derived = @splat(.{}),
+    /// The slot handed out last; its value may still be waiting to be
+    /// used, so it is not the next one replaced.
+    derived_last: usize = 0,
 
     fn deinit(self: *Lowerer) void {
         const gpa = self.t.gpa;
@@ -140,6 +221,7 @@ const Lowerer = struct {
 
     fn run(self: *Lowerer, code: wasm.module.Code) Error!void {
         const n_params = self.f.ty.params.len;
+        try self.stack.ensureTotalCapacityPrecise(self.t.gpa, max_stack);
         self.a.bind(self.f.entry);
 
         // WASM zero-initializes declared locals on every call. Slots keep
@@ -262,8 +344,15 @@ const Lowerer = struct {
     //  Operand stack
     // ------------------------------------------------------------------
 
+    /// Entries are updated in place through pointers while code that
+    /// pushes and pops runs, so the stack must never move: its storage is
+    /// allocated once.
+    const max_stack = 4096;
+
     fn push(self: *Lowerer, e: Entry) Error!void {
-        try self.stack.append(self.t.gpa, e);
+        if (self.stack.items.len == self.stack.capacity)
+            return self.t.fail(error.Unsupported, "function {s} needs an operand stack deeper than {d}", .{ self.f.name, max_stack });
+        self.stack.appendAssumeCapacity(e);
     }
 
     fn pop(self: *Lowerer) Error!Entry {
@@ -295,6 +384,10 @@ const Lowerer = struct {
         switch (e.kind) {
             .konst => return self.t.constSym(e.ty, e.bits),
             .local, .shared, .temp, .alias => return e.sym,
+            .mem => {
+                try self.loadNow(e);
+                return e.sym;
+            },
             .cond => {
                 const b = try self.condBool(e, true);
                 const pool = try self.valPool(.i32);
@@ -310,27 +403,48 @@ const Lowerer = struct {
         }
     }
 
+    /// A `SystemBoolean` slot for the entry's i32 value with whichever
+    /// sense costs nothing: true when the value is non-zero if
+    /// `!e.negated` afterwards, true when it is zero otherwise. `want` is
+    /// the sense preferred when there is a free choice. `e` still has to be
+    /// released by the caller.
+    fn condAny(self: *Lowerer, e: *Entry, want: bool) Error!Sym {
+        // A byte in memory tests in one extern, but only for "non-zero".
+        if (e.isByte()) return self.condBool(e, true);
+        if (e.kind != .cond) return self.condBool(e, want);
+        // The slot holds the opposite sense: swap the comparison that
+        // produced it if that is still the last instruction.
+        if (e.negated == want and e.flip != null and e.owned and e.def_end == self.a.here()) {
+            const code = self.a.code.items;
+            code[code.len - 1].arg = try self.a.internExtern(e.flip.?);
+            e.flip = null;
+            e.negated = !e.negated;
+        }
+        return e.sym;
+    }
+
     /// A `SystemBoolean` slot that is true exactly when the entry's i32
     /// value is non-zero (`want`) or zero (`!want`). `e` still has to be
     /// released by the caller.
     fn condBool(self: *Lowerer, e: *Entry, want: bool) Error!Sym {
         if (e.kind == .cond) {
-            if (e.negated != want) return e.sym;
-            // The slot holds the opposite sense. Swap the comparison that
-            // produced it if it is still the last instruction; otherwise
-            // negate the Boolean.
-            if (e.flip != null and e.owned and e.def_end == self.a.here()) {
-                const code = self.a.code.items;
-                code[code.len - 1].arg = try self.a.internExtern(e.flip.?);
-                e.flip = null;
-                e.negated = !e.negated;
-                return e.sym;
-            }
+            const s = try self.condAny(e, want);
+            if (e.negated != want) return s;
             const pool = try self.poolFor("SystemBoolean");
             const d = if (e.owned) e.sym else try self.newTemp(pool);
             try self.a.call("SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean", &.{ e.sym, d });
             e.* = .{ .ty = .i32, .kind = .cond, .sym = d, .owned = true, .pool = pool, .negated = !e.negated };
             return d;
+        }
+        if (e.isByte()) {
+            // "Is this byte non-zero" is a single read.
+            const mem = try self.memory();
+            const sa = try self.loadAddress(e);
+            const pool = try self.poolFor("SystemBoolean");
+            const d = try self.newTemp(pool);
+            try self.a.call("SystemBitConverter.__ToBoolean__SystemByteArray_SystemInt32__SystemBoolean", &.{ mem.sym, sa, d });
+            e.* = .{ .ty = .i32, .kind = .cond, .sym = d, .owned = true, .pool = pool };
+            return self.condBool(e, want);
         }
         const x = try self.operand(e);
         const pool = try self.poolFor("SystemBoolean");
@@ -345,18 +459,38 @@ const Lowerer = struct {
         return d;
     }
 
+    /// Jump to `label` when the i32 condition `e` is non-zero (`when`) or
+    /// zero (`!when`). `e` still has to be released by the caller.
+    ///
+    /// `JUMP_IF_FALSE` jumps on false, so a slot with the wrong sense would
+    /// need inverting. That is an extern; jumping over an unconditional
+    /// jump is not.
+    fn branchIf(self: *Lowerer, e: *Entry, when: bool, label: Label) Error!void {
+        const b = try self.condAny(e, !when);
+        if (e.negated == when) return self.a.jumpIfFalse(b, label);
+        const skip = try self.a.newLabel();
+        try self.a.jumpIfFalse(b, skip);
+        try self.a.jump(label);
+        self.a.bind(skip);
+    }
+
     /// Emit `sig(ins…) → new temporary` and push the result.
     fn result(self: *Lowerer, ty: ValType, sig: []const u8, ins: []const Sym) Error!void {
         try self.resultIn(ty, try self.valPool(ty), sig, ins);
     }
 
     fn resultIn(self: *Lowerer, ty: ValType, pool: u8, sig: []const u8, ins: []const Sym) Error!void {
+        try self.push(try self.compute(ty, pool, sig, ins));
+    }
+
+    /// Emit `sig(ins…) → new temporary` and return the entry for it.
+    fn compute(self: *Lowerer, ty: ValType, pool: u8, sig: []const u8, ins: []const Sym) Error!Entry {
         const d = try self.newTemp(pool);
         for (ins) |s| try self.a.push(s);
         const def = self.a.here();
         try self.a.push(d);
         try self.a.call(sig, &.{});
-        try self.push(.{ .ty = ty, .kind = .temp, .sym = d, .owned = true, .pool = pool, .def = def, .def_end = self.a.here() });
+        return .{ .ty = ty, .kind = .temp, .sym = d, .owned = true, .pool = pool, .def = def, .def_end = self.a.here() };
     }
 
     fn resultCond(self: *Lowerer, sig: []const u8, flip: ?[]const u8, ins: []const Sym) Error!void {
@@ -374,6 +508,7 @@ const Lowerer = struct {
     /// write `dst` directly.
     fn store(self: *Lowerer, entry: Entry, dst: Sym) Error!void {
         var e = entry;
+        if (e.kind == .mem) try self.loadNow(&e);
         switch (e.kind) {
             .temp => if (e.def != no_def and e.def_end == self.a.here()) {
                 self.a.code.items[e.def].arg = dst;
@@ -410,7 +545,39 @@ const Lowerer = struct {
 
     /// Detach every pending reference to local `i` before it is overwritten.
     fn flushLocal(self: *Lowerer, i: u32) Error!void {
-        for (self.stack.items) |*e| if (e.kind == .local and e.local == i) try self.materialize(e);
+        for (self.stack.items) |*e| {
+            if (e.kind == .local and e.local == i) try self.materialize(e);
+            if (e.kind == .mem and e.base == .local and e.local == i) try self.loadNow(e);
+        }
+        for (&self.derived) |*d| if (d.local == i) {
+            d.op = .none;
+        };
+    }
+
+    /// Slot holding `local <op> bits`, computed now unless it was computed
+    /// since the local last changed. Valid until the next call to this
+    /// function but one, so use it at once.
+    fn derive(self: *Lowerer, op: @FieldType(Derived, "op"), local: u32, local_sym: Sym, bits: u32) Error!Sym {
+        var free: ?usize = null;
+        for (self.derived, 0..) |d, k| {
+            if (d.op == op and d.local == local and d.bits == bits) {
+                self.derived_last = k;
+                return self.t.derivedSym(k);
+            }
+            if (d.op == .none and free == null) free = k;
+        }
+        const k = free orelse (self.derived_last + 1) % self.derived.len;
+        const slot = try self.t.derivedSym(k);
+        try self.a.call(binSig(.i32, if (op == .add) .add else .xor), &.{ local_sym, try self.t.constI32(@bitCast(bits)), slot });
+        self.derived[k] = .{ .op = op, .local = local, .bits = bits };
+        self.derived_last = k;
+        return slot;
+    }
+
+    /// Control can arrive here from somewhere else, or other code has run:
+    /// nothing derived earlier can be relied on.
+    fn forgetDerived(self: *Lowerer) void {
+        self.derived = @splat(.{});
     }
 
     /// Detach pending references to shared slot `sym` (or to all shared
@@ -429,6 +596,7 @@ const Lowerer = struct {
         for (self.stack.items) |*e| switch (e.kind) {
             .local, .shared => try self.materialize(e),
             .cond => if (!e.owned) try self.materialize(e),
+            .mem => try self.loadNow(e),
             .konst, .temp, .alias => {},
         };
     }
@@ -526,6 +694,7 @@ const Lowerer = struct {
         if (falls) try self.moveResults(&c);
         try self.truncate(c.height);
         self.a.bind(c.label);
+        self.forgetDerived();
         try self.pushResults(&c);
         return true;
     }
@@ -534,6 +703,7 @@ const Lowerer = struct {
         try self.flushForBlock();
         const head = try self.a.newLabel();
         self.a.bind(head);
+        self.forgetDerived();
         const height = self.stack.items.len;
         // A branch to a loop carries its parameters, of which MVP has none.
         _ = try self.blockTypes(b.bt);
@@ -554,11 +724,10 @@ const Lowerer = struct {
             try self.ctrl.append(self.t.gpa, .{ .kind = .block, .label = try self.a.newLabel(), .types = types, .height = self.stack.items.len });
             return self.endFrame(try self.lowerBody(taken orelse &.{}));
         }
-        const cond = try self.condBool(&c, true);
-        try self.release(c);
         const end = try self.a.newLabel();
         const else_label = if (b.else_body != null) try self.a.newLabel() else end;
-        try self.a.jumpIfFalse(cond, else_label);
+        try self.branchIf(&c, false, else_label);
+        try self.release(c);
         try self.ctrl.append(self.t.gpa, .{ .kind = .if_, .label = end, .types = types, .height = self.stack.items.len, .targeted = true });
         const frame = self.ctrl.items.len - 1;
 
@@ -570,6 +739,7 @@ const Lowerer = struct {
             }
             try self.truncate(self.ctrl.items[frame].height);
             self.a.bind(else_label);
+            self.forgetDerived();
             const else_falls = try self.lowerBody(else_body);
             falls = else_falls;
         }
@@ -594,17 +764,14 @@ const Lowerer = struct {
         if (cond.kind == .konst and cond.bits == 0) return;
         const carries = c.kind == .func or (c.kind != .loop and c.types.len != 0);
         if (!carries and cond.kind != .konst) {
-            // Jump when the condition holds: JUMP_IF_FALSE on its negation.
-            const b = try self.condBool(&cond, false);
-            try self.release(cond);
             c.targeted = true;
-            return self.a.jumpIfFalse(b, c.label);
+            try self.branchIf(&cond, true, c.label);
+            return self.release(cond);
         }
         const skip = try self.a.newLabel();
         if (cond.kind != .konst) {
-            const b = try self.condBool(&cond, true);
+            try self.branchIf(&cond, false, skip);
             try self.release(cond);
-            try self.a.jumpIfFalse(b, skip);
         }
         if (c.kind == .func) {
             try self.copyReturn();
@@ -708,8 +875,18 @@ const Lowerer = struct {
                 try self.emitReturn();
                 return false;
             },
-            .call => |f| try self.lowerCall(f),
-            .call_indirect => |ty| try self.lowerCallIndirect(ty),
+            // The callee uses the same derived-value slots, and an extern
+            // can run another event of this behaviour.
+            .call => |f| {
+                try self.flushLoads();
+                try self.lowerCall(f);
+                self.forgetDerived();
+            },
+            .call_indirect => |ty| {
+                try self.flushLoads();
+                try self.lowerCallIndirect(ty);
+                self.forgetDerived();
+            },
 
             .drop => try self.release(try self.pop()),
             .select => try self.lowerSelect(),
@@ -743,26 +920,15 @@ const Lowerer = struct {
             .f32_const => |x| try self.pushConst(.f32, @as(u32, @bitCast(x))),
             .f64_const => |x| try self.pushConst(.f64, @bitCast(x)),
 
-            .i32_load => |m| try self.load(m, .i32, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32", null, false),
-            .i64_load => |m| try self.load(m, .i64, "SystemBitConverter.__ToInt64__SystemByteArray_SystemInt32__SystemInt64", null, false),
-            .f32_load => |m| try self.load(m, .f32, "SystemBitConverter.__ToSingle__SystemByteArray_SystemInt32__SystemSingle", null, false),
-            .f64_load => |m| try self.load(m, .f64, "SystemBitConverter.__ToDouble__SystemByteArray_SystemInt32__SystemDouble", null, false),
-            .i32_load8_u => |m| try self.load(m, .i32, byte_get, .{ "SystemByte", "SystemConvert.__ToInt32__SystemByte__SystemInt32" }, true),
+            inline .i32_load, .i64_load, .f32_load, .f64_load, .i32_load8_u, .i32_load16_u, .i32_load16_s, .i64_load8_u, .i64_load16_u, .i64_load16_s, .i64_load32_u, .i64_load32_s => |m, tag| try self.load(m, &@field(loads, @tagName(tag))),
             .i32_load8_s => |m| {
-                try self.load(m, .i32, byte_get, .{ "SystemByte", "SystemConvert.__ToInt32__SystemByte__SystemInt32" }, true);
+                try self.load(m, &loads.i32_load8_u);
                 return self.lowerBody(&snippets.i32_extend8_s);
             },
-            .i32_load16_u => |m| try self.load(m, .i32, "SystemBitConverter.__ToUInt16__SystemByteArray_SystemInt32__SystemUInt16", .{ "SystemUInt16", "SystemConvert.__ToInt32__SystemUInt16__SystemInt32" }, true),
-            .i32_load16_s => |m| try self.load(m, .i32, "SystemBitConverter.__ToInt16__SystemByteArray_SystemInt32__SystemInt16", .{ "SystemInt16", "SystemConvert.__ToInt32__SystemInt16__SystemInt32" }, false),
-            .i64_load8_u => |m| try self.load(m, .i64, byte_get, .{ "SystemByte", "SystemConvert.__ToInt64__SystemByte__SystemInt64" }, true),
             .i64_load8_s => |m| {
-                try self.load(m, .i32, byte_get, .{ "SystemByte", "SystemConvert.__ToInt32__SystemByte__SystemInt32" }, true);
+                try self.load(m, &loads.i32_load8_u);
                 return self.lowerBody(&(snippets.i32_extend8_s ++ [_]Instruction{.i64_extend_i32_s}));
             },
-            .i64_load16_u => |m| try self.load(m, .i64, "SystemBitConverter.__ToUInt16__SystemByteArray_SystemInt32__SystemUInt16", .{ "SystemUInt16", "SystemConvert.__ToInt64__SystemUInt16__SystemInt64" }, true),
-            .i64_load16_s => |m| try self.load(m, .i64, "SystemBitConverter.__ToInt16__SystemByteArray_SystemInt32__SystemInt16", .{ "SystemInt16", "SystemConvert.__ToInt64__SystemInt16__SystemInt64" }, false),
-            .i64_load32_u => |m| try self.load(m, .i64, "SystemBitConverter.__ToUInt32__SystemByteArray_SystemInt32__SystemUInt32", .{ "SystemUInt32", "SystemConvert.__ToInt64__SystemUInt32__SystemInt64" }, true),
-            .i64_load32_s => |m| try self.load(m, .i64, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32", .{ "SystemInt32", "SystemConvert.__ToInt64__SystemInt32__SystemInt64" }, false),
 
             .i32_store => |m| try self.storeMem(m, .i32, 4),
             .i64_store => |m| try self.storeMem(m, .i64, 8),
@@ -774,9 +940,14 @@ const Lowerer = struct {
             .i64_store16 => |m| try self.storeMem(m, .i64, 2),
             .i64_store32 => |m| try self.storeMem(m, .i64, 4),
             .memory_size => try self.push(.{ .ty = .i32, .kind = .shared, .sym = (try self.memory()).pages, .nonneg = true }),
-            .memory_grow => try self.memoryGrow(),
-            .memory_copy => try self.memoryCopy(),
-            .memory_fill => try self.memoryFill(),
+            .memory_grow, .memory_copy, .memory_fill => {
+                try self.flushLoads();
+                switch (ins) {
+                    .memory_grow => try self.memoryGrow(),
+                    .memory_copy => try self.memoryCopy(),
+                    else => try self.memoryFill(),
+                }
+            },
             .memory_init, .data_drop => return self.t.fail(error.Unsupported, "passive data segments (memory.init / data.drop) are not supported", .{}),
 
             .i32_eqz => try self.eqz(.i32),
@@ -974,6 +1145,11 @@ const Lowerer = struct {
             };
             if (a_ident) return self.push(b);
         }
+        if (ty == .i32 and bothBytes(a, b)) {
+            // C# computes these on `int`s, so the result is the i32
+            // result; a shift count is masked to five bits as in WASM.
+            if (byteBinSig(op)) |sig| return self.result(.i32, sig, &try self.byteOperands(&a, &b));
+        }
         // 64-bit shifts take an Int32 count.
         if (shift and ty == .i64) try self.shiftCount(&b);
         const nonneg = isInt(ty) and switch (op) {
@@ -988,6 +1164,55 @@ const Lowerer = struct {
         try self.release(b);
         try self.result(ty, binSig(ty, op), &.{ sa, sb });
         self.stack.items[self.stack.items.len - 1].nonneg = nonneg;
+    }
+
+    /// `SystemByte` operator for an i32 operation on two unsigned bytes.
+    /// C# computes these on `int`s, so the result is the i32 result; a shift
+    /// count is masked to five bits as in WASM.
+    fn byteBinSig(op: Bin) ?[]const u8 {
+        return switch (op) {
+            .add => byteSig("Addition", "SystemInt32"),
+            .sub => byteSig("Subtraction", "SystemInt32"),
+            .mul => byteSig("Multiplication", "SystemInt32"),
+            .and_ => byteSig("LogicalAnd", "SystemInt32"),
+            .or_ => byteSig("LogicalOr", "SystemInt32"),
+            .xor => byteSig("LogicalXor", "SystemInt32"),
+            .shl => byteSig("LeftShift", "SystemInt32"),
+            .shr_s => byteSig("RightShift", "SystemInt32"),
+            .div_s, .rem_s => null,
+        };
+    }
+
+    fn byteCmpSig(op: Cmp) []const u8 {
+        return switch (op) {
+            .eq => byteSig("Equality", "SystemBoolean"),
+            .ne => byteSig("Inequality", "SystemBoolean"),
+            .lt => byteSig("LessThan", "SystemBoolean"),
+            .le => byteSig("LessThanOrEqual", "SystemBoolean"),
+            .gt => byteSig("GreaterThan", "SystemBoolean"),
+            .ge => byteSig("GreaterThanOrEqual", "SystemBoolean"),
+        };
+    }
+
+    fn byteSig(comptime name: []const u8, comptime ret: []const u8) []const u8 {
+        return "SystemByte.__op_" ++ name ++ "__SystemByte_SystemByte__" ++ ret;
+    }
+
+    /// Both operands are unsigned bytes still in memory, or constants a
+    /// byte can hold, and at least one is in memory: a `SystemByte`
+    /// operator can take them as they are, sparing each its conversion to
+    /// Int32.
+    fn bothBytes(a: Entry, b: Entry) bool {
+        return (a.isByte() or b.isByte()) and (a.isByte() or a.isByteConst()) and (b.isByte() or b.isByteConst());
+    }
+
+    /// The two `SystemByte` operands of a byte operator, entries released.
+    fn byteOperands(self: *Lowerer, a: *Entry, b: *Entry) Error![2]Sym {
+        const sa = try self.byteOperand(a);
+        const sb = try self.byteOperand(b);
+        try self.release(a.*);
+        try self.release(b.*);
+        return .{ sa, sb };
     }
 
     /// Turn an i64 shift count into the Int32 the .NET operators take. The
@@ -1021,6 +1246,7 @@ const Lowerer = struct {
     fn eqz(self: *Lowerer, ty: ValType) Error!void {
         var a = try self.pop();
         if (a.kind == .konst) return self.pushI32(@intFromBool(a.bits == 0));
+        if (a.isByte()) _ = try self.condBool(&a, true);
         if (a.kind == .cond) {
             a.negated = !a.negated;
             return self.push(a);
@@ -1071,6 +1297,18 @@ const Lowerer = struct {
         var a = try self.pop();
         if (isInt(ty) and a.kind == .konst and b.kind == .konst)
             return self.pushI32(@intFromBool(foldCmp(ty, op, a.bits, b.bits, unsigned)));
+        if (ty == .i32 and bothBytes(a, b)) {
+            // Against zero, (in)equality is the one-extern byte test.
+            const zero_test = (op == .eq or op == .ne) and (a.isZero() or b.isZero());
+            if (zero_test) {
+                var byte = if (a.isZero()) b else a;
+                _ = try self.condBool(&byte, true);
+                byte.negated = op == .eq;
+                return self.push(byte);
+            }
+            // Bytes are 0..255: signed and unsigned order agree.
+            return self.resultCond(byteCmpSig(op), byteCmpSig(inverse(op)), &try self.byteOperands(&a, &b));
+        }
         // Unsigned order equals signed order once both sign bits are
         // flipped; operands known to be non-negative need no flip.
         if (unsigned and !(a.nonneg and b.nonneg)) {
@@ -1092,6 +1330,10 @@ const Lowerer = struct {
         if (e.kind == .konst) {
             e.bits ^= min;
             e.nonneg = false;
+            return;
+        }
+        if (e.kind == .local and e.ty == .i32) {
+            e.* = .{ .ty = .i32, .kind = .alias, .sym = try self.derive(.xor, e.local, e.sym, 0x8000_0000) };
             return;
         }
         try self.push(e.*);
@@ -1285,9 +1527,8 @@ const Lowerer = struct {
             var other = if (keep_first) v2 else v1;
             const so = try self.operand(&other);
             // Skip the copy when the kept operand is the selected one.
-            const b = try self.condBool(&c, !keep_first);
+            try self.branchIf(&c, keep_first, end);
             try self.release(c);
-            try self.a.jumpIfFalse(b, end);
             try self.a.copy(so, kept.sym);
             self.a.bind(end);
             try self.release(other);
@@ -1297,12 +1538,11 @@ const Lowerer = struct {
         }
         const first = try self.operand(&v1);
         const s2 = try self.operand(&v2);
-        const b = try self.condBool(&c, true);
-        try self.release(c);
         const pool = try self.valPool(ty);
         const d = try self.newTemp(pool);
         const second = try self.a.newLabel();
-        try self.a.jumpIfFalse(b, second);
+        try self.branchIf(&c, false, second);
+        try self.release(c);
         try self.a.copy(first, d);
         try self.a.jump(end);
         self.a.bind(second);
@@ -1317,7 +1557,6 @@ const Lowerer = struct {
     //  Linear memory
     // ------------------------------------------------------------------
 
-    const byte_get = "SystemByteArray.__Get__SystemInt32__SystemByte";
     const block_copy = "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid";
 
     const Memory = struct { sym: Sym, pages: Sym };
@@ -1329,6 +1568,7 @@ const Lowerer = struct {
 
     /// Replace the address entry by one for `address + offset`.
     fn effectiveAddress(self: *Lowerer, e: *Entry, offset: u32) Error!Sym {
+        if (offset != 0 and e.kind == .local) return self.derive(.add, e.local, e.sym, offset);
         if (offset != 0) {
             try self.push(e.*);
             try self.pushConst(.i32, offset);
@@ -1338,21 +1578,89 @@ const Lowerer = struct {
         return self.operand(e);
     }
 
-    /// `read(mem, addr) → value`, optionally through a narrower .NET type
-    /// that `via[1]` widens to the WASM type.
-    fn load(self: *Lowerer, m: wasm.instruction.MemArg, ty: ValType, read: []const u8, via: ?[2][]const u8, nonneg: bool) Error!void {
-        const mem = try self.memory();
+    /// Push a load as a pending `.mem` entry. It stays pending only while
+    /// its address cannot change under it: a constant, a local (flushed
+    /// when the local is written) or a temporary the entry owns.
+    fn load(self: *Lowerer, m: wasm.instruction.MemArg, op: *const Load) Error!void {
+        _ = try self.memory();
         var addr = try self.pop();
-        const sa = try self.effectiveAddress(&addr, m.offset);
-        try self.release(addr);
-        if (via) |v| {
-            const pool = try self.poolFor(v[0]);
-            const raw = try self.newTemp(pool);
-            try self.a.call(read, &.{ mem.sym, sa, raw });
-            try self.freeTemp(pool, raw);
-            try self.result(ty, v[1], &.{raw});
-        } else try self.result(ty, read, &.{ mem.sym, sa });
-        self.stack.items[self.stack.items.len - 1].nonneg = nonneg;
+        if (addr.kind == .mem) try self.loadNow(&addr);
+        var e: Entry = .{ .ty = op.ty, .kind = .mem, .load = op, .offset = m.offset, .nonneg = op.nonneg, .base = addr.kind };
+        switch (addr.kind) {
+            .konst => {
+                e.bits = (addr.bits +% m.offset) & 0xFFFF_FFFF;
+                e.offset = 0;
+            },
+            .local => {
+                e.sym = addr.sym;
+                e.local = addr.local;
+            },
+            .temp => {
+                e.sym = addr.sym;
+                e.owned = addr.owned;
+                e.pool = addr.pool;
+            },
+            else => {
+                e.base = .alias;
+                e.sym = try self.operand(&addr);
+                e.owned = addr.owned;
+                e.pool = addr.pool;
+                try self.loadNow(&e);
+            },
+        }
+        try self.push(e);
+    }
+
+    /// Address of a pending load, in a slot.
+    fn loadAddress(self: *Lowerer, e: *Entry) Error!Sym {
+        var base = e.address();
+        const sa = try self.effectiveAddress(&base, e.offset);
+        // The entry owned its address temporary; whatever `base` is now
+        // takes its place. Freed slots stay readable until reallocated,
+        // which the callers do only after using `sa`.
+        try self.release(base);
+        e.owned = false;
+        return sa;
+    }
+
+    /// Emit a pending load; the entry becomes an ordinary temporary.
+    fn loadNow(self: *Lowerer, e: *Entry) Error!void {
+        const op = e.load.?;
+        const mem = try self.memory();
+        const sa = try self.loadAddress(e);
+        if (op.widen) |widen| {
+            const raw = try self.readRaw(op, mem.sym, sa);
+            e.* = try self.compute(op.ty, try self.valPool(op.ty), widen, &.{raw});
+        } else e.* = try self.compute(op.ty, try self.valPool(op.ty), op.read, &.{ mem.sym, sa });
+        e.nonneg = op.nonneg;
+    }
+
+    /// The narrow value of a load, in a scratch slot of its .NET type that
+    /// is valid until the next temporary of that type is allocated.
+    fn readRaw(self: *Lowerer, op: *const Load, mem: Sym, addr: Sym) Error!Sym {
+        const pool = try self.poolFor(op.raw.?);
+        const raw = try self.newTemp(pool);
+        try self.a.call(op.read, &.{ mem, addr, raw });
+        try self.freeTemp(pool, raw);
+        return raw;
+    }
+
+    /// Emit every pending load: memory is about to change.
+    fn flushLoads(self: *Lowerer) Error!void {
+        for (self.stack.items) |*e| if (e.kind == .mem) try self.loadNow(e);
+    }
+
+    /// A pending unsigned-byte load as the `SystemByte` it reads, for a
+    /// byte operator. Consumes the entry.
+    fn byteOperand(self: *Lowerer, e: *Entry) Error!Sym {
+        if (e.kind == .konst) return self.t.constByte(@intCast(e.bits));
+        const mem = try self.memory();
+        const sa = try self.loadAddress(e);
+        const pool = try self.poolFor("SystemByte");
+        const raw = try self.newTemp(pool);
+        try self.a.call(e.load.?.read, &.{ mem.sym, sa, raw });
+        e.* = .{ .ty = .i32, .kind = .temp, .sym = raw, .owned = true, .pool = pool };
+        return raw;
     }
 
     /// Store the low `size` bytes of a value. A constant is copied straight
@@ -1362,9 +1670,19 @@ const Lowerer = struct {
         const mem = try self.memory();
         var v = try self.pop();
         var addr = try self.pop();
+        // Loads that came before this store must read what was there.
+        try self.flushLoads();
+        if (addr.kind == .mem) try self.loadNow(&addr);
+        const n = try self.t.constI32(size);
+        if (v.kind == .mem and v.load.?.size >= size) {
+            // Loaded only to be stored: copy the bytes within memory.
+            const src = try self.loadAddress(&v);
+            const dst = try self.effectiveAddress(&addr, m.offset);
+            try self.a.call(block_copy, &.{ mem.sym, src, mem.sym, dst, n });
+            return self.release(addr);
+        }
         const sa = try self.effectiveAddress(&addr, m.offset);
         const c0 = try self.t.constI32(0);
-        const n = try self.t.constI32(size);
         if (v.kind == .konst) {
             const off = try self.t.poolOffset(size, if (size == 8) v.bits else v.bits & ((@as(u64, 1) << @intCast(@as(u32, size) * 8)) - 1));
             try self.a.call(block_copy, &.{ try self.t.poolSym(), try self.t.constI32(@intCast(off)), mem.sym, sa, n });

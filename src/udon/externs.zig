@@ -299,6 +299,64 @@ fn FromBytes(comptime T: type) type {
     };
 }
 
+/// `byte op byte` in C# is computed on `int`s, and Udon exposes the
+/// operators with that result type.
+const byte_ops = struct {
+    fn add(a: u8, b: u8) i32 {
+        return @as(i32, a) + b;
+    }
+    fn sub(a: u8, b: u8) i32 {
+        return @as(i32, a) - b;
+    }
+    fn mul(a: u8, b: u8) i32 {
+        return @as(i32, a) * b;
+    }
+    fn div(vm: *Vm, a: u8, b: u8) Error!i32 {
+        if (b == 0) return vm.raise("DivideByZeroException", .{});
+        return a / b;
+    }
+    fn band(a: u8, b: u8) i32 {
+        return a & b;
+    }
+    fn bor(a: u8, b: u8) i32 {
+        return a | b;
+    }
+    fn bxor(a: u8, b: u8) i32 {
+        return a ^ b;
+    }
+    fn shl(a: u8, b: u8) i32 {
+        return Num(i32).shl(a, b);
+    }
+    fn shr(a: u8, b: u8) i32 {
+        return Num(i32).shr(a, b);
+    }
+    fn neg(a: u8) i32 {
+        return -@as(i32, a);
+    }
+    fn toBoolean(vm: *Vm, arr: *Array, start: i32) Error!bool {
+        return try FromBytes(u8).f(vm, arr, start) != 0;
+    }
+};
+
+fn byteEntries() []const KV {
+    const B = Num(u8);
+    const p = std.fmt.comptimePrint;
+    var out: []const KV = &.{
+        .{ "SystemByte.__op_UnaryMinus__SystemByte__SystemInt32", wrap(byte_ops.neg) },
+        .{ "SystemBitConverter.__ToBoolean__SystemByteArray_SystemInt32__SystemBoolean", wrap(byte_ops.toBoolean) },
+    };
+    for (.{
+        .{ "Addition", byte_ops.add },    .{ "Subtraction", byte_ops.sub }, .{ "Multiplication", byte_ops.mul },
+        .{ "Division", byte_ops.div },    .{ "LogicalAnd", byte_ops.band }, .{ "LogicalOr", byte_ops.bor },
+        .{ "LogicalXor", byte_ops.bxor }, .{ "LeftShift", byte_ops.shl },   .{ "RightShift", byte_ops.shr },
+    }) |e| out = out ++ &[_]KV{.{ p("SystemByte.__op_{s}__SystemByte_SystemByte__SystemInt32", .{e[0]}), wrap(e[1]) }};
+    for (.{
+        .{ "Equality", B.eq },        .{ "Inequality", B.ne },  .{ "LessThan", B.lt },
+        .{ "LessThanOrEqual", B.le }, .{ "GreaterThan", B.gt }, .{ "GreaterThanOrEqual", B.ge },
+    }) |e| out = out ++ &[_]KV{.{ p("SystemByte.__op_{s}__SystemByte_SystemByte__SystemBoolean", .{e[0]}), wrap(e[1]) }};
+    return out;
+}
+
 fn convertEntries() []const KV {
     @setEvalBranchQuota(200_000);
     var out: []const KV = &.{};
@@ -1192,7 +1250,7 @@ fn boolEq(a: bool, b: bool) bool {
 
 const registry = blk: {
     @setEvalBranchQuota(4_000_000);
-    const all = numericEntries() ++ convertEntries() ++ &fixed_entries;
+    const all = numericEntries() ++ convertEntries() ++ byteEntries() ++ &fixed_entries;
     break :blk std.StaticStringMap(Impl).initComptime(all);
 };
 

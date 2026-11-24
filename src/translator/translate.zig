@@ -164,6 +164,11 @@ pub const Translator = struct {
     /// One-element arrays used to turn a value into bytes for stores,
     /// indexed by `ValType`.
     store_arrays: [4]?Sym = @splat(null),
+    /// Slots for recently computed `local ± constant` values
+    /// (`Lowerer.derived`). They are shared by every function: nothing in
+    /// them outlives a call.
+    derived: [derived_slots]?Sym = @splat(null),
+    byte_consts: [256]?Sym = @splat(null),
     utf8: ?Sym = null,
 
     // ---- calls ----
@@ -762,6 +767,24 @@ pub const Translator = struct {
     // ------------------------------------------------------------------
 
     /// Register a function leaves its `index`-th result in.
+    pub const derived_slots = 8;
+
+    /// A `SystemByte` constant. Udon Assembly has no byte literals, so it
+    /// is converted from an Int32 constant during initialization.
+    pub fn constByte(self: *Translator, value: u8) Error!Sym {
+        if (self.byte_consts[value]) |s| return s;
+        const s = try self.a.declare(.{ .name = try self.name("__c_u8_{d}", .{value}), .type_name = "SystemByte" });
+        self.byte_consts[value] = s;
+        return s;
+    }
+
+    pub fn derivedSym(self: *Translator, index: usize) Error!Sym {
+        if (self.derived[index]) |s| return s;
+        const s = try self.a.declare(.{ .name = try self.name("__derived{d}", .{index}), .type_name = "SystemInt32", .init = .{ .int32 = 0 } });
+        self.derived[index] = s;
+        return s;
+    }
+
     pub fn retSym(self: *Translator, index: u32, ty: ValType) Error!Sym {
         const gop = try self.rets.getOrPut(self.arena(), .{ index, ty });
         if (!gop.found_existing) gop.value_ptr.* = try self.a.declare(.{
@@ -977,6 +1000,10 @@ pub const Translator = struct {
                 .f64 => "SystemBitConverter.__ToDouble__SystemByteArray_SystemInt32__SystemDouble",
             }, &.{ pool, try self.constI32(@intCast(k.offset)), k.sym });
         }
+
+        for (self.byte_consts, 0..) |slot, value| if (slot) |sym| {
+            try a.call("SystemConvert.__ToByte__SystemInt32__SystemByte", &.{ try self.constI32(@intCast(value)), sym });
+        };
 
         const c1 = try self.constI32(1);
         const array_ctors = [4][]const u8{

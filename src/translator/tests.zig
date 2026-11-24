@@ -287,7 +287,19 @@ fn isNanBits(ty: ValType, bits: u64) bool {
 //  Differential driver
 // ----------------------------------------------------------------------
 
-const Form = enum { globals, constant_rhs, locals };
+const Form = enum {
+    globals,
+    constant_rhs,
+    locals,
+    /// Operands are unsigned bytes read from memory (i32 only): the
+    /// lowering applies byte operators to them.
+    bytes,
+    /// The same, with a constant right operand.
+    byte_constant_rhs,
+};
+
+/// Operand values for the byte forms.
+const byte_values = [_]u64{ 0, 1, 2, 7, 31, 32, 33, 127, 128, 200, 255 };
 
 const Case = struct {
     name: []const u8,
@@ -321,6 +333,19 @@ fn caseModule(a: std.mem.Allocator, c: Case, form: Form, rhs: u64) !wasm.Module 
                 try body.append(a, .{ .local_set = @intCast(i) });
             }
             for (c.in, 0..) |_, i| try body.append(a, .{ .local_get = @intCast(i) });
+        },
+        .bytes, .byte_constant_rhs => {
+            const m0 = wasm.instruction.MemArg{ .@"align" = 0, .offset = 0 };
+            // Put each operand in memory first: 0x55 guard bytes around
+            // them would show a load of the wrong width.
+            try body.appendSlice(a, &.{ .{ .i32_const = 16 }, .{ .i32_const = 0x55555555 }, .{ .i32_store = m0 } });
+            for (c.in, 0..) |_, i| try body.appendSlice(a, &.{ .{ .i32_const = @intCast(17 + i) }, .{ .global_get = @intCast(i) }, .{ .i32_store8 = m0 } });
+            for (c.in, 0..) |ty, i| {
+                const constant = form == .byte_constant_rhs and i + 1 == c.in.len;
+                if (constant) {
+                    try body.append(a, constOf(ty, rhs));
+                } else try body.appendSlice(a, &.{ .{ .i32_const = @intCast(17 + i) }, .{ .i32_load8_u = m0 } });
+            }
         },
     }
     try body.append(a, c.op);
@@ -399,6 +424,12 @@ fn runGrid(c: Case) !void {
     if (c.in.len == 2) {
         for (g1) |y| try runForm(c, .constant_rhs, g0, &.{y});
     } else for (g0) |x| try runForm(c, .constant_rhs, &.{x}, &.{0});
+
+    if (c.in[0] != .i32) return;
+    try runForm(c, .bytes, &byte_values, if (c.in.len == 2) &byte_values else &.{0});
+    // A constant that fits a byte takes the byte operator; a larger one
+    // must not.
+    if (c.in.len == 2) for ([_]u64{ 0, 1, 24, 31, 200, 255, 256, 0xFFFF_FFFF }) |y| try runForm(c, .byte_constant_rhs, &byte_values, &.{y});
 }
 
 // Reference adapters, generated per instruction name.
@@ -626,6 +657,166 @@ test "i32 narrow loads, constant stores and float stores" {
     try testing.expectEqual(Value{ .int32 = 0xA1 + @as(i32, @as(i8, @bitCast(@as(u8, 0xA1)))) }, p.global("__G__g3"));
     try testing.expectEqual(@as(u64, @bitCast(@as(f64, -1234.5))), bitsOf(p.global("__G__g0")));
     try testing.expectEqual(@as(u64, @as(u32, @bitCast(@as(f32, 0.1)))), bitsOf(p.global("__G__g1")));
+}
+
+test "a load reads memory as it was, whatever is stored before its value is used" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const m0 = wasm.instruction.MemArg{ .@"align" = 0, .offset = 0 };
+    const m4 = wasm.instruction.MemArg{ .@"align" = 0, .offset = 4 };
+    const body = [_]I{
+        .{ .i32_const = 100 }, .{ .i32_const = 111 }, .{ .i32_store = m0 },
+        .{ .i32_const = 104 }, .{ .i32_const = 333 }, .{ .i32_store = m0 },
+        // Constant address: load [100], overwrite [100], then use the load.
+        .{ .i32_const = 100 }, .{ .i32_load = m0 },   .{ .i32_const = 100 },
+        .{ .i32_const = 222 }, .{ .i32_store = m0 },
+        .{ .global_set = 2 }, // 111
+        // Address in a local that moves on before the value is used.
+        .{ .i32_const = 100 },
+        .{ .local_set = 0 },
+        .{ .local_get = 0 }, .{ .i32_load = m0 }, // 222
+        .{ .local_get = 0 }, .{ .i32_const = 4 },
+        .i32_add,            .{ .local_set = 0 },
+        .{ .local_get = 0 }, .{ .i32_load = m0 }, // 333
+        .i32_add,
+        .{ .global_set = 3 }, // 555
+        // A load, then a store through the same local to the same field,
+        // then both values used: 333 and 7.
+        .{ .local_get = 0 },
+        .{ .i32_load = m0 },
+        .{ .local_get = 0 },
+        .{ .i32_const = 7 },
+        .{ .i32_store = m0 },
+        .{ .local_get = 0 },
+        .{ .i32_load = m0 },
+        .{ .i32_const = 1000 },
+        .i32_mul,
+        .i32_add,
+        .i64_extend_i32_s,
+        .{ .global_set = 0 }, // 333 + 7000
+        // A load left pending across a call that writes the address.
+        .{ .i32_const = 96 }, .{ .i32_load = m4 }, // [100] = 222
+        .{ .call = 1 }, // stores 9 to [100]
+        .{ .i32_const = 100 },   .{ .i32_load = m0 }, // 9
+        .{ .i32_const = 10000 }, .i32_mul,
+        .i32_add,                .i64_extend_i32_s,
+        .{ .global_set = 1 }, // 222 + 90000
+    };
+    const callee = [_]I{ .{ .i32_const = 100 }, .{ .i32_const = 9 }, .{ .i32_store = m0 } };
+    var mod = try simpleModule(a, &.{ .i64, .i64, .i32, .i32 }, &.{.{ .count = 1, .ty = .i32 }}, &body);
+    mod.funcs = try a.dupe(u32, &.{ 0, 0 });
+    mod.codes = try a.dupe(wasm.module.Code, &.{ mod.codes[0], .{ .locals = &.{}, .body = &callee } });
+    var p = try load(mod, null);
+    defer p.deinit();
+    _ = try p.vm.runEvent("run");
+    try testing.expectEqual(Value{ .int32 = 111 }, p.global("__G__g2"));
+    try testing.expectEqual(Value{ .int32 = 555 }, p.global("__G__g3"));
+    try testing.expectEqual(Value{ .int64 = 7333 }, p.global("__G__g0"));
+    try testing.expectEqual(Value{ .int64 = 90222 }, p.global("__G__g1"));
+}
+
+test "a loaded value stored straight back is a copy within memory" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const m0 = wasm.instruction.MemArg{ .@"align" = 0, .offset = 0 };
+    const m1 = wasm.instruction.MemArg{ .@"align" = 0, .offset = 1 };
+    const Pair = struct { load: I, store: I, size: usize };
+    const pairs = [_]Pair{
+        .{ .load = .{ .i32_load = m1 }, .store = .{ .i32_store = m0 }, .size = 4 },
+        .{ .load = .{ .i64_load = m1 }, .store = .{ .i64_store = m0 }, .size = 8 },
+        .{ .load = .{ .f32_load = m1 }, .store = .{ .f32_store = m0 }, .size = 4 },
+        .{ .load = .{ .f64_load = m1 }, .store = .{ .f64_store = m0 }, .size = 8 },
+        .{ .load = .{ .i32_load8_u = m1 }, .store = .{ .i32_store8 = m0 }, .size = 1 },
+        .{ .load = .{ .i32_load8_s = m1 }, .store = .{ .i32_store8 = m0 }, .size = 1 },
+        .{ .load = .{ .i32_load16_u = m1 }, .store = .{ .i32_store16 = m0 }, .size = 2 },
+        .{ .load = .{ .i32_load16_s = m1 }, .store = .{ .i32_store16 = m0 }, .size = 2 },
+        .{ .load = .{ .i64_load32_u = m1 }, .store = .{ .i64_store32 = m0 }, .size = 4 },
+        .{ .load = .{ .i64_load16_s = m1 }, .store = .{ .i64_store8 = m0 }, .size = 1 },
+        // Wider load than store: the low bytes.
+        .{ .load = .{ .i32_load = m1 }, .store = .{ .i32_store16 = m0 }, .size = 2 },
+        .{ .load = .{ .i64_load = m1 }, .store = .{ .i64_store32 = m0 }, .size = 4 },
+        // Narrower load than store: zero- or sign-extended, not a copy.
+        .{ .load = .{ .i32_load8_u = m1 }, .store = .{ .i32_store = m0 }, .size = 0 },
+    };
+    for (pairs) |pair| {
+        const body = [_]I{
+            // Source bytes at 41..48 (address 40 + offset 1), all distinct
+            // and with high bits set.
+            .{ .i32_const = 41 }, .{ .i64_const = @bitCast(@as(u64, 0xF8E7_D6C5_B4A3_9281)) }, .{ .i64_store = m0 },
+            // Destination 80..87 prefilled so untouched bytes show.
+            .{ .i32_const = 80 }, .{ .i64_const = 0x1111_1111_1111_1111 },                     .{ .i64_store = m0 },
+            // Destination address from a local, source from a global.
+            .{ .i32_const = 80 }, .{ .local_set = 0 },                                         .{ .i32_const = 40 },
+            .{ .global_set = 2 }, .{ .local_get = 0 },                                         .{ .global_get = 2 },
+            pair.load,            pair.store,
+                // And an overlapping copy within the source, constant addresses:
+                // [43..] <- [41..].
+                                                             .{ .i32_const = 43 },
+            .{ .i32_const = 40 }, pair.load,                                                   pair.store,
+            .{ .i32_const = 80 }, .{ .i64_load = m0 },                                         .{ .global_set = 0 },
+            .{ .i32_const = 41 }, .{ .i64_load = m0 },                                         .{ .global_set = 1 },
+        };
+        var p = try runBody(a, &body, &.{.{ .count = 1, .ty = .i32 }});
+        defer p.deinit();
+        const src = [8]u8{ 0x81, 0x92, 0xA3, 0xB4, 0xC5, 0xD6, 0xE7, 0xF8 };
+        var dst: [8]u8 = @splat(0x11);
+        var after = src;
+        if (pair.size == 0) {
+            // i32.load8_u then i32.store: the byte, zero-extended.
+            std.mem.writeInt(u32, dst[0..4], src[0], .little);
+            std.mem.writeInt(u32, after[2..6], src[0], .little);
+        } else {
+            @memcpy(dst[0..pair.size], src[0..pair.size]);
+            // The window read back is eight bytes; a long copy runs past it.
+            const n = @min(pair.size, after.len - 2);
+            @memcpy(after[2..][0..n], src[0..n]);
+        }
+        try testing.expectEqual(std.mem.readInt(u64, &dst, .little), bitsOf(p.global("__G__g0")));
+        try testing.expectEqual(std.mem.readInt(u64, &after, .little), bitsOf(p.global("__G__g1")));
+    }
+}
+
+test "a byte in memory is tested without being loaded" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const m0 = wasm.instruction.MemArg{ .@"align" = 0, .offset = 0 };
+    const i32_block: wasm.types.BlockType = .{ .value = .i32 };
+    for ([_]i32{ 0, 1, 0x80, 0xFF }) |byte| {
+        const flag = [_]I{ .{ .i32_const = 50 }, .{ .i32_load8_u = m0 } };
+        const body = [_]I{
+            // Bytes around it are non-zero: a wider read would see them.
+            .{ .i32_const = 48 }, .{ .i32_const = -1 },   .{ .i32_store = m0 },
+            .{ .i32_const = 50 }, .{ .i32_const = byte }, .{ .i32_store8 = m0 },
+        } ++ flag ++ [_]I{
+            // if (byte) 10 else 20
+            .{ .if_ = .{ .bt = i32_block, .then_body = &.{.{ .i32_const = 10 }}, .else_body = &.{.{ .i32_const = 20 }} } },
+        } ++ flag ++ [_]I{
+            // + (byte == 0 ? 1 : 2) via eqz and select
+            .i32_eqz,
+            .{ .if_ = .{ .bt = i32_block, .then_body = &.{.{ .i32_const = 1 }}, .else_body = &.{.{ .i32_const = 2 }} } },
+            .i32_add,
+            .{ .i32_const = 100 },
+            .{ .i32_const = 200 },
+        } ++ flag ++ [_]I{
+            .select,                                                                                                                   .i32_add,
+            // br_if on the byte and on its negation
+            .{ .block = .{ .bt = .empty, .body = &(flag ++ [_]I{ .{ .br_if = 0 }, .{ .i32_const = 1000 }, .{ .global_set = 3 } }) } }, .{ .block = .{ .bt = .empty, .body = &(flag ++ [_]I{ .i32_eqz, .{ .br_if = 0 }, .{ .global_get = 3 }, .{ .i32_const = 5000 }, .i32_add, .{ .global_set = 3 } }) } },
+            .{ .global_set = 2 },
+        } ++ flag ++ [_]I{
+            // The byte's value itself still loads correctly afterwards.
+            .i64_extend_i32_u, .{ .global_set = 0 },
+        };
+        var p = try runBody(a, &body, &.{});
+        defer p.deinit();
+        const set = byte != 0;
+        const expected: i32 = (if (set) @as(i32, 10) else 20) + (if (set) @as(i32, 2) else 1) + (if (set) @as(i32, 100) else 200);
+        try testing.expectEqual(Value{ .int32 = expected }, p.global("__G__g2"));
+        try testing.expectEqual(Value{ .int32 = if (set) 5000 else 1000 }, p.global("__G__g3"));
+        try testing.expectEqual(Value{ .int64 = byte }, p.global("__G__g0"));
+    }
 }
 
 test "memory.copy overlaps correctly; memory.fill; memory.size and grow" {

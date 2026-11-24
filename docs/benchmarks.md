@@ -232,6 +232,76 @@ Per event (average over the scenario):
 | `blockfall` | `Rotate` | 4 | 9252 | 1966 |
 | `blockfall` | `Drop` | 11 | 11846 | 2546 |
 
+### Steps 1–3 — translator: branches, derived values, pending loads
+
+Executed externs after each step (the scenario and the WASM are unchanged,
+so every difference is the translator's):
+
+| Example | step 0 | 1: two-jump branches | 2: derived-value cache | 3: pending loads |
+|---|---:|---:|---:|---:|
+| `wasm-bench` | 8841 | 8841 | 8750 | 8649 |
+| `udon-orbit` | 1926 | 1926 | 1926 | 1926 |
+| `pi` | 65624 | 65624 | 65624 | 65314 |
+| `mandelbrot` | 889572 | 875148 | 875148 | 858749 |
+| `image-codec` | 381012 | 381012 | 381012 | 380033 |
+| `ragdoll` | 2500108 | 2459407 | 2411455 | 2355818 |
+| `blockfall` | 186976 | 186366 | 186196 | 164988 |
+| `wasm-bench-rs` | 10977 | 10977 | 10975 | 8810 |
+| `wasm-bench-alloc-rs` | 128574 | 128574 | 127864 | 118484 |
+| `udon-orbit-rs` | 1628 | 1628 | 1628 | 1628 |
+
+Executed instructions:
+
+| Example | step 0 | step 1 | step 2 | step 3 |
+|---|---:|---:|---:|---:|
+| `wasm-bench` | 47663 | 47663 | 47299 | 46922 |
+| `pi` | 317171 | 317171 | 317171 | 316040 |
+| `mandelbrot` | 4256741 | 4215879 | 4215879 | 4150286 |
+| `image-codec` | 1781857 | 1781857 | 1781857 | 1778764 |
+| `ragdoll` | 10710170 | 10602597 | 10410789 | 10243874 |
+| `blockfall` | 884123 | 882598 | 881918 | 808892 |
+| `wasm-bench-rs` | 52436 | 52436 | 52428 | 44461 |
+| `wasm-bench-alloc-rs` | 658023 | 658023 | 655183 | 618262 |
+
+Heap slots after step 3: `wasm-bench` 711, `pi` 102, `mandelbrot` 205,
+`image-codec` 288, `ragdoll` 301, `blockfall` 383, `wasm-bench-rs` 389,
+`wasm-bench-alloc-rs` 672 (the derived-value cache adds up to 8 shared
+slots, byte constants one each).
+
+1. **Two-jump branches.** `br_if` / `if` / `select` on a condition whose
+   Boolean has the wrong sense and cannot be swapped for the opposite
+   comparison (float `<`, `<=`, …: not invertible because of NaN) used to
+   negate the Boolean with an extern. It is now `JUMP_IF_FALSE` over a
+   `JUMP`: two cheap instructions on one path, one on the other, no extern.
+2. **Derived-value cache.** `local + offset` (the address of a field) and
+   `local ^ 0x80000000` (the operand of an unsigned comparison) are kept in
+   eight shared slots while the local is unchanged, so a load and a store of
+   the same field, or several unsigned comparisons of the same local,
+   compute the value once (`docs/spec_linear_memory.md` §8).
+3. **Pending loads.** A load is not emitted until its value is needed.
+   A value loaded only to be stored becomes one `Buffer.BlockCopy` within
+   memory (3–4 externs → 1); a byte tested for zero is one
+   `BitConverter.ToBoolean`; a byte combined with another byte or a small
+   constant uses the `SystemByte` operators, which return `Int32` and so
+   absorb the conversion (`docs/spec_linear_memory.md` §9).
+
+The profile at step 0 showed where the rest goes — address arithmetic
+(`Int32` addition is 25–30 % of all externs in every example), the two
+externs of each store, and the arithmetic itself:
+
+| `ragdoll`, step 0 | executions |
+|---|---:|
+| `SystemInt32.__op_Addition__` | 640688 |
+| `SystemBitConverter.__ToSingle__` (f32 load) | 409502 |
+| `SystemSingle.__op_Multiplication__` | 235416 |
+| `SystemSingle.__op_Subtraction__` | 210962 |
+| `SystemBuffer.__BlockCopy__` (store, 2nd half) | 207977 |
+| `SystemSingleArray.__Set__` (store, 1st half) | 205813 |
+| `SystemSingle.__op_Addition__` | 172425 |
+| `SystemInt32.__op_Multiplication__` | 59879 |
+| `SystemByteArray.__Get__` + `SystemConvert.__ToInt32__` (byte load) | 2 × 56969 |
+| `SystemBoolean.__op_UnaryNegation__` | 40701 |
+
 ## How the numbers are produced
 
 ```sh
