@@ -6620,7 +6620,7 @@
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, ___start_L11__
         PUSH, __c_i32_1
-        PUSH, __derived1
+        PUSH, __derived0
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __st_i32
         PUSH, __c_i32_0
@@ -6629,7 +6629,7 @@
         PUSH, __st_i32
         PUSH, __c_i32_0
         PUSH, __G__memory
-        PUSH, __derived1
+        PUSH, __derived0
         PUSH, __c_i32_1
         EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
         PUSH, ___start_L28__
@@ -6748,7 +6748,7 @@
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, ___start_L11__
         PUSH, __c_i32_2
-        PUSH, __derived1
+        PUSH, __derived0
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __st_i32
         PUSH, __c_i32_0
@@ -6757,7 +6757,7 @@
         PUSH, __st_i32
         PUSH, __c_i32_0
         PUSH, __G__memory
-        PUSH, __derived1
+        PUSH, __derived0
         PUSH, __c_i32_2
         EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
         PUSH, ___start_L28__
@@ -6867,7 +6867,7 @@
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, ___start_L11__
         PUSH, __c_i32_4
-        PUSH, __derived1
+        PUSH, __derived0
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __st_i32
         PUSH, __c_i32_0
@@ -6876,7 +6876,7 @@
         PUSH, __st_i32
         PUSH, __c_i32_0
         PUSH, __G__memory
-        PUSH, __derived1
+        PUSH, __derived0
         PUSH, __c_i32_4
         EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
         PUSH, ___start_L28__
@@ -26194,7 +26194,7 @@
         EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __f131_P0__
         PUSH, __c_i32_92
-        PUSH, __derived2
+        PUSH, __derived0
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __st_i32
         PUSH, __c_i32_0
@@ -26203,7 +26203,7 @@
         PUSH, __st_i32
         PUSH, __c_i32_0
         PUSH, __G__memory
-        PUSH, __derived2
+        PUSH, __derived0
         PUSH, __c_i32_1
         EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
         JUMP_INDIRECT, __f131_RA__
@@ -31496,10 +31496,10 @@
         EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
         PUSH, __f199_P0__
         PUSH, __c_i32_4
-        PUSH, __derived1
+        PUSH, __derived0
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __G__memory
-        PUSH, __derived1
+        PUSH, __derived0
         PUSH, __f199_L5__
         EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
         PUSH, __f199_P0__
@@ -31525,7 +31525,7 @@
         PUSH, __f199_T2__
         EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __G__memory
-        PUSH, __derived1
+        PUSH, __derived0
         PUSH, __f199_P2__
         EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
         PUSH, __f199_P2__
@@ -31544,7 +31544,7 @@
         PUSH, __st_i32
         PUSH, __c_i32_0
         PUSH, __G__memory
-        PUSH, __derived1
+        PUSH, __derived0
         PUSH, __c_i32_4
         EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
         JUMP_INDIRECT, __f199_RA__
@@ -31610,10 +31610,10 @@
         EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
         PUSH, __f201_P0__
         PUSH, __c_i32_4
-        PUSH, __derived1
+        PUSH, __derived0
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __G__memory
-        PUSH, __derived1
+        PUSH, __derived0
         PUSH, __f201_L7__
         EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
         PUSH, __f201_P0__
@@ -31636,14 +31636,14 @@
         JUMP_IF_FALSE, 0x00038ED4
         PUSH, __f201_P4__
         PUSH, __c_i32_n2147483648
-        PUSH, __derived2
+        PUSH, __derived1
         EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __f201_P2__
         PUSH, __c_i32_n2147483648
-        PUSH, __derived3
-        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __derived2
-        PUSH, __derived3
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived1
+        PUSH, __derived2
         PUSH, __f201_T3__
         EXTERN, "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __f201_T3__

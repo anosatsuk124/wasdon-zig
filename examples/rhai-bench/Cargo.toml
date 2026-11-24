@@ -1,0 +1,12 @@
+[package]
+name = "rhai-bench"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "rhai_bench"
+path = "src/main.rs"
+
+[dependencies]
+rhai = { version = "1.24", default-features = false, features = ["std", "only_i32", "f32_float", "unchecked"] }

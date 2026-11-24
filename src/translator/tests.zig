@@ -716,6 +716,31 @@ test "a load reads memory as it was, whatever is stored before its value is used
     try testing.expectEqual(Value{ .int64 = 90222 }, p.global("__G__g1"));
 }
 
+test "following a pointer through its own local: p = p.next; p.next" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const m0 = wasm.instruction.MemArg{ .@"align" = 2, .offset = 0 };
+    const m8 = wasm.instruction.MemArg{ .@"align" = 2, .offset = 8 };
+    // Three nodes at 100, 200, 300, each with `next` at offset 8.
+    const body = [_]I{
+        .{ .i32_const = 108 }, .{ .i32_const = 200 }, .{ .i32_store = m0 },
+        .{ .i32_const = 208 }, .{ .i32_const = 300 }, .{ .i32_store = m0 },
+        .{ .i32_const = 308 }, .{ .i32_const = 777 }, .{ .i32_store = m0 },
+        .{ .i32_const = 100 }, .{ .local_set = 0 },
+        // p = p.next — the load is still pending when p is assigned.
+        .{ .local_get = 0 },   .{ .i32_load = m8 },   .{ .local_set = 0 },
+        // q = p.next must use the new p.
+        .{ .local_get = 0 },   .{ .i32_load = m8 },   .{ .global_set = 2 },
+        .{ .local_get = 0 },   .{ .i32_load = m8 },   .{ .local_tee = 0 },
+        .{ .i32_load = m8 },   .{ .global_set = 3 },
+    };
+    var p = try runBody(a, &body, &.{.{ .count = 1, .ty = .i32 }});
+    defer p.deinit();
+    try testing.expectEqual(Value{ .int32 = 300 }, p.global("__G__g2"));
+    try testing.expectEqual(Value{ .int32 = 777 }, p.global("__G__g3"));
+}
+
 test "a loaded value stored straight back is a copy within memory" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -960,6 +985,51 @@ test "blocks carry values through br, br_if and fall-through" {
     }
 }
 
+test "br_if that carries a value: the value is ready on both paths" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const m4 = wasm.instruction.MemArg{ .@"align" = 2, .offset = 4 };
+    const i32_block: wasm.types.BlockType = .{ .value = .i32 };
+    for ([_]i32{ 0, 1 }) |take| {
+        // block (result i32)
+        //   local 0 = 96;  [100] = 7
+        //   (load [local0 + 4])        ← pending when the br_if is lowered
+        //   global 2 (the condition)
+        //   br_if 0                    ← carries the load
+        //   ;; not taken: the same value is still on the stack
+        //   i32.const 1000  i32.add
+        //   ;; and the same field is read again through the same local
+        //   local.get 0  i32.load offset=4  i32.add
+        // end
+        const inner = [_]I{
+            .{ .i32_const = 96 },  .{ .local_set = 0 },
+            .{ .i32_const = 100 }, .{ .i32_const = 7 },  .{ .i32_store = .{ .@"align" = 2, .offset = 0 } },
+            .{ .local_get = 0 },   .{ .i32_load = m4 },
+            .{ .global_get = 2 },  .{ .br_if = 0 },
+            .{ .i32_const = 1000 }, .i32_add,
+            .{ .local_get = 0 },   .{ .i32_load = m4 }, .i32_add,
+        };
+        // The same with a comparison as the carried value.
+        const inner2 = [_]I{
+            .{ .global_get = 2 }, .{ .i32_const = 5 }, .i32_lt_s,
+            .{ .global_get = 2 }, .{ .br_if = 0 },
+            .{ .i32_const = 40 }, .i32_add,
+        };
+        const body = [_]I{
+            .{ .i32_const = take }, .{ .global_set = 2 },
+            .{ .block = .{ .bt = i32_block, .body = &inner } },
+            .{ .global_set = 3 },
+            .{ .block = .{ .bt = i32_block, .body = &inner2 } },
+            .i64_extend_i32_s,     .{ .global_set = 0 },
+        };
+        var p = try runBody(a, &body, &.{.{ .count = 1, .ty = .i32 }});
+        defer p.deinit();
+        try testing.expectEqual(Value{ .int32 = if (take != 0) 7 else 1014 }, p.global("__G__g3"));
+        try testing.expectEqual(Value{ .int64 = if (take != 0) 1 else 41 }, p.global("__G__g0"));
+    }
+}
+
 test "loops, br_table and select" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -1179,6 +1249,33 @@ test "recursion keeps operands and locals live across the call" {
     try testing.expectEqual(Value{ .int32 = 1 }, p.global("__G__g2"));
     // The frame stack is back where it started.
     try testing.expectEqual(Value{ .int32 = 0 }, p.global("__frame_depth"));
+}
+
+test "recursion: a local read before the call but used after it survives" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // f(n) = n == 0 ? 0 : n + f(n - 1), written so that `n` is pushed
+    // before the recursive call and never read again in the instruction
+    // stream: only the pending operand keeps it alive.
+    const i32_block: wasm.types.BlockType = .{ .value = .i32 };
+    const f_body = [_]I{
+        .{ .local_get = 0 }, .i32_eqz,
+        .{ .if_ = .{ .bt = i32_block, .then_body = &.{.{ .i32_const = 0 }}, .else_body = &.{
+            .{ .local_get = 0 },
+            .{ .local_get = 0 }, .{ .i32_const = 1 }, .i32_sub, .{ .call = 1 },
+            .i32_add,
+        } } },
+    };
+    const run_body = [_]I{ .{ .i32_const = 10 }, .{ .call = 1 }, .{ .global_set = 2 } };
+    var mod = try simpleModule(a, &.{ .i64, .i64, .i32, .i32 }, &.{}, &run_body);
+    mod.types_ = try a.dupe(FuncType, &.{ void_type, .{ .params = &.{.i32}, .results = &.{.i32} } });
+    mod.funcs = try a.dupe(u32, &.{ 0, 1 });
+    mod.codes = try a.dupe(wasm.module.Code, &.{ mod.codes[0], .{ .locals = &.{}, .body = &f_body } });
+    var p = try load(mod, null);
+    defer p.deinit();
+    _ = try p.vm.runEvent("run");
+    try testing.expectEqual(Value{ .int32 = 55 }, p.global("__G__g2"));
 }
 
 test "a self call may pass its own parameters in a different order" {

@@ -41,6 +41,9 @@ const Error = tr.Error;
 
 const no_def = std.math.maxInt(u32);
 
+/// `Options.disable.byte_operators`, where `Entry` methods can see it.
+var byte_operators_off = false;
+
 /// Local indices at and above this value name per-function scratch locals
 /// used by the instruction-sequence expansions in `snippets`.
 const scratch_base: u32 = 0xFFFF_FF00;
@@ -118,7 +121,7 @@ const Entry = struct {
 
     /// An unsigned byte that is still in memory.
     fn isByte(e: Entry) bool {
-        return e.kind == .mem and e.load.?.byte and e.ty == .i32;
+        return e.kind == .mem and e.load.?.byte and e.ty == .i32 and !byte_operators_off;
     }
 
     /// A constant a `SystemByte` can hold.
@@ -195,6 +198,7 @@ const Derived = struct {
 };
 
 pub fn lowerFunction(t: *Translator, func_index: u32) Error!void {
+    byte_operators_off = t.options.disable.byte_operators;
     var l: Lowerer = .{ .t = t, .a = &t.a, .f = &t.funcs[func_index], .f_idx = func_index };
     defer l.deinit();
     try l.run(t.mod.codes[func_index - t.num_imported_funcs]);
@@ -569,6 +573,12 @@ const Lowerer = struct {
             if (e.kind == .mem and e.base == .local and e.local == i) try self.loadNow(e);
             if (e.kind == .cond and !e.owned and e.sym == slot) try self.materialize(e);
         }
+        self.forgetDerivedFrom(i);
+    }
+
+    /// Local `i` has a new value: what was derived from the old one is
+    /// stale.
+    fn forgetDerivedFrom(self: *Lowerer, i: u32) void {
         for (&self.derived) |*d| if (d.local == i) {
             d.op = .none;
         };
@@ -580,7 +590,7 @@ const Lowerer = struct {
     fn derive(self: *Lowerer, op: @FieldType(Derived, "op"), local: u32, local_sym: Sym, bits: u32) Error!Sym {
         var free: ?usize = null;
         for (self.derived, 0..) |d, k| {
-            if (d.op == op and d.local == local and d.bits == bits) {
+            if (d.op == op and d.local == local and d.bits == bits and !self.t.options.disable.derived) {
                 self.derived_last = k;
                 return self.t.derivedSym(k);
             }
@@ -631,6 +641,7 @@ const Lowerer = struct {
     }
 
     fn localNonneg(self: *const Lowerer, i: u32) bool {
+        if (self.t.options.disable.masks) return false;
         return i < self.local_nonneg.len and self.local_nonneg[i];
     }
 
@@ -821,6 +832,13 @@ const Lowerer = struct {
             return self.release(cond);
         }
         const skip = try self.a.newLabel();
+        // The code between the test and `skip` runs only when the branch
+        // is taken, but what it does to the operands — emitting a pending
+        // load, turning a condition into a number — is remembered for both
+        // paths. Whatever the carried values need is therefore done first,
+        // where both paths execute it.
+        const carried = if (c.kind == .func) self.f.ty.results.len else c.types.len;
+        for (self.stack.items[self.stack.items.len - carried ..]) |*e| _ = try self.operand(e);
         if (cond.kind != .konst) {
             try self.branchIf(&cond, false, skip);
             try self.release(cond);
@@ -839,6 +857,11 @@ const Lowerer = struct {
         const default = try self.frameAt(bt.default);
         const arity = if (default.kind == .loop) 0 else default.types.len;
         const x = try self.operand(&index);
+        // Each case below is code only its own path runs; the values the
+        // branches carry are made ready before the paths part (see
+        // `lowerBrIf`).
+        const carried = if (default.kind == .func) self.f.ty.results.len else arity;
+        for (self.stack.items[self.stack.items.len - carried ..]) |*e| _ = try self.operand(e);
 
         // Values a taken branch carries go to every distinct target's join
         // slots up front; the dispatch below then only jumps.
@@ -959,6 +982,10 @@ const Lowerer = struct {
                 const nonneg = v.nonneg;
                 try self.flushLocal(i);
                 try self.store(v, try self.localSym(i));
+                // The value stored may itself have been a pending load
+                // through this local — `p = p.next` — whose address was
+                // derived from the old value just now.
+                self.forgetDerivedFrom(i);
                 if (i < self.local_nonneg.len) self.local_nonneg[i] = nonneg;
                 if (ins == .local_tee) try self.push(.{ .ty = try self.localType(i), .kind = .local, .sym = try self.localSym(i), .local = i, .nonneg = nonneg });
             },
@@ -1209,7 +1236,7 @@ const Lowerer = struct {
             if (commutes and a.kind == .konst) std.mem.swap(Entry, &a, &b);
             // (x & m) & c is x & (m & c): narrow the constant of the `&`
             // just emitted instead of emitting another.
-            if (op == .and_ and b.kind == .konst and a.mask != null and a.kind == .temp and a.def_end == self.a.here()) {
+            if (op == .and_ and b.kind == .konst and a.mask != null and a.kind == .temp and a.def_end == self.a.here() and !self.t.options.disable.masks) {
                 const merged = a.mask.? & b.bits;
                 self.a.code.items[a.def - 1].arg = try self.t.constSym(ty, merged);
                 a.mask = merged;
@@ -1697,6 +1724,7 @@ const Lowerer = struct {
                 try self.loadNow(&e);
             },
         }
+        if (self.t.options.disable.pending_loads and e.kind == .mem) try self.loadNow(&e);
         try self.push(e);
     }
 
@@ -1763,7 +1791,7 @@ const Lowerer = struct {
         try self.flushLoads();
         if (addr.kind == .mem) try self.loadNow(&addr);
         const n = try self.t.constI32(size);
-        if (v.kind == .mem and v.load.?.size >= size) {
+        if (v.kind == .mem and v.load.?.size >= size and !self.t.options.disable.memory_copies) {
             // Loaded only to be stored: copy the bytes within memory.
             const src = try self.loadAddress(&v);
             const dst = try self.effectiveAddress(&addr, m.offset);
@@ -1853,7 +1881,16 @@ const Lowerer = struct {
         var list: std.ArrayList(Sym) = .empty;
         const a = self.t.arena();
         const call = self.current.?;
-        for (self.f.locals, 0..) |sym, i| if (self.live.liveAfter(call, i)) try list.append(a, sym);
+        for (self.f.locals, 0..) |sym, i| {
+            // An operand below the arguments may be a local that has not
+            // been read yet as far as the emitted code goes: the
+            // instruction stream read it before the call, the code will
+            // read its slot after.
+            const pending = for (self.stack.items[0..below]) |e| {
+                if (e.kind == .local and e.local == i) break true;
+            } else false;
+            if (pending or self.t.options.disable.liveness or self.live.liveAfter(call, i)) try list.append(a, sym);
+        }
         for (self.stack.items[0..below]) |e| if (e.owned) try list.append(a, e.sym);
         if (self.f.ret == .indirect) try list.append(a, self.f.ra);
         return list.items;

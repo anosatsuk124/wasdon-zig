@@ -580,6 +580,14 @@ fn blockCopy(vm: *Vm, src: *Array, src_off: i32, dst: *Array, dst_off: i32, coun
     const s = src.bytes[@intCast(src_off)..][0..n];
     const d = dst.bytes[@intCast(dst_off)..][0..n];
     if (@intFromPtr(d.ptr) <= @intFromPtr(s.ptr)) std.mem.copyForwards(u8, d, s) else std.mem.copyBackwards(u8, d, s);
+    if (dst.bytes.len >= 65536) {
+        var h = std.hash.Wyhash.init(vm.stores.hash);
+        h.update(std.mem.asBytes(&dst_off));
+        h.update(d);
+        vm.stores = .{ .count = vm.stores.count + 1, .hash = h.final() };
+        if (vm.stores.count == vm.options.stop_at_store)
+            return vm.raise("stopped at store {d}: {d} bytes at {d}, digest {x}", .{ vm.stores.count, count, dst_off, vm.stores.hash });
+    }
 }
 
 fn byteLength(vm: *Vm, arr: *Array) Error!i32 {

@@ -15,6 +15,9 @@ const usage =
     \\      more. --meta reads __udon_meta from a JSON file instead of from the
     \\      module; --strict rejects imports that are not Udon externs; --stats
     \\      prints the size of the result, including the heap size it needs.
+    \\      --without <a,b,…> leaves optimizations out (liveness, stack_return,
+    \\      bool_locals, pending_loads, memory_copies, byte_operators, derived,
+    \\      masks), to see whether one of them is behind a wrong result.
     \\  wasdon-zig inspect <input.wasm>
     \\      Report the module's size, its imports, and everything in it the
     \\      translator does not support — all of it, where `translate` stops
@@ -23,10 +26,14 @@ const usage =
     \\      Validate Udon Assembly against the spec and the Udon node list, and
     \\      report the heap size it needs.
     \\  wasdon-zig run <program.uasm> [--events <list>] [--profile [N]] [--quiet] [--max-steps N]
+    \\                 [--stop-at-store N]
     \\      Execute Udon Assembly in the bundled Udon VM emulator and print the
     \\      log output plus executed-instruction statistics. <list> is a comma
     \\      separated event sequence, each optionally repeated with *N, e.g.
     \\      "_start,_interact*3,_update*60" (default: "_start").
+    \\      --stop-at-store N halts at the N-th write to linear memory and
+    \\      prints a digest of all writes so far: run two translations of one
+    \\      module with the same N to find the first write where they differ.
     \\
 ;
 
@@ -99,6 +106,20 @@ fn runTranslate(cli: *Cli, args: []const []const u8) !u8 {
             i += 1;
             if (i == args.len) return cli.fail("--meta requires a path", .{});
             meta_path = args[i];
+        } else if (std.mem.eql(u8, a, "--without")) {
+            i += 1;
+            if (i == args.len) return cli.fail("--without requires a list of optimizations", .{});
+            var names = std.mem.tokenizeScalar(u8, args[i], ',');
+            while (names.next()) |name| {
+                var known = false;
+                inline for (@typeInfo(@TypeOf(options.disable)).@"struct".fields) |f| {
+                    if (std.mem.eql(u8, name, f.name)) {
+                        @field(options.disable, f.name) = true;
+                        known = true;
+                    }
+                }
+                if (!known) return cli.fail("unknown optimization '{s}' (liveness, stack_return, bool_locals, pending_loads, memory_copies, byte_operators, derived, masks)", .{name});
+            }
         } else if (std.mem.eql(u8, a, "--strict")) {
             options.strict = true;
         } else if (std.mem.eql(u8, a, "--stats")) {
@@ -185,6 +206,10 @@ fn runProgram(cli: *Cli, args: []const []const u8) !u8 {
             i += 1;
             if (i == args.len) return cli.fail("--max-steps requires a number", .{});
             options.max_steps = std.fmt.parseInt(u64, args[i], 10) catch return cli.fail("bad --max-steps", .{});
+        } else if (std.mem.eql(u8, a, "--stop-at-store")) {
+            i += 1;
+            if (i == args.len) return cli.fail("--stop-at-store requires a number", .{});
+            options.stop_at_store = std.fmt.parseInt(u64, args[i], 10) catch return cli.fail("bad --stop-at-store", .{});
         } else if (std.mem.eql(u8, a, "--profile")) {
             profile_top = 15;
             if (i + 1 < args.len) if (std.fmt.parseInt(usize, args[i + 1], 10)) |n| {
@@ -221,6 +246,13 @@ fn runProgram(cli: *Cli, args: []const []const u8) !u8 {
         const f = vm.fault orelse udon.vm.Fault{ .pc = 0, .message = "" };
         try w.flush();
         status = cli.fail("halted at pc=0x{X:0>8}: {t}: {s}", .{ f.pc, e, f.message });
+        // How control got there: the jumps taken last.
+        var buf: [64]u32 = undefined;
+        const ew = &cli.err.interface;
+        try ew.writeAll("  last jumps:");
+        for (vm.trailSlice(&buf)) |pc| try ew.print(" {X}", .{pc});
+        try ew.writeAll("\n");
+        try ew.flush();
     };
     if (profile_top) |top| {
         try w.writeAll("\nextern profile (executions):\n");

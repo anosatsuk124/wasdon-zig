@@ -1,5 +1,5 @@
 .data_start
-    # wasdon-zig heap-size: 288
+    # wasdon-zig heap-size: 287
     __G__memory: %SystemByteArray, null
     __G__memory_size_pages: %SystemInt32, 17
     __G__g0: %SystemInt32, 1048576
@@ -75,12 +75,11 @@
     __c_i32_1061072: %SystemInt32, 1061072
     __f22_T5__: %SystemByte, null
     __c_u8_113: %SystemByte, null
-    __derived2: %SystemInt32, 0
     __c_u8_111: %SystemByte, null
-    __derived3: %SystemInt32, 0
+    __derived2: %SystemInt32, 0
     __c_i32_2: %SystemInt32, 2
     __c_u8_105: %SystemByte, null
-    __derived4: %SystemInt32, 0
+    __derived3: %SystemInt32, 0
     __c_i32_3: %SystemInt32, 3
     __c_u8_102: %SystemByte, null
     __c_i32_1070352: %SystemInt32, 1070352
@@ -339,10 +338,10 @@
         JUMP_IF_FALSE, 0x00000740
         PUSH, __f22_L1__
         PUSH, __c_i32_1
-        PUSH, __derived2
+        PUSH, __derived0
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __G__memory
-        PUSH, __derived2
+        PUSH, __derived0
         PUSH, __f22_T5__
         EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
         PUSH, __f22_T5__
@@ -353,10 +352,10 @@
         JUMP_IF_FALSE, 0x00000740
         PUSH, __f22_L1__
         PUSH, __c_i32_2
-        PUSH, __derived3
+        PUSH, __derived2
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __G__memory
-        PUSH, __derived3
+        PUSH, __derived2
         PUSH, __f22_T5__
         EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
         PUSH, __f22_T5__
@@ -367,10 +366,10 @@
         JUMP_IF_FALSE, 0x00000740
         PUSH, __f22_L1__
         PUSH, __c_i32_3
-        PUSH, __derived4
+        PUSH, __derived3
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __G__memory
-        PUSH, __derived4
+        PUSH, __derived3
         PUSH, __f22_T5__
         EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
         PUSH, __f22_T5__

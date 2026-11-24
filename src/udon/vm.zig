@@ -74,6 +74,18 @@ pub const Options = struct {
     strict_stack: bool = true,
     /// Record calls that reach the generic object model in `Vm.calls`.
     record_calls: bool = true,
+    /// Fault at the n-th write into a large byte array (see `Vm.stores`).
+    stop_at_store: u64 = std.math.maxInt(u64),
+};
+
+/// A running digest of what a program writes into large byte arrays —
+/// its linear memory. Two translations of one module must write the same
+/// bytes to the same places in the same order, whatever slots and externs
+/// they use on the way; comparing digests after n writes finds the first
+/// write where they part (`wasdon-zig run --stop-at-store`).
+pub const StoreDigest = struct {
+    count: u64 = 0,
+    hash: u64 = 0,
 };
 
 /// `Vec` restricted to one kind, so extern implementations can state the
@@ -125,6 +137,8 @@ pub const Host = struct {
     serializations: u32 = 0,
 };
 
+const trail_len = 64;
+
 pub const Vm = struct {
     gpa: std.mem.Allocator,
     /// Owns everything the running program allocates (strings, arrays,
@@ -138,7 +152,12 @@ pub const Vm = struct {
     stack: [4096]u32 = undefined,
     sp: u32 = 0,
     stats: Stats = .{},
+    /// Addresses control was transferred to most recently (jumps taken),
+    /// oldest first after `trailSlice`: where a fault came from.
+    trail: [trail_len]u32 = @splat(0),
+    trail_at: usize = 0,
     logs: std.ArrayList(LogEntry) = .empty,
+    stores: StoreDigest = .{},
     calls: std.ArrayList(Call) = .empty,
     fault: ?Fault = null,
     halted: bool = false,
@@ -323,6 +342,13 @@ pub const Vm = struct {
         if (!self.host.is_owner) return;
         _ = try self.runEvent("_onPreSerialization");
         self.host.serializations += 1;
+    }
+
+    /// The last jump targets, oldest first.
+    pub fn trailSlice(self: *const Vm, buf: *[trail_len]u32) []const u32 {
+        const n = @min(self.trail_at, trail_len);
+        for (0..n) |k| buf[k] = self.trail[(self.trail_at - n + k) % trail_len];
+        return buf[0..n];
     }
 
     pub fn getVar(self: *const Vm, name: []const u8) ?Value {
@@ -566,6 +592,8 @@ pub const Vm = struct {
                     self.stats.ops[5] += 1;
                     if (self.sp == base_sp + 1) base_sp += 1;
                     pc = c.param;
+                    self.trail[self.trail_at % trail_len] = pc;
+                    self.trail_at += 1;
                 },
                 .extern_ => {
                     self.stats.ops[6] += 1;
@@ -618,6 +646,8 @@ pub const Vm = struct {
                         t.typeName(), self.slotName(c.param),
                     });
                     pc = t.uint32;
+                    self.trail[self.trail_at % trail_len] = pc;
+                    self.trail_at += 1;
                 },
                 .copy => {
                     self.stats.ops[9] += 1;

@@ -60,7 +60,30 @@ pub const Options = struct {
     strict: ?bool = null,
     /// Run the control-flow cleanup pass over the emitted code.
     optimize: bool = true,
+    /// Individual optimizations to leave out. The result is slower and
+    /// equally correct, which is the point: translating a failing program
+    /// with one of these set tells whether that optimization is to blame.
+    disable: Disable = .{},
     diagnostics: ?*Diagnostics = null,
+};
+
+pub const Disable = struct {
+    /// Save every local around a re-entrant call, not just the live ones.
+    liveness: bool = false,
+    /// Keep recursive functions' return addresses in slots.
+    stack_return: bool = false,
+    /// Keep condition-only locals as `Int32`.
+    bool_locals: bool = false,
+    /// Emit every load where its instruction stands.
+    pending_loads: bool = false,
+    /// No memory-to-memory copy for a load that feeds a store.
+    memory_copies: bool = false,
+    /// No byte operators or byte tests on bytes still in memory.
+    byte_operators: bool = false,
+    /// Recompute `local + offset` and sign flips every time.
+    derived: bool = false,
+    /// No mask merging and no non-negativity carried through locals.
+    masks: bool = false,
 };
 
 pub const Stats = Asm.Stats;
@@ -460,6 +483,7 @@ pub const Translator = struct {
                 k += g.count;
             }
             f.bool_locals = try @import("liveness.zig").boolLocals(a, f.ty.params.len, f.local_types, code.body);
+            if (self.options.disable.bool_locals) @memset(f.bool_locals, false);
             for (f.locals, f.local_types, f.bool_locals, 0..) |*s, ty, is_bool, li| {
                 s.* = try self.a.declare(.{
                     .name = try self.name("__{s}_{c}{d}__", .{ f.name, @as(u8, if (li < f.ty.params.len) 'P' else 'L'), li }),
@@ -475,7 +499,7 @@ pub const Translator = struct {
                 f.ret_label = try self.a.newLabel();
             } else if (!f.in_table and f.direct_callers == 0 and !is_start) {
                 f.ret = .halt;
-            } else if (self.cg.recursive[i] and !f.in_table and self.mayReenter(@intCast(i), @intCast(i))) {
+            } else if (!self.options.disable.stack_return and self.cg.recursive[i] and !f.in_table and self.mayReenter(@intCast(i), @intCast(i))) {
                 f.ret = .stack;
             } else {
                 f.ret = .indirect;

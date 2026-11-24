@@ -11,6 +11,7 @@ pub const wasi = @import("wasi.zig");
 
 pub const translate = translate_.translate;
 pub const Options = translate_.Options;
+pub const Disable = translate_.Disable;
 pub const Diagnostics = translate_.Diagnostics;
 pub const Stats = translate_.Stats;
 pub const Error = translate_.Error;

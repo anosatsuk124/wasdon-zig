@@ -6,6 +6,7 @@ members = [
     "examples/wasm-bench-alloc-rs",
     "examples/bench/rs",
     "examples/bench/wasi-rs",
+    "examples/rhai-bench",
 ]
 # The WASI program needs `std` and its own target; `cargo build` on its own
 # builds the freestanding examples.
