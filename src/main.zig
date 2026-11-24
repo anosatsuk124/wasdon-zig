@@ -13,6 +13,10 @@ const usage =
     \\      Translate a WebAssembly module to Udon Assembly (stdout without -o).
     \\      --strict rejects imports that are not Udon externs; --stats prints
     \\      the size of the result, including the heap size it needs.
+    \\  wasdon-zig inspect <input.wasm>
+    \\      Report the module's size, its imports, and everything in it the
+    \\      translator does not support — all of it, where `translate` stops
+    \\      at the first.
     \\  wasdon-zig check <program.uasm>
     \\      Validate Udon Assembly against the spec and the Udon node list, and
     \\      report the heap size it needs.
@@ -51,9 +55,24 @@ pub fn main(init: std.process.Init) !u8 {
     const cmd = args[1];
     const rest = args[2..];
     if (std.mem.eql(u8, cmd, "translate")) return runTranslate(&cli, rest);
+    if (std.mem.eql(u8, cmd, "inspect")) return runInspect(&cli, rest);
     if (std.mem.eql(u8, cmd, "run")) return runProgram(&cli, rest);
     if (std.mem.eql(u8, cmd, "check")) return runCheck(&cli, rest);
     return cli.fail("unknown subcommand '{s}'\n\n{s}", .{ cmd, usage });
+}
+
+fn runInspect(cli: *Cli, args: []const []const u8) !u8 {
+    if (args.len != 1) return cli.fail("inspect takes one WASM file", .{});
+    const bytes = readFile(cli, args[0]) catch |e| return cli.fail("{s}: {t}", .{ args[0], e });
+    const mod = wasdon_zig.wasm.parseModule(cli.arena, bytes) catch |e| return cli.fail("{s}: not a module this parser reads: {t}", .{ args[0], e });
+    // Metadata that cannot be read is reported by `translate`; here it only
+    // decides which imports count as bound.
+    const meta = wasdon_zig.wasm.parseUdonMetaFromModule(cli.arena, mod) catch null;
+    const census = try wasdon_zig.translator.inspect.census(cli.arena, mod, meta);
+    const w = &cli.out.interface;
+    try wasdon_zig.translator.inspect.report(&census, w);
+    try w.flush();
+    return @intFromBool(!census.translatable());
 }
 
 fn readFile(cli: *Cli, path: []const u8) ![]u8 {

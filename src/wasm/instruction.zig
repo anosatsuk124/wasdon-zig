@@ -259,6 +259,32 @@ pub const Instruction = union(enum) {
     data_drop: u32,
     memory_copy,
     memory_fill,
+
+    /// Any instruction of the threads proposal (prefix 0xFE). Decoded so
+    /// that a module using them can be parsed and reported on; they are
+    /// not translated.
+    atomic: Atomic,
+};
+
+pub const Atomic = struct {
+    /// Sub-opcode after the 0xFE prefix.
+    op: u32,
+    memarg: MemArg = .{ .@"align" = 0, .offset = 0 },
+
+    pub const Kind = enum { notify, wait, fence, load, store, rmw, cmpxchg };
+
+    pub fn kind(self: Atomic) ?Kind {
+        return switch (self.op) {
+            0x00 => .notify,
+            0x01, 0x02 => .wait,
+            0x03 => .fence,
+            0x10...0x16 => .load,
+            0x17...0x1D => .store,
+            0x1E...0x47 => .rmw,
+            0x48...0x4E => .cmpxchg,
+            else => null,
+        };
+    }
 };
 
 // Compile-time invariant: every opcode in `spec` has a matching union tag,
@@ -266,7 +292,8 @@ pub const Instruction = union(enum) {
 comptime {
     @setEvalBranchQuota(100_000);
     const union_fields = @typeInfo(Instruction).@"union".fields;
-    if (union_fields.len != opcode.spec.len) {
+    // `atomic` stands for the whole 0xFE prefix and has no entry in `spec`.
+    if (union_fields.len != opcode.spec.len + 1) {
         @compileError("Instruction union field count does not match opcode.spec length");
     }
     for (opcode.spec) |s| {
@@ -308,6 +335,16 @@ pub fn decodeInstruction(allocator: std.mem.Allocator, r: *Reader) errors.ParseE
     // standalone instructions at this layer.
     if (op == 0x0B) return error.UnexpectedEndOpcode;
     if (op == 0x05) return error.UnexpectedElseOpcode;
+
+    if (op == opcode.prefix_fe) {
+        const atomic: Atomic = .{ .op = try leb128.readULEB128(u32, r) };
+        const kind = atomic.kind() orelse return error.UnknownOpcode;
+        if (kind == .fence) {
+            if (try r.readByte() != 0x00) return error.MalformedReserved;
+            return .{ .atomic = atomic };
+        }
+        return .{ .atomic = .{ .op = atomic.op, .memarg = try readMemArg(r) } };
+    }
 
     const ext: u32 = if (op == opcode.prefix_fc) try leb128.readULEB128(u32, r) else 0;
 
@@ -446,7 +483,21 @@ fn mk(bytes: []const u8) Reader {
 
 test "Instruction union matches opcode.spec length" {
     const union_fields = @typeInfo(Instruction).@"union".fields;
-    try std.testing.expectEqual(opcode.spec.len, union_fields.len);
+    // Plus `atomic`, which covers the whole 0xFE prefix.
+    try std.testing.expectEqual(opcode.spec.len + 1, union_fields.len);
+}
+
+test "atomic instructions decode with their memarg; fence has none" {
+    var load = mk(&[_]u8{ 0xFE, 0x10, 0x02, 0x08 });
+    const a = (try decodeInstruction(std.testing.allocator, &load)).atomic;
+    try std.testing.expectEqual(Atomic.Kind.load, a.kind().?);
+    try std.testing.expectEqual(@as(u32, 8), a.memarg.offset);
+    var fence = mk(&[_]u8{ 0xFE, 0x03, 0x00 });
+    try std.testing.expectEqual(Atomic.Kind.fence, (try decodeInstruction(std.testing.allocator, &fence)).atomic.kind().?);
+    var cmpxchg = mk(&[_]u8{ 0xFE, 0x48, 0x02, 0x00 });
+    try std.testing.expectEqual(Atomic.Kind.cmpxchg, (try decodeInstruction(std.testing.allocator, &cmpxchg)).atomic.kind().?);
+    var unknown = mk(&[_]u8{ 0xFE, 0x7F });
+    try std.testing.expectError(error.UnknownOpcode, decodeInstruction(std.testing.allocator, &unknown));
 }
 
 test "decode nop" {

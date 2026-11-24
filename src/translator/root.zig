@@ -5,6 +5,7 @@ const std = @import("std");
 pub const callgraph = @import("callgraph.zig");
 pub const translate_ = @import("translate.zig");
 pub const lower = @import("lower.zig");
+pub const inspect = @import("inspect.zig");
 
 pub const translate = translate_.translate;
 pub const Options = translate_.Options;
@@ -17,5 +18,6 @@ test {
     _ = callgraph;
     _ = translate_;
     _ = lower;
+    _ = inspect;
     _ = @import("tests.zig");
 }

@@ -28,6 +28,21 @@ pub fn exists(name: []const u8) bool {
     return false;
 }
 
+/// The node an import named `raw` calls: `raw` itself if it is a node, or
+/// the overload that takes `SystemObject` where `raw` says `SystemString`
+/// (`Debug.Log` and friends have no string overload; a string is an
+/// object). Null if neither exists. The result is `raw` or lies in `buf`.
+pub fn resolveExtern(raw: []const u8, buf: []u8) ?[]const u8 {
+    if (exists(raw)) return raw;
+    const size = std.mem.replacementSize(u8, raw, "SystemString_", "SystemObject_");
+    if (size > buf.len) return null;
+    _ = std.mem.replace(u8, raw, "SystemString_", "SystemObject_", buf);
+    const widened = buf[0..size];
+    // A sole string argument is followed by the "__" before the result.
+    if (std.mem.indexOf(u8, widened, "__SystemString__")) |at| @memcpy(widened[at + 2 ..][0.."SystemObject".len], "SystemObject");
+    return if (exists(widened)) widened else null;
+}
+
 /// The type of the behaviour itself. It has no node — extern signatures
 /// call it `VRCUdonCommonInterfacesIUdonEventReceiver` — but the assembler
 /// resolves it for variable declarations, and it is the type a
@@ -190,6 +205,10 @@ test "types and events" {
     try testing.expect(isType("SystemByteArray"));
     try testing.expect(isType("UnityEngineTransform"));
     try testing.expect(!isType("SystemNope"));
+    var buf: [256]u8 = undefined;
+    try testing.expectEqualStrings("UnityEngineDebug.__Log__SystemObject__SystemVoid", resolveExtern("UnityEngineDebug.__Log__SystemString__SystemVoid", &buf).?);
+    try testing.expectEqualStrings("SystemInt32.__Parse__SystemString__SystemInt32", resolveExtern("SystemInt32.__Parse__SystemString__SystemInt32", &buf).?);
+    try testing.expect(resolveExtern("env.spawn_worker", &buf) == null);
     try testing.expect(isType(behaviour_type));
     try testing.expect(isThisTarget("UnityEngineTransform"));
     try testing.expect(isThisTarget(behaviour_type));

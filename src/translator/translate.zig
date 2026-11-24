@@ -468,6 +468,7 @@ pub const Translator = struct {
 
     fn declareMemory(self: *Translator) Error!void {
         const limits = self.memoryLimits() orelse return;
+        if (limits.shared) return self.fail(error.Unsupported, "the module's memory is shared (threads proposal); the Udon VM runs one thread. `wasdon-zig inspect` lists everything a module needs", .{});
         const opts: wasm.udon_meta.MemoryOptions = if (self.meta) |m| m.options.memory else .{};
 
         // The initial size must cover what the module declares and every

@@ -965,6 +965,7 @@ const Lowerer = struct {
                 }
             },
             .memory_init, .data_drop => return self.t.fail(error.Unsupported, "passive data segments (memory.init / data.drop) are not supported", .{}),
+            .atomic => return self.t.fail(error.Unsupported, "function {s} uses atomic instructions (threads proposal); the Udon VM runs one thread. `wasdon-zig inspect` lists everything a module needs", .{self.f.name}),
 
             .i32_eqz => try self.eqz(.i32),
             .i64_eqz => try self.eqz(.i64),
@@ -1968,10 +1969,8 @@ const Lowerer = struct {
     /// (`Debug.Log`); a signature written with `SystemString` is accepted
     /// and redirected to it.
     fn externName(self: *Lowerer, raw: []const u8) Error![]const u8 {
-        if (nodes.exists(raw)) return raw;
-        const widened = try std.mem.replaceOwned(u8, self.t.arena(), raw, "SystemString_", "SystemObject_");
-        const widened2 = try std.mem.replaceOwned(u8, self.t.arena(), widened, "__SystemString__", "__SystemObject__");
-        if (nodes.exists(widened2)) return widened2;
+        var buf: [512]u8 = undefined;
+        if (nodes.resolveExtern(raw, &buf)) |name| return if (name.ptr == raw.ptr) raw else self.t.arena().dupe(u8, name);
         if (self.t.strict()) return self.t.fail(error.Unsupported, "import '{s}' is not in the Udon node list", .{raw});
         try self.t.warn("import '{s}' is not in the Udon node list; the program will not load in Udon", .{raw});
         return raw;

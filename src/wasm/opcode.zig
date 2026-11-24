@@ -37,6 +37,8 @@ pub const Immediate = enum {
 /// truncation and bulk-memory instructions; the second part is a LEB128
 /// sub-opcode stored in `OpSpec.ext`.
 pub const prefix_fc: u8 = 0xFC;
+/// Threads proposal (atomics).
+pub const prefix_fe: u8 = 0xFE;
 
 pub const OpSpec = struct {
     opcode: u8,
