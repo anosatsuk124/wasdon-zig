@@ -245,7 +245,13 @@ fn checkCode(ctx: *Ctx, report: *Report) !void {
                 if (stack.items.len == 0) try ctx.err(ins.line, "POP with nothing pushed in this block", .{}) else _ = stack.pop();
             },
             .copy => {
-                if (stack.items.len != 2) {
+                // `PUSH x; COPY; JUMP_INDIRECT x` pops a return address a
+                // caller parked on the stack (see `.jump`).
+                const pops_return = stack.items.len == 1 and idx + 1 < code.len and code[idx + 1].op == .jump_indirect and
+                    code[idx + 1].param == .heap and code[idx + 1].param.heap == stack.items[0];
+                if (pops_return) {
+                    // Checked as a JUMP_INDIRECT operand below.
+                } else if (stack.items.len != 2) {
                     try ctx.err(ins.line, "COPY needs exactly 2 pushed operands, found {d}", .{stack.items.len});
                 } else {
                     const src = ctx.declaredType(stack.items[0]);
@@ -266,7 +272,10 @@ fn checkCode(ctx: *Ctx, report: *Report) !void {
                 stack.clearRetainingCapacity();
             },
             .jump => {
-                if (stack.items.len != 0) try ctx.err(ins.line, "JUMP with {d} value(s) left on the stack", .{stack.items.len});
+                // One `SystemUInt32` left standing is a call: the return
+                // address, parked for the callee to pop.
+                const parks_return = stack.items.len == 1 and std.mem.eql(u8, ctx.declaredType(stack.items[0]), "SystemUInt32");
+                if (stack.items.len != 0 and !parks_return) try ctx.err(ins.line, "JUMP with {d} value(s) left on the stack", .{stack.items.len});
                 stack.clearRetainingCapacity();
             },
             .jump_indirect => {
@@ -302,6 +311,11 @@ fn returnAddressConstants(ctx: *Ctx) ![]const bool {
     var edges: std.ArrayList(Edge) = .empty;
     for (code, 0..) |ins, i| {
         if (ins.op == .jump_indirect and ins.param == .heap) reaches[ins.param.heap] = true;
+        // A value parked on the stack at a JUMP is popped into a
+        // JUMP_INDIRECT operand by the callee.
+        if (ins.op == .jump and i >= 1 and code[i - 1].op == .push and code[i - 1].param == .heap and
+            (i < 2 or code[i - 2].op != .push))
+            reaches[code[i - 1].param.heap] = true;
         if (ins.op == .copy and i >= 2 and code[i - 1].op == .push and code[i - 2].op == .push and
             code[i - 1].param == .heap and code[i - 2].param == .heap)
             try edges.append(ctx.a, .{ .src = code[i - 2].param.heap, .dst = code[i - 1].param.heap });

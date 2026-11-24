@@ -217,8 +217,9 @@ Emits `.sync <name>, <mode>`. `enabled = true` without `mode` is an error.
 ### `default`
 
 Initial value. A number for `int` / `uint` / `float`; a string for
-`string`; the string `"this"` for `gameobject`, `transform` and
-`udonBehaviour` (the behaviour's own object); `null`. Udon Assembly cannot
+`string`; the string `"this"` for the types Udon can resolve it for —
+`UnityEngineGameObject`, `UnityEngineTransform`, `VRCUdonUdonBehaviour` and
+`UnityEngineObject` (`docs/udon_specs.md` §4.6); `null`. Udon Assembly cannot
 initialize any other type to anything but `null`
 (`docs/udon_specs.md` §4.7), and the translator rejects defaults it cannot
 express.
@@ -297,7 +298,7 @@ This is not treated as a direct `.sync` line in Udon Assembly itself. Instead, i
     "unknownFieldPolicy": "ignore | warn | error",
     "unknownFunctionPolicy": "ignore | warn | error",
     "recursion": "stack | disabled",
-    "callStackSize": 4096,
+    "callStackSize": 1024,
     "memory": { "initialPages": 1, "maxPages": 256, "udonName": "_memory" }
   }
 }
@@ -312,7 +313,8 @@ This is not treated as a direct `.sync` line in Udon Assembly itself. Instead, i
   their frame around calls that may re-enter them. `disabled`: no saving;
   correct only if nothing is ever re-entered
   (`docs/spec_call_return_conversion.md` §6).
-- `callStackSize` — slots in the frame stack used by recursive functions.
+- `callStackSize` — the maximum depth of active re-entrant calls (default
+  1024); see `docs/spec_call_return_conversion.md` §6.
 - `memory` — see below.
 
 ### `options.memory`

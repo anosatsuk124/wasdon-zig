@@ -9,10 +9,12 @@ const udon = wasdon_zig.udon;
 
 const usage =
     \\Usage:
-    \\  wasdon-zig translate <input.wasm> [-o <output.uasm>] [--strict] [--stats]
+    \\  wasdon-zig translate <input.wasm> [-o <output.uasm>] [--meta <file.json>] [--strict] [--stats]
     \\      Translate a WebAssembly module to Udon Assembly (stdout without -o).
-    \\      --strict rejects imports that are not Udon externs; --stats prints
-    \\      the size of the result, including the heap size it needs.
+    \\      A module built for WASI (wasm32-wasi, wasm32-wasip1) needs nothing
+    \\      more. --meta reads __udon_meta from a JSON file instead of from the
+    \\      module; --strict rejects imports that are not Udon externs; --stats
+    \\      prints the size of the result, including the heap size it needs.
     \\  wasdon-zig inspect <input.wasm>
     \\      Report the module's size, its imports, and everything in it the
     \\      translator does not support — all of it, where `translate` stops
@@ -85,6 +87,7 @@ fn runTranslate(cli: *Cli, args: []const []const u8) !u8 {
     var diagnostics: wasdon_zig.Diagnostics = .init(cli.arena);
     var options: wasdon_zig.Options = .{ .diagnostics = &diagnostics };
     var show_stats = false;
+    var meta_path: ?[]const u8 = null;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const a = args[i];
@@ -92,6 +95,10 @@ fn runTranslate(cli: *Cli, args: []const []const u8) !u8 {
             i += 1;
             if (i == args.len) return cli.fail("-o requires a path", .{});
             output = args[i];
+        } else if (std.mem.eql(u8, a, "--meta")) {
+            i += 1;
+            if (i == args.len) return cli.fail("--meta requires a path", .{});
+            meta_path = args[i];
         } else if (std.mem.eql(u8, a, "--strict")) {
             options.strict = true;
         } else if (std.mem.eql(u8, a, "--stats")) {
@@ -105,8 +112,9 @@ fn runTranslate(cli: *Cli, args: []const []const u8) !u8 {
 
     // Translate fully before touching the output so a failure leaves no
     // half-written file behind.
+    const meta_json: ?[]const u8 = if (meta_path) |p| readFile(cli, p) catch |e| return cli.fail("cannot read {s}: {t}", .{ p, e }) else null;
     var text: Io.Writer.Allocating = .init(cli.arena);
-    const stats = wasdon_zig.translateBytes(cli.arena, wasm_bytes, &text.writer, options) catch |e|
+    const stats = wasdon_zig.translateWithMeta(cli.arena, wasm_bytes, meta_json, &text.writer, options) catch |e|
         return cli.fail("{s}: {t}{s}{s}", .{ in_path, e, if (diagnostics.message.len != 0) ": " else "", diagnostics.message });
     const err = &cli.err.interface;
     for (diagnostics.warnings.items) |w| try err.print("warning: {s}\n", .{w});

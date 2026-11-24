@@ -181,6 +181,16 @@ unconditional `JUMP`. That is one extra cheap instruction on one of the two
 paths, where `SystemBoolean.op_UnaryNegation` would be an extern on both.
 `if` and `select` do the same.
 
+**A local that only holds a condition is a Boolean.** Compilers often
+compute a loop's exit condition early and test it after the last statements
+of the body — `c = n < 4; n -= 2; br_if c` — which stores the condition in
+a local. As an `i32` that costs a conversion at the store and a comparison
+with zero at the test. `liveness.boolLocals` finds the locals of which
+every stored value comes straight from a comparison (or is the constant 0
+or 1) and every read goes straight into `br_if`, `if`, `select` or
+`i32.eqz`; these are declared `SystemBoolean`, the comparison writes them
+directly, and the test reads them directly. Parameters never qualify.
+
 **A byte in memory is tested where it lies.** A condition that is an
 unsigned byte load (`if (flags[i])`, `while (*p)`) becomes one
 `BitConverter.ToBoolean(memory, address)` rather than a load, a conversion
@@ -200,21 +210,45 @@ With `options.recursion = "stack"` (the default), a call from function *f*
 to a function in *f*'s own component **saves *f*'s frame around the call**:
 
 ```
-for each live slot s of f:   __call_stack[top] = s;  top += 1
+for the k-th slot s to save:   __frame{k}[__frame_depth] = s
+__frame_depth += 1
 <pass arguments, call>
-for each slot in reverse:    top -= 1;  s = __call_stack[top]
+__frame_depth -= 1
+for the k-th slot s:           s = __frame{k}[__frame_depth]
 ```
 
-The saved slots are *f*'s parameters and locals, the temporaries of operands
-still on the stack below the arguments, join slots of enclosing blocks, and
-`__{fn}_RA__`. Saving is done by the caller, before the arguments are
-written, because for a self-call the arguments overwrite the very
-parameters being saved. `__call_stack` is a `SystemObjectArray` of
-`options.callStackSize` slots (default 4096); overflowing it raises a .NET
-exception.
+The recursion stack is stored by column: `__frame{k}` is a
+`SystemObjectArray` holding the *k*-th saved slot of every active frame,
+and one counter indexes them all. Saving *n* slots is therefore *n* + 1
+externs and restoring them *n* + 1 — one `Set` or `Get` per slot plus the
+counter — where a single stack with a moving top needs two per slot each
+way.
 
-Calls to functions outside the component cost nothing extra, and
-non-recursive programs do not get a `__call_stack` at all.
+**Only live slots are saved.** The slots are
+
+- the parameters and locals that are *live after the call* — read again
+  before being overwritten on some path (`src/translator/liveness.zig`: a
+  backward pass over the structured body, iterated to a fixed point for
+  loops, recording the live set at every call instruction);
+- the temporaries of operands still on the stack below the call's
+  arguments;
+- `__{fn}_RA__`, if the function returns through it.
+
+Join slots of enclosing blocks and the lowering's scratch slots are never
+live across a call and are not saved. For the textbook
+`fib(n) = fib(n-1) + fib(n-2)` — which the compiler turns into a loop
+around one recursive call — that is three slots: `n`, the running sum and
+the return address.
+
+Saving is done by the caller, before the arguments are written, because a
+self-recursive call writes its arguments into the very parameters being
+saved. Each column is allocated by the init routine with
+`options.callStackSize` entries (default 1024): that is the maximum depth
+of active re-entrant calls, and exceeding it raises a .NET
+`IndexOutOfRangeException`, which halts the behaviour. Columns are declared
+on demand — a program without recursion has none, and one whose largest
+saved frame has five slots has five. Calls to functions outside the
+caller's component cost nothing extra.
 
 `options.recursion = "disabled"` suppresses all saving. It is only correct
 if no function is ever actually re-entered; it exists for programs where

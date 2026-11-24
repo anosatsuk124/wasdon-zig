@@ -196,8 +196,11 @@ parameters and no results becomes an event named after its export
 
 Every function has one static frame. Functions on a call-graph cycle save
 and restore their frame around the recursive call automatically
-(`docs/spec_call_return_conversion.md` §6), at a cost of four externs per
-saved slot per call. Deep or hot recursion is slow on Udon; prefer loops.
+(`docs/spec_call_return_conversion.md` §6). Only what is still needed after
+the call is saved, at two externs per value plus two per call — the
+recursive Fibonacci of `examples/bench` spends 8 of its 14 externs per call
+on it. That is cheaper than UdonSharp's `[RecursiveMethod]`, but a loop is
+cheaper still.
 
 A program whose only "cycles" come from function pointers that never
 actually recurse can set `"options": { "recursion": "disabled" }`.

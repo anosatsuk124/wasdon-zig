@@ -875,6 +875,11 @@ const Lowerer = struct {
             .indirect => try self.a.jumpIndirect(self.f.ra),
             .direct => try self.a.jump(self.f.ret_label),
             .halt => try self.a.jump(udon.asm_.halt),
+            .stack => {
+                const to = try self.t.returnSlot();
+                try self.a.popInto(to);
+                try self.a.jumpIndirect(to);
+            },
         }
     }
 
@@ -1899,19 +1904,7 @@ const Lowerer = struct {
         const slots: []const Sym = if (reenters) try self.frameSlots(below) else &.{};
         try self.saveFrame(slots);
         try self.passArguments(callee.locals[0..n], !reenters);
-        switch (callee.ret) {
-            .indirect => {
-                const back = try self.a.newLabel();
-                try self.a.copy(try self.t.newRac(back), callee.ra);
-                try self.a.jump(callee.entry);
-                self.a.bind(back);
-            },
-            .direct => {
-                try self.a.jump(callee.entry);
-                self.a.bind(callee.ret_label);
-            },
-            .halt => unreachable,
-        }
+        try self.t.emitCall(callee);
         try self.restoreFrame(slots);
         try self.pushResultsOf(callee.ty);
     }

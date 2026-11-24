@@ -1,5 +1,5 @@
 .data_start
-    # wasdon-zig heap-size: 114
+    # wasdon-zig heap-size: 113
     __G__memory: %SystemByteArray, null
     __G__memory_size_pages: %SystemInt32, 17
     __G__g0: %SystemInt32, 1048576
@@ -25,7 +25,6 @@
     __main_fib_L1__: %SystemInt32, 0
     __main_fib_L2__: %SystemInt32, 0
     __main_fib_L3__: %SystemBoolean, null
-    __main_fib_RA__: %SystemUInt32, 0
     __Str_T1__: %SystemString, null
     __utf8: %SystemObject, null
     __c_i32_1049192: %SystemInt32, 1049192
@@ -73,7 +72,7 @@
     __c_i32_256: %SystemInt32, 256
     __c_i32_512: %SystemInt32, 512
     __c_i32_768: %SystemInt32, 768
-    __ra_1: %SystemUInt32, 12688
+    __ra_1: %SystemUInt32, 12676
     __ret0_i32: %SystemInt32, 0
     __main_fib_T1__: %SystemBoolean, null
     __c_i32_n1: %SystemInt32, -1
@@ -81,17 +80,17 @@
     __frame_depth: %SystemInt32, 0
     __frame0: %SystemObjectArray, null
     __frame1: %SystemObjectArray, null
-    __frame2: %SystemObjectArray, null
-    __ra_2: %SystemUInt32, 13060
+    __ra_2: %SystemUInt32, 13004
     __derived0: %SystemInt32, 0
     __c_i32_n2147483648: %SystemInt32, 0x80000000
     __c_i32_n2147483644: %SystemInt32, -2147483644
     __c_i32_n2: %SystemInt32, -2
+    __return_to: %SystemUInt32, 0
     __init_RA: %SystemUInt32, 0
     __inited: %SystemBoolean, null
-    __ra_3: %SystemUInt32, 13408
-    __ra_4: %SystemUInt32, 13432
-    __ra_5: %SystemUInt32, 13456
+    __ra_3: %SystemUInt32, 13332
+    __ra_4: %SystemUInt32, 13356
+    __ra_5: %SystemUInt32, 13380
     __c_i32_1114112: %SystemInt32, 1114112
     __data_0: %SystemString, "ewogICJ2ZXJzaW9uIjogMSwKICAiZmllbGRzIjogewogICAgImZpYk4iOiAgIHsgInNvdXJjZSI6IHsia2luZCI6ImltcG9ydCIsIm5hbWUiOiJiZW5jaC5maWJfbiJ9LCAidWRvbk5hbWUiOiJmaWJOIiwgInR5cGUiOiJpbnQiLCAiZXhwb3J0IjogdHJ1ZSwgImRlZmF1bHQiOiAyMCB9LAogICAgImZpYiI6ICAgIHsgInNvdXJjZSI6IHsia2luZCI6ImltcG9ydCIsIm5hbWUiOiJiZW5jaC5maWIiLCJzZXR0ZXIiOiJiZW5jaC5zZXRfZmliIn0sICJ1ZG9uTmFtZSI6ImZpYlJlc3VsdCIsICJ0eXBlIjoiaW50IiwgImV4cG9ydCI6IHRydWUgfSwKICAgICJtYW5kZWwiOiB7ICJzb3VyY2UiOiB7ImtpbmQiOiJpbXBvcnQiLCJuYW1lIjoiYmVuY2gubWFuZGVsIiwic2V0dGVyIjoiYmVuY2guc2V0X21hbmRlbCJ9LCAidWRvbk5hbWUiOiJtYW5kZWxSZXN1bHQiLCAidHlwZSI6ImludCIsICJleHBvcnQiOiB0cnVlIH0sCiAgICAic3RyIjogICAgeyAic291cmNlIjogeyJraW5kIjoiaW1wb3J0IiwibmFtZSI6ImJlbmNoLnN0ciIsInNldHRlciI6ImJlbmNoLnNldF9zdHIifSwgInVkb25OYW1lIjoic3RyUmVzdWx0IiwgInR5cGUiOiJpbnQiLCAiZXhwb3J0IjogdHJ1ZSB9CiAgfQp9AGFiYw=="
     __data_bytes: %SystemByteArray, null
@@ -1721,9 +1720,7 @@
         PUSH, __main_fib_P0__
         COPY
         PUSH, __ra_1
-        PUSH, __main_fib_RA__
-        COPY
-        JUMP, 0x000031AC
+        JUMP, 0x000031A0
         PUSH, __ret0_i32
         PUSH, fibResult
         COPY
@@ -1739,11 +1736,11 @@
         PUSH, __main_fib_T1__
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __main_fib_T1__
-        JUMP_IF_FALSE, 0x00003220
+        JUMP_IF_FALSE, 0x00003214
         PUSH, __main_fib_P0__
         PUSH, __main_fib_L2__
         COPY
-        JUMP, 0x00003428
+        JUMP, 0x000033D0
         PUSH, __c_i32_0
         PUSH, __main_fib_L1__
         COPY
@@ -1759,10 +1756,6 @@
         PUSH, __frame_depth
         PUSH, __main_fib_L1__
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __frame2
-        PUSH, __frame_depth
-        PUSH, __main_fib_RA__
-        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, __frame_depth
         PUSH, __c_i32_1
         PUSH, __frame_depth
@@ -1771,9 +1764,7 @@
         PUSH, __main_fib_P0__
         COPY
         PUSH, __ra_2
-        PUSH, __main_fib_RA__
-        COPY
-        JUMP, 0x000031AC
+        JUMP, 0x000031A0
         PUSH, __frame_depth
         PUSH, __c_i32_1
         PUSH, __frame_depth
@@ -1785,10 +1776,6 @@
         PUSH, __frame1
         PUSH, __frame_depth
         PUSH, __main_fib_L1__
-        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
-        PUSH, __frame2
-        PUSH, __frame_depth
-        PUSH, __main_fib_RA__
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __ret0_i32
         PUSH, __main_fib_L1__
@@ -1810,35 +1797,37 @@
         PUSH, __main_fib_P0__
         COPY
         PUSH, __main_fib_L3__
-        JUMP_IF_FALSE, 0x00003234
+        JUMP_IF_FALSE, 0x00003228
         PUSH, __main_fib_L2__
         PUSH, __main_fib_L1__
         PUSH, __ret0_i32
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        JUMP_INDIRECT, __main_fib_RA__
+        PUSH, __return_to
+        COPY
+        JUMP_INDIRECT, __return_to
     .export Str
     Str:
         PUSH, __inited
-        JUMP_IF_FALSE, 0x00003498
+        JUMP_IF_FALSE, 0x0000344C
         JUMP, 0x00000000
     .export Mandel
     Mandel:
         PUSH, __inited
-        JUMP_IF_FALSE, 0x000034B4
+        JUMP_IF_FALSE, 0x00003468
         JUMP, 0x000008B0
     .export Fib
     Fib:
         PUSH, __inited
-        JUMP_IF_FALSE, 0x000034D0
+        JUMP_IF_FALSE, 0x00003484
         JUMP, 0x00003160
         PUSH, __ra_3
         PUSH, __init_RA
         COPY
-        JUMP, 0x000034E4
+        JUMP, 0x00003498
         PUSH, __ra_4
         PUSH, __init_RA
         COPY
-        JUMP, 0x000034E4
+        JUMP, 0x00003498
         PUSH, __ra_5
         PUSH, __init_RA
         COPY
@@ -1865,9 +1854,6 @@
         EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
         PUSH, __c_i32_1024
         PUSH, __frame1
-        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
-        PUSH, __c_i32_1024
-        PUSH, __frame2
         EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
         JUMP_INDIRECT, __init_RA
 .code_end

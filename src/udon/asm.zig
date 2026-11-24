@@ -132,6 +132,13 @@ pub const Asm = struct {
         try self.code.append(self.gpa, .{ .op = .copy });
     }
 
+    /// `PUSH dst; COPY` — the source is what an earlier `PUSH` left on the
+    /// stack (a return address parked there by a caller).
+    pub fn popInto(self: *Asm, dst: Sym) !void {
+        try self.push(dst);
+        try self.code.append(self.gpa, .{ .op = .copy });
+    }
+
     pub fn jump(self: *Asm, label: Label) !void {
         try self.code.append(self.gpa, .{ .op = .jump, .arg = label });
     }

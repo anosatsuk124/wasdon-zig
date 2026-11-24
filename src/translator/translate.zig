@@ -97,6 +97,11 @@ pub const RetMode = enum {
     direct,
     /// Only Udon events call the function: returning ends the event.
     halt,
+    /// A function that can be active more than once: each caller leaves
+    /// its return address on the VM stack (`PUSH` of a constant), and the
+    /// function pops it to return. Unlike a slot, that needs no saving
+    /// around a recursive call.
+    stack,
 };
 
 pub const Func = struct {
@@ -186,6 +191,7 @@ pub const Translator = struct {
     /// active frame, indexed by `frame_depth`.
     frame_columns: std.ArrayList(Sym) = .empty,
     frame_depth: ?Sym = null,
+    return_slot: ?Sym = null,
     bool_true: ?Sym = null,
     bool_false: ?Sym = null,
 
@@ -464,6 +470,8 @@ pub const Translator = struct {
                 f.ret_label = try self.a.newLabel();
             } else if (!f.in_table and f.direct_callers == 0 and !is_start) {
                 f.ret = .halt;
+            } else if (self.cg.recursive[i] and !f.in_table and self.mayReenter(@intCast(i), @intCast(i))) {
+                f.ret = .stack;
             } else {
                 f.ret = .indirect;
                 f.ra = try self.a.declare(.{ .name = try self.name("__{s}_RA__", .{f.name}), .type_name = "SystemUInt32", .init = .{ .uint32 = 0 } });
@@ -841,6 +849,32 @@ pub const Translator = struct {
         return gop.value_ptr.*;
     }
 
+    /// Where a `.stack` function pops its return address to jump to it.
+    pub fn returnSlot(self: *Translator) Error!Sym {
+        if (self.return_slot == null) self.return_slot = try self.a.declare(.{ .name = "__return_to", .type_name = "SystemUInt32", .init = .{ .uint32 = 0 } });
+        return self.return_slot.?;
+    }
+
+    /// Call a function that returns through `mode`, from translator-emitted
+    /// code: leave the return address where the callee expects it, jump,
+    /// and bind the point it comes back to.
+    pub fn emitCall(self: *Translator, f: *const Func) Error!void {
+        switch (f.ret) {
+            .direct => {
+                try self.a.jump(f.entry);
+                self.a.bind(f.ret_label);
+            },
+            .indirect, .stack => {
+                const back = try self.a.newLabel();
+                const address = try self.newRac(back);
+                if (f.ret == .stack) try self.a.push(address) else try self.a.copy(address, f.ra);
+                try self.a.jump(f.entry);
+                self.a.bind(back);
+            },
+            .halt => unreachable,
+        }
+    }
+
     pub fn indRa(self: *Translator) Error!Sym {
         if (self.ind_ra == null) self.ind_ra = try self.a.declare(.{ .name = "__ind_RA", .type_name = "SystemUInt32", .init = .{ .uint32 = 0 } });
         return self.ind_ra.?;
@@ -985,13 +1019,13 @@ pub const Translator = struct {
             self.a.bind(stub.body);
             switch (f.ret) {
                 .halt => {},
-                .indirect => {
+                .indirect, .stack => {
                     if (self.halt_rac == null) self.halt_rac = try self.a.declare(.{
                         .name = "__ra_halt",
                         .type_name = "SystemUInt32",
                         .init = .{ .address = halt },
                     });
-                    try self.a.copy(self.halt_rac.?, f.ra);
+                    if (f.ret == .stack) try self.a.push(self.halt_rac.?) else try self.a.copy(self.halt_rac.?, f.ra);
                 },
                 .direct => unreachable,
             }
@@ -1099,19 +1133,7 @@ pub const Translator = struct {
         if (self.mod.start) |s| {
             const f = &self.funcs[s];
             if (f.import != null or f.ty.params.len != 0) return self.fail(error.Unsupported, "the start function must be a defined function without parameters", .{});
-            switch (f.ret) {
-                .direct => {
-                    try a.jump(f.entry);
-                    a.bind(f.ret_label);
-                },
-                .indirect => {
-                    const back = try a.newLabel();
-                    try a.copy(try self.newRac(back), f.ra);
-                    try a.jump(f.entry);
-                    a.bind(back);
-                },
-                .halt => unreachable,
-            }
+            try self.emitCall(f);
         }
     }
 

@@ -518,7 +518,11 @@ pub const Vm = struct {
         const cells = self.cells;
         const heap = self.heap;
         const strict = self.options.strict_stack;
-        const base_sp = self.sp;
+        const frame_sp = self.sp;
+        // Return addresses parked on the stack by callers: a `PUSH` left
+        // standing at a `JUMP`, popped later by a one-operand `COPY`.
+        // Everything the strict checks look at lies above them.
+        var base_sp = frame_sp;
         var pc = pc_ptr.*;
         defer pc_ptr.* = pc;
         // The real loop runs while the next instruction lies inside the
@@ -560,6 +564,7 @@ pub const Vm = struct {
                 },
                 .jump => {
                     self.stats.ops[5] += 1;
+                    if (self.sp == base_sp + 1) base_sp += 1;
                     pc = c.param;
                 },
                 .extern_ => {
@@ -616,6 +621,9 @@ pub const Vm = struct {
                 },
                 .copy => {
                     self.stats.ops[9] += 1;
+                    // With one operand pushed, the source is a parked
+                    // return address.
+                    if (self.sp == base_sp + 1 and base_sp > frame_sp) base_sp -= 1;
                     if (self.sp - base_sp < 2) return self.raise("COPY needs two stack entries", .{});
                     self.sp -= 2;
                     heap[self.stack[self.sp + 1]] = heap[self.stack[self.sp]];
@@ -625,7 +633,7 @@ pub const Vm = struct {
                 .invalid => return self.raise("executed a non-instruction (parameter word or unresolved symbol)", .{}),
             }
         }
-        if (strict and self.sp != base_sp) return self.raise("stack not empty when the event returned", .{});
+        if (strict and self.sp != frame_sp) return self.raise("stack not empty when the event returned", .{});
     }
 
     /// Extern signatures by descending execution count.

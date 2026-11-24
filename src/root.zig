@@ -23,12 +23,25 @@ pub fn translateBytes(
     writer: *Io.Writer,
     options: Options,
 ) !Stats {
+    return translateWithMeta(gpa, wasm_bytes, null, writer, options);
+}
+
+/// Like `translateBytes`, with the `__udon_meta` JSON given separately
+/// (a "sidecar" file) instead of read from the module. A module that
+/// carries its own metadata is overridden.
+pub fn translateWithMeta(
+    gpa: std.mem.Allocator,
+    wasm_bytes: []const u8,
+    meta_json: ?[]const u8,
+    writer: *Io.Writer,
+    options: Options,
+) !Stats {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
 
     const mod = try wasm.parseModule(aa, wasm_bytes);
-    const meta = try wasm.parseUdonMetaFromModule(aa, mod);
+    const meta = if (meta_json) |json| try wasm.parseUdonMeta(aa, json) else try wasm.parseUdonMetaFromModule(aa, mod);
     return translator.translate(gpa, mod, meta, writer, options);
 }
 
