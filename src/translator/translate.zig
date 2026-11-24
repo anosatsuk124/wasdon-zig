@@ -367,7 +367,7 @@ pub const Translator = struct {
             .linear => .linear,
             .smooth => .smooth,
         };
-        const ref_type: ?[]const u8 = if (f.type) |ty| switch (ty) {
+        const ref_type: ?[]const u8 = f.udon_type orelse if (f.type) |ty| switch (ty) {
             .object => "SystemObject",
             .gameobject => "UnityEngineGameObject",
             .transform => "UnityEngineTransform",

@@ -13,6 +13,11 @@ const Example = struct {
 const examples = [_]Example{
     .{ .name = "bench", .dir = "wasm-bench", .mvp_only = true },
     .{ .name = "udon-orbit", .dir = "udon-orbit", .mvp_only = true },
+    .{ .name = "mandelbrot", .dir = "mandelbrot" },
+    .{ .name = "pi", .dir = "pi" },
+    .{ .name = "blocks", .dir = "blocks" },
+    .{ .name = "qoi", .dir = "qoi" },
+    .{ .name = "ragdoll", .dir = "ragdoll" },
 };
 
 pub fn build(b: *std.Build) void {
@@ -66,17 +71,23 @@ pub fn build(b: *std.Build) void {
     const examples_step = b.step("examples", "Build the example WASM programs and translate them (zig-out/wasm, zig-out/uasm)");
     for (examples) |example| {
         const features = std.Target.wasm.featureSet(&.{ .bulk_memory, .sign_ext, .nontrapping_fptoint, .mutable_globals });
+        const wasm_target = b.resolveTargetQuery(.{
+            .cpu_arch = .wasm32,
+            .os_tag = .freestanding,
+            .cpu_model = .{ .explicit = &std.Target.wasm.cpu.mvp },
+            .cpu_features_add = if (example.mvp_only) .empty else features,
+        });
         const wasm_exe = b.addExecutable(.{
             .name = example.name,
             .root_module = b.createModule(.{
                 .root_source_file = b.path(b.fmt("examples/{s}/main.zig", .{example.dir})),
-                .target = b.resolveTargetQuery(.{
-                    .cpu_arch = .wasm32,
-                    .os_tag = .freestanding,
-                    .cpu_model = .{ .explicit = &std.Target.wasm.cpu.mvp },
-                    .cpu_features_add = if (example.mvp_only) .empty else features,
-                }),
+                .target = wasm_target,
                 .optimize = .ReleaseSmall,
+                .imports = &.{.{ .name = "udon", .module = b.createModule(.{
+                    .root_source_file = b.path("examples/common/udon.zig"),
+                    .target = wasm_target,
+                    .optimize = .ReleaseSmall,
+                }) }},
             }),
         });
         wasm_exe.entry = .disabled;

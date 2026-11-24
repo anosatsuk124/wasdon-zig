@@ -28,13 +28,29 @@ const f32 = Math.fround;
 const objects = [null];
 const handle = (o) => objects.push(o) - 1;
 const self = handle({ type: "Transform", position: [0, 0, 0] });
+const texture = handle({ type: "Texture2D" });
 let clones = 0;
+const fnv = (bytes) => {
+  let h = 0x811c9dc5;
+  for (const b of bytes) h = Math.imul(h ^ b, 0x01000193) >>> 0;
+  return h.toString(16).padStart(8, "0");
+};
 
 const host = {
   "UnityEngineDebug.__Log__SystemObject__SystemVoid": (v) => out.push(String(v)),
   "UnityEngineDebug.__Log__SystemString__SystemVoid": (p, n) => out.push(text(p, n)),
   "UnityEngineDebug.__LogWarning__SystemString__SystemVoid": (p, n) => out.push("[warning] " + text(p, n)),
   "UnityEngineDebug.__LogError__SystemString__SystemVoid": (p, n) => out.push("[error] " + text(p, n)),
+  // wasdon intrinsics: byte[] objects are handles like any other object.
+  bytes_new: (p, n) => handle(new Uint8Array(memory.buffer, p, n).slice()),
+  bytes_len: (h) => objects[h].length,
+  bytes_read: (h, off, p, n) => new Uint8Array(memory.buffer, p, n).set(objects[h].subarray(off, off + n)),
+  "udon.null": () => 0,
+  "udon.texture": () => texture,
+  "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean": (a, b) => (a !== b ? 1 : 0),
+  "UnityEngineTexture2D.__LoadRawTextureData__SystemByteArray__SystemVoid": (t, h) =>
+    out.push(`texture <- ${objects[h].length} bytes ${fnv(objects[h])}`),
+  "UnityEngineTexture2D.__Apply__SystemVoid": () => out.push("texture applied"),
   "udon.self": () => self,
   "UnityEngineTime.__get_deltaTime__SystemSingle": () => f32(0.25),
   "UnityEngineMathf.__Sin__SystemSingle__SystemSingle": (x) => f32(Math.sin(x)),

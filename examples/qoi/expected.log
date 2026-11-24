@@ -1,0 +1,9 @@
+frame 0: raw 6144 bytes fac1ad5b -> qoi 2838 bytes cb7d8223
+round trip ok
+byte[] length 2838
+frame 1: raw 6144 bytes 2c0c1ddf -> qoi 2828 bytes a7da637c
+round trip ok
+byte[] length 2828
+frame 2: raw 6144 bytes 723b9e59 -> qoi 2843 bytes 5c1860e2
+round trip ok
+byte[] length 2843

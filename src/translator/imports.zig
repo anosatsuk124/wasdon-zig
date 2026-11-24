@@ -13,7 +13,9 @@
 //!   * one extra leading WASM argument is the `this` of an instance method.
 //!
 //! Imports bound by a `kind: "import"` field in `__udon_meta` are not calls
-//! at all: they read the bound Udon variable.
+//! at all: they read the bound Udon variable. Imports from the `wasdon`
+//! module are translator intrinsics that move bytes between linear memory
+//! and .NET `byte[]` objects.
 
 const std = @import("std");
 const wasm = @import("wasm");
@@ -77,6 +79,7 @@ pub fn lower(l: *Lower, imp: wasm.module.Import, ty: FuncType) Error!void {
         if (ty.params.len != 0 or ty.results.len != 1) return error.UnsupportedFeature;
         return l.push(ty.results[0], .{ .lazy = .{ .v = v, .stable = true } });
     }
+    if (std.mem.eql(u8, imp.module, "wasdon")) return intrinsic(l, imp, ty);
     const sig = udon.sig.parse(imp.name) orelse return unsupported(l, imp, ty, "is not an Udon extern signature");
     var name = imp.name;
     for (aliases) |alias| if (std.mem.eql(u8, name, alias[0])) {
@@ -144,6 +147,49 @@ pub fn lower(l: *Lower, imp: wasm.module.Import, ty: FuncType) Error!void {
     if (is_bool) return l.push(.i32, .{ .cond = .{ .v = raw } });
     if (converted) return fromUdon(l, ret.?, raw);
     try l.pushPending(ty.results[0], call, @intCast(operands.items.len - 1));
+}
+
+const array_copy = "SystemArray.__Copy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid";
+
+/// `wasdon.*` intrinsics. `byte[]` objects travel as handles like every
+/// other object; these give WASM code a way to create and read them.
+fn intrinsic(l: *Lower, imp: wasm.module.Import, ty: FuncType) Error!void {
+    const t = l.t;
+    const eql = std.mem.eql;
+    const shape = struct {
+        fn is(f: FuncType, params: usize, results: usize) bool {
+            for (f.params) |p| if (p != .i32) return false;
+            for (f.results) |r| if (r != .i32) return false;
+            return f.params.len == params and f.results.len == results;
+        }
+    };
+    if (eql(u8, imp.name, "bytes_new") and shape.is(ty, 2, 1)) {
+        // (ptr, len) -> handle of a new byte[len] copied from memory.
+        const len = try l.use(try l.top(0));
+        const ptr = try l.use(try l.top(1));
+        const bytes = try t.named("__x_new_bytes", "SystemByteArray", .null_);
+        const zero = try t.constI32(0);
+        _ = try t.ext("SystemByteArray.__ctor__SystemInt32__SystemByteArray", &.{ len, bytes });
+        _ = try t.ext(array_copy, &.{ try t.mem(), ptr, bytes, zero, len });
+        l.drop(2);
+        try t.prog.emit(.{ .copy = .{ .src = bytes, .dst = ph } });
+        return l.pushPending(.i32, @intCast(t.prog.insts.items.len - 1), 0);
+    }
+    if (eql(u8, imp.name, "bytes_len") and shape.is(ty, 1, 1)) {
+        const inst = try t.ext("SystemByteArray.__get_Length__SystemInt32", &.{ try l.use(try l.top(0)), ph });
+        l.drop(1);
+        return l.pushPending(.i32, inst, 1);
+    }
+    if (eql(u8, imp.name, "bytes_read") and shape.is(ty, 4, 0)) {
+        // (handle, offset, ptr, len): copy handle[offset..][0..len] into memory.
+        const len = try l.use(try l.top(0));
+        const ptr = try l.use(try l.top(1));
+        const offset = try l.use(try l.top(2));
+        const handle = try l.use(try l.top(3));
+        _ = try t.ext(array_copy, &.{ handle, offset, try t.mem(), ptr, len });
+        return l.drop(4);
+    }
+    return unsupported(l, imp, ty, "is not a known wasdon intrinsic");
 }
 
 /// A call to an import the translator cannot bind. Strict mode rejects the

@@ -466,6 +466,8 @@ const fixed_externs = std.StaticStringMap(Handler).initComptime(.{
     .{ "SystemString.__Concat__SystemString_SystemString_SystemString__SystemString", &hConcat },
     .{ "SystemString.__Concat__SystemString_SystemString_SystemString_SystemString__SystemString", &hConcat },
     .{ "SystemInt32.__ToString__SystemString", &hInt32ToString },
+    .{ "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean", &hSameObject },
+    .{ "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean", &hSameObject },
     .{ "UnityEngineDebug.__Log__SystemObject__SystemVoid", &hLog },
     .{ "UnityEngineDebug.__LogWarning__SystemObject__SystemVoid", &hLog },
     .{ "UnityEngineDebug.__LogError__SystemObject__SystemVoid", &hLog },
@@ -884,6 +886,20 @@ fn hConcat(vm: *Vm, _: *const ExternInfo, args: []const u32) Error!void {
 fn hInt32ToString(vm: *Vm, _: *const ExternInfo, args: []const u32) Error!void {
     const v = try vm.get(args[0], .int32);
     vm.heap[args[1]] = .{ .string = try std.fmt.allocPrint(vm.arena.allocator(), "{d}", .{v}) };
+}
+
+/// Reference (in)equality — in practice a null check on an object handle.
+fn hSameObject(vm: *Vm, ext: *const ExternInfo, args: []const u32) Error!void {
+    const a = vm.heap[args[0]];
+    const b = vm.heap[args[1]];
+    const same = switch (a) {
+        .null_ => b == .null_,
+        .object => |o| b == .object and b.object == o,
+        .array => |o| b == .array and b.array == o,
+        .string => |s| b == .string and s.ptr == b.string.ptr,
+        else => return vm.throw("op_Equality on a boxed value type is not modelled", .{}),
+    };
+    vm.set(args[2], .boolean, same == (std.mem.indexOf(u8, ext.name, "Inequality") == null));
 }
 
 fn hLog(vm: *Vm, ext: *const ExternInfo, args: []const u32) Error!void {

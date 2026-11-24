@@ -38,6 +38,15 @@ const Host = struct {
             vm.set(args[1], .single, @floatCast(@sin(@as(f64, try vm.get(args[0], .single)))));
         } else if (eql(u8, name, "UnityEngineMathf.__Cos__SystemSingle__SystemSingle")) {
             vm.set(args[1], .single, @floatCast(@cos(@as(f64, try vm.get(args[0], .single)))));
+        } else if (eql(u8, name, "UnityEngineTexture2D.__LoadRawTextureData__SystemByteArray__SystemVoid")) {
+            _ = try object(vm, args[0]);
+            const data = (try vm.getArray(args[1])).bytes;
+            var h: u32 = 0x811C9DC5;
+            for (data) |b| h = (h ^ b) *% 0x01000193;
+            try vm.log.print(vm.arena.allocator(), "texture <- {d} bytes {x:0>8}\n", .{ data.len, h });
+        } else if (eql(u8, name, "UnityEngineTexture2D.__Apply__SystemVoid")) {
+            _ = try object(vm, args[0]);
+            try vm.log.appendSlice(vm.arena.allocator(), "texture applied\n");
         } else if (eql(u8, name, "UnityEngineVector3.__ctor__SystemSingle_SystemSingle_SystemSingle__UnityEngineVector3")) {
             const v = try vm.newObject("UnityEngineVector3");
             for (0..3) |i| v.data[i] = try vm.get(args[i], .single);
@@ -104,6 +113,8 @@ pub fn run(arena: std.mem.Allocator, wasm_bytes: []const u8, scenario: []const u
     try testing.expectEqual(report.heap_slots, diagnostics.heap_slots);
 
     var vm = try Vm.init(arena, &prog);
+    // Stand-in for a texture assigned in the Inspector.
+    if (prog.findVar("_texture")) |v| vm.heap[v] = .{ .object = try vm.newObject("UnityEngineTexture2D") };
     var host: Host = .{};
     vm.host = Host.call;
     vm.host_ctx = &host;
@@ -157,4 +168,27 @@ test "bench: every feature test matches the reference engine" {
 
 test "udon-orbit: object handles and Unity externs" {
     _ = try example("udon-orbit");
+}
+
+// The workloads below all fit the 512-slot heap of a stock Udon Assembly
+// Program Asset (`docs/spec_heap_budget.md`).
+
+test "mandelbrot: f64 arithmetic, texture upload through a byte[] handle" {
+    try testing.expect((try example("mandelbrot")).heap_slots <= 512);
+}
+
+test "pi: integer division and remainder" {
+    try testing.expect((try example("pi")).heap_slots <= 512);
+}
+
+test "blocks: a whole game driven by events" {
+    try testing.expect((try example("blocks")).heap_slots <= 512);
+}
+
+test "qoi: image encode / decode round trip" {
+    try testing.expect((try example("qoi")).heap_slots <= 512);
+}
+
+test "ragdoll: f32 physics and a behaviour state machine" {
+    try testing.expect((try example("ragdoll")).heap_slots <= 512);
 }

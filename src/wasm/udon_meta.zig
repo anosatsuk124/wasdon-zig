@@ -61,6 +61,9 @@ pub const Field = struct {
     source: Source,
     udon_name: ?[]const u8 = null,
     type: ?FieldType = null,
+    /// Exact Udon type name of the variable (`"udonType"`), for object
+    /// fields that should be assignable in the Inspector.
+    udon_type: ?[]const u8 = null,
     is_export: bool = false,
     sync: FieldSync = .{},
     default: ?std.json.Value = null,
@@ -220,6 +223,7 @@ fn parseField(allocator: std.mem.Allocator, key: []const u8, v: std.json.Value) 
         const ts = try getStringFromValue(tv);
         f.type = try parseFieldType(ts);
     }
+    if (obj.get("udonType")) |uv| f.udon_type = try getStringFromValue(uv);
     if (obj.get("export")) |ev| f.is_export = try getBoolFromValue(ev);
     if (obj.get("sync")) |sv| {
         const sobj = try getObjectFromValue(sv);

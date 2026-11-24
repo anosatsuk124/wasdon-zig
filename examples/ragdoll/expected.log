@@ -1,0 +1,25 @@
+ragdoll: standing
+t=25 standing head=(0, 1695, 0) r_hand=(270, 875, 0) mm
+t=50 standing head=(0, 1695, 0) r_hand=(270, 875, 0) mm
+ragdoll: pushed
+t=61 -> staggering
+t=63 -> falling
+t=75 falling head=(1075, 862, 99) r_hand=(511, 903, 23) mm
+t=98 -> lying
+t=100 lying head=(1336, 0, 220) r_hand=(1188, 0, 91) mm
+ragdoll: pushed
+t=125 lying head=(1617, 0, 201) r_hand=(1347, 0, 101) mm
+t=150 lying head=(1617, 0, 197) r_hand=(1348, 0, 101) mm
+t=159 -> rising
+t=175 rising head=(-325, 1885, -72) r_hand=(59, 1180, -52) mm
+t=178 -> standing
+t=200 standing head=(2, 1695, -48) r_hand=(272, 875, -48) mm
+t=225 standing head=(1, 1695, -49) r_hand=(271, 875, -49) mm
+t=250 standing head=(1, 1695, -49) r_hand=(271, 875, -49) mm
+t=275 standing head=(1, 1695, -49) r_hand=(271, 875, -49) mm
+t=300 standing head=(1, 1695, -49) r_hand=(271, 875, -49) mm
+t=325 standing head=(1, 1695, -49) r_hand=(271, 875, -49) mm
+t=350 standing head=(1, 1695, -49) r_hand=(271, 875, -49) mm
+t=375 standing head=(1, 1695, -49) r_hand=(271, 875, -49) mm
+t=400 standing head=(1, 1695, -49) r_hand=(271, 875, -49) mm
+t=425 standing head=(1, 1695, -49) r_hand=(271, 875, -49) mm

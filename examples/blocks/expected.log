@@ -1,0 +1,113 @@
+blocks: new game
+score=0 lines=0 level=1 piece=T next=S
+|   @@@    |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+score=122 lines=0 level=1 piece=Z next=I
+|    @@    |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|   IIII   |
+|     OO   |
+|    SOO   |
+|    SS    |
+|    TS    |
+|   TTT    |
+score=584 lines=0 level=1 piece=S next=S
+|   @@     |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|    J     |
+| S  JJJ   |
+| SS OOT   |
+| SSJOOTTZ |
+|SSSJJJTZZ |
+|SSSIIIIZT |
+|TSI  OOTTJ|
+|TTI SOOITJ|
+|T I SS IJJ|
+|ZZI TS IOO|
+| ZZTTT IOO|
+cleared 3 -> score=1282 level=1
+cleared 1 -> score=1406 level=1
+cleared 1 -> score=1550 level=2
+cleared 1 -> score=1774 level=2
+score=1798 lines=6 level=2 piece=I next=L
+|   @@@@   |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+|          |
+| OO       |
+|JOOJJ  Z T|
+|JJJJT ZZTT|
+|JSSSJJJOO |
+| SSJOOTTZI|
+|TSI  OOTTJ|
+|TTI SOOITJ|
+|T I SS IJJ|
+|ZZI TS IOO|
+| ZZTTT IOO|
+cleared 1 -> score=2020 level=2
+cleared 2 -> score=2788 level=2
+cleared 1 -> score=3034 level=3
+score=3110 lines=10 level=3 piece=T next=L
+|   @@@    |
+|          |
+|          |
+|          |
+|          |
+|          |
+|    J     |
+|    JJJ   |
+| Z  JJJ   |
+|ZZ  OOJ   |
+|ZOO OOS S |
+|JOO OOSSSS|
+|LLLL IISSS|
+|JSSSJJJOO |
+| SSJOOTTZI|
+|TSI  OOTTJ|
+|TTI SOOITJ|
+|T I SS IJJ|
+|ZZI TS IOO|
+| ZZTTT IOO|

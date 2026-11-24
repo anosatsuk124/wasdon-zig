@@ -4,8 +4,7 @@
 //!   wasdon_zig check <in.uasm>                       conformance check
 //!   wasdon_zig run <in.uasm> [event...]              run events in the emulator
 //!
-//! `translate` writes to stdout without `-o`; warnings and the heap-slot
-//! count go to stderr. `run` executes `_start` when no event is named and
+//! `translate` writes to stdout without `-o`; warnings go to stderr. `run` executes `_start` when no event is named and
 //! prints everything the program logs.
 
 const std = @import("std");
@@ -68,10 +67,8 @@ const Cli = struct {
 
         const err = &self.stderr.interface;
         for (diagnostics.warnings.items) |w| try err.print("warning: {s}\n", .{w});
-        try err.print("heap slots: {d}", .{diagnostics.heap_slots});
         if (diagnostics.heap_slots > default_heap_capacity)
-            try err.print(" (above the default Udon heap of {d}: assemble with a larger heap, see docs/spec_heap_budget.md)", .{default_heap_capacity});
-        try err.writeByte('\n');
+            try err.print("warning: the program needs {d} heap slots, more than the default Udon heap of {d}; assemble it with a larger heap (docs/spec_heap_budget.md)\n", .{ diagnostics.heap_slots, default_heap_capacity });
 
         if (output) |path| {
             try Io.Dir.cwd().writeFile(self.init.io, .{ .sub_path = path, .data = text.written() });
