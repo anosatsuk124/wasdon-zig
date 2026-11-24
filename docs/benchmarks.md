@@ -302,6 +302,43 @@ externs of each store, and the arithmetic itself:
 | `SystemByteArray.__Get__` + `SystemConvert.__ToInt32__` (byte load) | 2 × 56969 |
 | `SystemBoolean.__op_UnaryNegation__` | 40701 |
 
+### Steps 4–6 — masks and signs; the examples themselves
+
+| Example | step 3 | 4: masks, non-negative locals | 5: wider fields, index loops | 6: table-driven drawing |
+|---|---:|---:|---:|---:|
+| `wasm-bench` | 8649 | 8649 | 8649 | 8649 |
+| `pi` | 65314 | 65314 | 65314 | 65314 |
+| `mandelbrot` | 858749 | 858461 | 858461 | 858461 |
+| `image-codec` | 380033 | 377887 | 374798 | 374798 |
+| `ragdoll` | 2355818 | 2355817 | 2355817 | 2355817 |
+| `blockfall` | 164988 | 164938 | 149486 | 122632 |
+| `wasm-bench-rs` | 8810 | 8778 | 8778 | 8778 |
+| `wasm-bench-alloc-rs` | 118484 | 118466 | 118466 | 118466 |
+
+(executed externs; `udon-orbit` and `udon-orbit-rs` are unchanged at 1926
+and 1628.)
+
+4. **Translator.** `(x & m) & c` narrows the constant of the first `&`
+   instead of emitting a second — which is what `(x >>> k) & c` turns into,
+   since the logical shift is an arithmetic shift and a mask. A local
+   assigned a value known to be non-negative (a byte load, a masked value,
+   a comparison) keeps that knowledge until the next label, so shifting or
+   comparing it unsigned needs no mask or sign flip. Small effect on these
+   programs: the patterns are in code that runs rarely.
+5. **Examples.** `blockfall`'s state used `i8`/`u8` fields and iterated
+   arrays by value (`for (g.dx, g.dy) |dx, dy|`), which in Zig copies the
+   arrays to the stack first. With 32-bit fields and index loops a button
+   press costs 1033 externs instead of 1363. The QOI decoder now keeps the
+   input slice in a local, which saves reloading the pointer after every
+   store. Both are recorded in `docs/producer_guide.md` §9.
+6. **Examples.** `blockfall` painted each cell through two tests and a
+   palette lookup, and repainted the static divider and panel every time.
+   A lookup table indexed by the cell value (flash bit included) and a
+   frame drawn once bring a redraw from 1033 externs to 727.
+
+`blockfall` over the whole log: 186976 → 122632 executed externs (−34 %);
+per button press 1363 → 727; per frame while a trio falls 213 → 151.
+
 ## How the numbers are produced
 
 ```sh

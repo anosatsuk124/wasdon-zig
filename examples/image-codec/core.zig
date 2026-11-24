@@ -71,7 +71,10 @@ pub const Decoder = struct {
         // once per chunk against this bound covers every read below.
         const limit = d.data.len - end_marker.len;
         // Locals for the hot state: on Udon a local is free and a field in
-        // memory costs an extern per access.
+        // memory costs an extern per access. That includes the slice being
+        // read: after every store the compiler must assume `d.data` itself
+        // may have changed and load it again.
+        const data = d.data;
         var px = d.px;
         var run = d.run;
         var pos = d.pos;
@@ -87,19 +90,19 @@ pub const Decoder = struct {
                 run -= 1;
             } else {
                 if (pos >= limit) return error.Truncated;
-                const b1: u32 = d.data[pos];
+                const b1: u32 = data[pos];
                 pos += 1;
                 if (b1 == op_rgb) {
-                    px = (px & 0xFF000000) | d.data[pos] | @as(u32, d.data[pos + 1]) << 8 | @as(u32, d.data[pos + 2]) << 16;
+                    px = (px & 0xFF000000) | data[pos] | @as(u32, data[pos + 1]) << 8 | @as(u32, data[pos + 2]) << 16;
                     pos += 3;
                 } else if (b1 == op_rgba) {
-                    px = d.data[pos] | @as(u32, d.data[pos + 1]) << 8 | @as(u32, d.data[pos + 2]) << 16 | @as(u32, d.data[pos + 3]) << 24;
+                    px = data[pos] | @as(u32, data[pos + 1]) << 8 | @as(u32, data[pos + 2]) << 16 | @as(u32, data[pos + 3]) << 24;
                     pos += 4;
                 } else switch (b1 & 0xC0) {
                     op_index => px = d.index[b1],
                     op_diff => px = shifted(px, (b1 >> 4 & 3) -% 2, (b1 >> 2 & 3) -% 2, (b1 & 3) -% 2),
                     op_luma => {
-                        const b2: u32 = d.data[pos];
+                        const b2: u32 = data[pos];
                         pos += 1;
                         const dg = (b1 & 0x3F) -% 32;
                         px = shifted(px, dg -% 8 +% (b2 >> 4), dg, dg -% 8 +% (b2 & 0x0F));

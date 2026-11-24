@@ -36,13 +36,14 @@ extern "env" fn @"udon.pixels"() udon.ByteArray;
 extern "env" fn @"udon.set_pixels"(a: udon.ByteArray) void;
 
 var game: core.Game = .{};
-var picture: [core.picture_width * core.picture_height]u32 = undefined;
+var picture: core.Picture = undefined;
 
 fn isOwner() bool {
     return udon.net.isOwner(@"udon.this_object"());
 }
 
 export fn _start() void {
+    core.drawFrame(&picture);
     const texture = udon.newTexture(core.picture_width, core.picture_height);
     @"udon.set_texture"(texture);
     @"udon.set_pixels"(udon.newByteArray(core.picture_bytes));
@@ -123,8 +124,8 @@ fn show() void {
     const text = @"udon.score_text"();
     if (!udon.isValid(text)) return;
     var line: udon.Line = .{};
-    _ = line.text("Score ").int(@intCast(game.score)).text("  Level ").int(game.level + 1);
-    if (game.chain > 1) _ = line.text("  Chain x").int(game.chain);
+    _ = line.text("Score ").int(@intCast(game.score)).text("  Level ").int(@intCast(game.level + 1));
+    if (game.chain > 1) _ = line.text("  Chain x").int(@intCast(game.chain));
     if (game.phase == .over) _ = line.text("  GAME OVER");
     udon.setText(text, line.slice());
 }

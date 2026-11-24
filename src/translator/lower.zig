@@ -76,6 +76,10 @@ const Entry = struct {
     def: u32 = no_def,
     /// `Asm.here()` right after that extern.
     def_end: u32 = 0,
+    /// The value was computed by the last instruction as `x & mask` with
+    /// the constant operand pushed just before the result slot, so a
+    /// further constant `&` only has to narrow that constant.
+    mask: ?u64 = null,
     /// `.mem`: the load, the kind of its address operand (described by
     /// `bits` / `sym` / `local` / `owned` / `pool` as for an entry of that
     /// kind) and the offset still to be added to it.
@@ -206,6 +210,9 @@ const Lowerer = struct {
     pools: std.ArrayList(Pool) = .empty,
     temp_count: u32 = 0,
     scratch: [scratch_types.len]?Sym = @splat(null),
+    /// Per local: its current value is known to be ≥ 0. Tracked along
+    /// straight-line code only; a label forgets everything.
+    local_nonneg: []bool = &.{},
     derived: [Translator.derived_slots]Derived = @splat(.{}),
     /// The slot handed out last; its value may still be waiting to be
     /// used, so it is not the next one replaced.
@@ -236,6 +243,10 @@ const Lowerer = struct {
         for (needs_init, 0..) |need, i| {
             if (need) try self.a.copy(try self.t.constSym(self.f.local_types[i], 0), self.f.locals[i]);
         }
+
+        // Declared locals start at zero; parameters can be anything.
+        self.local_nonneg = try self.t.arena().alloc(bool, self.f.locals.len);
+        for (self.local_nonneg, 0..) |*known, i| known.* = i >= n_params;
 
         try self.ctrl.append(self.t.gpa, .{ .kind = .func, .label = 0, .types = self.f.ty.results, .height = 0 });
         if (try self.lowerBody(code.body)) try self.emitReturn();
@@ -580,6 +591,18 @@ const Lowerer = struct {
         self.derived = @splat(.{});
     }
 
+    /// A label other code jumps to: what was known along the way here need
+    /// not hold on the other ways in.
+    fn bindJoin(self: *Lowerer, label: Label) void {
+        self.a.bind(label);
+        self.forgetDerived();
+        @memset(self.local_nonneg, false);
+    }
+
+    fn localNonneg(self: *const Lowerer, i: u32) bool {
+        return i < self.local_nonneg.len and self.local_nonneg[i];
+    }
+
     /// Detach pending references to shared slot `sym` (or to all shared
     /// slots) among the first `count` stack entries.
     fn flushShared(self: *Lowerer, sym: ?Sym, count: usize) Error!void {
@@ -693,8 +716,7 @@ const Lowerer = struct {
         }
         if (falls) try self.moveResults(&c);
         try self.truncate(c.height);
-        self.a.bind(c.label);
-        self.forgetDerived();
+        self.bindJoin(c.label);
         try self.pushResults(&c);
         return true;
     }
@@ -702,8 +724,7 @@ const Lowerer = struct {
     fn lowerLoop(self: *Lowerer, b: wasm.instruction.Block) Error!bool {
         try self.flushForBlock();
         const head = try self.a.newLabel();
-        self.a.bind(head);
-        self.forgetDerived();
+        self.bindJoin(head);
         const height = self.stack.items.len;
         // A branch to a loop carries its parameters, of which MVP has none.
         _ = try self.blockTypes(b.bt);
@@ -738,8 +759,7 @@ const Lowerer = struct {
                 try self.a.jump(end);
             }
             try self.truncate(self.ctrl.items[frame].height);
-            self.a.bind(else_label);
-            self.forgetDerived();
+            self.bindJoin(else_label);
             const else_falls = try self.lowerBody(else_body);
             falls = else_falls;
         }
@@ -891,18 +911,14 @@ const Lowerer = struct {
             .drop => try self.release(try self.pop()),
             .select => try self.lowerSelect(),
 
-            .local_get => |i| try self.push(.{ .ty = try self.localType(i), .kind = .local, .sym = try self.localSym(i), .local = i }),
-            .local_set => |i| {
-                const v = try self.pop();
-                try self.flushLocal(i);
-                try self.store(v, try self.localSym(i));
-            },
-            .local_tee => |i| {
+            .local_get => |i| try self.push(.{ .ty = try self.localType(i), .kind = .local, .sym = try self.localSym(i), .local = i, .nonneg = self.localNonneg(i) }),
+            .local_set, .local_tee => |i| {
                 const v = try self.pop();
                 const nonneg = v.nonneg;
                 try self.flushLocal(i);
                 try self.store(v, try self.localSym(i));
-                try self.push(.{ .ty = try self.localType(i), .kind = .local, .sym = try self.localSym(i), .local = i, .nonneg = nonneg });
+                if (i < self.local_nonneg.len) self.local_nonneg[i] = nonneg;
+                if (ins == .local_tee) try self.push(.{ .ty = try self.localType(i), .kind = .local, .sym = try self.localSym(i), .local = i, .nonneg = nonneg });
             },
             .global_get => |i| {
                 const g = try self.global(i);
@@ -1129,6 +1145,18 @@ const Lowerer = struct {
             if (a.kind == .konst and b.kind == .konst) {
                 if (fold(ty, op, a.bits, b.bits)) |r| return self.pushConst(ty, r);
             }
+            // A constant goes second, where the patterns below look for it.
+            const commutes = op == .add or op == .mul or op == .and_ or op == .or_ or op == .xor;
+            if (commutes and a.kind == .konst) std.mem.swap(Entry, &a, &b);
+            // (x & m) & c is x & (m & c): narrow the constant of the `&`
+            // just emitted instead of emitting another.
+            if (op == .and_ and b.kind == .konst and a.mask != null and a.kind == .temp and a.def_end == self.a.here()) {
+                const merged = a.mask.? & b.bits;
+                self.a.code.items[a.def - 1].arg = try self.t.constSym(ty, merged);
+                a.mask = merged;
+                a.nonneg = a.nonneg or b.nonneg;
+                return self.push(a);
+            }
             // x op identity → x.
             const b_ident = b.kind == .konst and switch (op) {
                 .add, .sub, .or_, .xor, .shl, .shr_s => b.bits == 0,
@@ -1163,7 +1191,9 @@ const Lowerer = struct {
         try self.release(a);
         try self.release(b);
         try self.result(ty, binSig(ty, op), &.{ sa, sb });
-        self.stack.items[self.stack.items.len - 1].nonneg = nonneg;
+        const top = &self.stack.items[self.stack.items.len - 1];
+        top.nonneg = nonneg;
+        if (op == .and_ and b.kind == .konst) top.mask = b.bits;
     }
 
     /// `SystemByte` operator for an i32 operation on two unsigned bytes.

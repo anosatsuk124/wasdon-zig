@@ -23,7 +23,7 @@ const clear_ticks = 8;
 /// Set on a cell that is about to clear.
 pub const flash = 0x80;
 
-pub const Phase = enum(u8) {
+pub const Phase = enum(u32) {
     /// A trio is falling under the player's control.
     falling,
     /// Loose cells are dropping, one row per step.
@@ -36,39 +36,38 @@ pub const Phase = enum(u8) {
 
 pub const Command = enum(u8) { left, right, rotate, drop, restart };
 
-pub const Shape = enum(u8) {
-    /// Three in a row.
-    bar,
-    /// An L of three.
-    corner,
-};
+/// Shapes a trio spawns in: 0 is three in a row, 1 an L of three.
+const shape_count = 2;
 
 /// Cell offsets from the pivot, for each shape as it spawns.
-const shape_offsets = [2][3][2]i8{
+const shape_offsets = [2][3][2]i32{
     .{ .{ -1, 0 }, .{ 0, 0 }, .{ 1, 0 } },
     .{ .{ 0, 0 }, .{ 1, 0 }, .{ 0, 1 } },
 };
 
+/// Everything but the board is 32 bits wide, whatever its range: on the
+/// Udon VM a word is read with one extern and a byte with two, and
+/// arithmetic on narrow types needs masking that words do not.
 pub const Game = extern struct {
     /// `board[y][x]`, row 0 at the bottom: 0 empty, 1..colour_count a
     /// colour, with `flash` set while the cell is clearing.
     board: [height][width]u8 = @splat(@splat(0)),
     /// The falling trio: offsets from the pivot and colours.
-    dx: [3]i8 = @splat(0),
-    dy: [3]i8 = @splat(0),
-    colour: [3]u8 = @splat(0),
-    next_colour: [3]u8 = @splat(0),
-    next_shape: Shape = .bar,
+    dx: [3]i32 = @splat(0),
+    dy: [3]i32 = @splat(0),
+    colour: [3]u32 = @splat(0),
+    next_colour: [3]u32 = @splat(0),
+    next_shape: u32 = 0,
     /// Pivot position.
-    px: i8 = 0,
-    py: i8 = 0,
+    px: i32 = 0,
+    py: i32 = 0,
     phase: Phase = .falling,
     /// Links in the current chain.
-    chain: u8 = 0,
+    chain: u32 = 0,
     /// Ticks until the next step.
-    wait: u8 = 0,
-    level: u8 = 0,
-    groups: u16 = 0,
+    wait: u32 = 0,
+    level: u32 = 0,
+    groups: u32 = 0,
     score: u32 = 0,
     best_chain: u32 = 0,
     rng: u32 = 0,
@@ -158,22 +157,25 @@ pub const Game = extern struct {
 
     // ----- the falling trio -----
 
-    fn fallTicks(g: *const Game) u8 {
+    fn fallTicks(g: *const Game) u32 {
         return 24 - 2 * g.level;
     }
 
     /// Would the trio fit with its pivot at (x, y)?
     fn fits(g: *const Game, x: i32, y: i32) bool {
-        for (g.dx, g.dy) |dx, dy| {
-            const cx = x + dx;
-            const cy = y + dy;
-            if (cx < 0 or cx >= width or cy < 0 or cy >= height) return false;
+        // Indexing rather than `for (g.dx, g.dy)`: iterating arrays by
+        // value copies them first.
+        for (0..3) |i| {
+            const cx = x + g.dx[i];
+            const cy = y + g.dy[i];
+            // One unsigned comparison covers both ends of each range.
+            if (@as(u32, @bitCast(cx)) >= width or @as(u32, @bitCast(cy)) >= height) return false;
             if (g.board[@intCast(cy)][@intCast(cx)] != 0) return false;
         }
         return true;
     }
 
-    fn shift(g: *Game, by: i8) bool {
+    fn shift(g: *Game, by: i32) bool {
         if (!g.fits(g.px + by, g.py)) return false;
         g.px += by;
         return true;
@@ -182,36 +184,39 @@ pub const Game = extern struct {
     /// A quarter turn clockwise, nudged sideways or up if the turned trio
     /// would not fit where it is.
     fn rotate(g: *Game) bool {
-        const old_dx = g.dx;
-        const old_dy = g.dy;
-        for (&g.dx, &g.dy, old_dx, old_dy) |*dx, *dy, x, y| {
-            dx.* = y;
-            dy.* = -x;
+        for (0..3) |i| {
+            const x = g.dx[i];
+            g.dx[i] = g.dy[i];
+            g.dy[i] = -x;
         }
-        const nudges = [_][2]i8{ .{ 0, 0 }, .{ -1, 0 }, .{ 1, 0 }, .{ 0, 1 } };
-        for (nudges) |n| {
+        const nudges = [_][2]i32{ .{ 0, 0 }, .{ -1, 0 }, .{ 1, 0 }, .{ 0, 1 } };
+        for (&nudges) |*n| {
             if (g.fits(g.px + n[0], g.py + n[1])) {
                 g.px += n[0];
                 g.py += n[1];
                 return true;
             }
         }
-        g.dx = old_dx;
-        g.dy = old_dy;
+        // Nowhere to go: turn it back.
+        for (0..3) |i| {
+            const x = g.dx[i];
+            g.dx[i] = -g.dy[i];
+            g.dy[i] = x;
+        }
         return false;
     }
 
     /// Choose the trio after the next one.
     fn roll(g: *Game) void {
-        g.next_shape = @enumFromInt(g.random() & 1);
-        for (&g.next_colour) |*c| c.* = @intCast(1 + g.random() % colour_count);
+        g.next_shape = g.random() % shape_count;
+        for (&g.next_colour) |*c| c.* = 1 + g.random() % colour_count;
     }
 
     fn spawn(g: *Game) void {
-        const offsets = &shape_offsets[@intFromEnum(g.next_shape)];
-        for (&g.dx, &g.dy, offsets) |*dx, *dy, o| {
-            dx.* = o[0];
-            dy.* = o[1];
+        const offsets = &shape_offsets[g.next_shape];
+        for (0..3) |i| {
+            g.dx[i] = offsets[i][0];
+            g.dy[i] = offsets[i][1];
         }
         g.colour = g.next_colour;
         g.px = width / 2 - 1;
@@ -225,7 +230,7 @@ pub const Game = extern struct {
 
     /// The trio becomes part of the board.
     fn lock(g: *Game) void {
-        for (g.dx, g.dy, g.colour) |dx, dy, c| g.board[@intCast(g.py + dy)][@intCast(g.px + dx)] = c;
+        for (0..3) |i| g.board[@intCast(g.py + g.dy[i])][@intCast(g.px + g.dx[i])] = @intCast(g.colour[i]);
         g.phase = .settling;
         g.wait = settle_ticks;
         g.chain = 0;
@@ -292,8 +297,8 @@ pub const Game = extern struct {
             g.chain += 1;
             if (g.chain > g.best_chain) g.best_chain = g.chain;
             g.score += flagged * 10 * g.chain;
-            g.groups += @intCast(groups);
-            g.level = @intCast(@min(g.groups / 5, 9));
+            g.groups += groups;
+            g.level = @min(g.groups / 5, 9);
         }
         return flagged;
     }
@@ -335,29 +340,63 @@ const panel_colour = 0xFF100C08;
 const flash_colour = 0xFFFFFFFF;
 const over_tint = 0xFF303030;
 
-pub fn draw(g: *const Game, pixels: *[picture_width * picture_height]u32) void {
-    const over = g.phase == .over;
-    for (0..height) |y| {
+/// Colour of every cell value, flash bit included, so that painting a cell
+/// is one lookup and no branches.
+const cell_colours = colourTable(false);
+/// The same once the game is over: settled cells are greyed out.
+const over_colours = colourTable(true);
+
+fn colourTable(comptime over: bool) [flash + colour_count + 1]u32 {
+    var table: [flash + colour_count + 1]u32 = @splat(palette[0]);
+    for (1..colour_count + 1) |c| {
+        table[c] = if (over) over_tint else palette[c];
+        table[flash + c] = flash_colour;
+    }
+    return table;
+}
+
+pub const Picture = [picture_width * picture_height]u32;
+
+/// The parts of the picture that never change: the divider and the panel.
+pub fn drawFrame(pixels: *Picture) void {
+    for (0..picture_height) |y| {
         const row = pixels[y * picture_width ..][0..picture_width];
-        for (g.board[y], row[0..width]) |c, *p| {
-            p.* = if (c & flash != 0) flash_colour else if (over and c != 0) over_tint else palette[c];
-        }
         row[width] = divider_colour;
         for (row[width + 1 ..]) |*p| p.* = panel_colour;
     }
+}
+
+/// Everything that does change: the well, the falling trio, the next one.
+pub fn draw(g: *const Game, pixels: *Picture) void {
+    const colours = if (g.phase == .over) &over_colours else &cell_colours;
+    const cells: *const [height * width]u8 = @ptrCast(&g.board);
+    var cell: usize = 0;
+    var pixel: usize = 0;
+    while (cell < cells.len) : (pixel += picture_width - width) {
+        const row_end = cell + width;
+        while (cell < row_end) : ({
+            cell += 1;
+            pixel += 1;
+        }) pixels[pixel] = colours[cells[cell]];
+    }
     if (g.phase == .falling) {
-        for (g.dx, g.dy, g.colour) |dx, dy, c| {
-            const x: usize = @intCast(g.px + dx);
-            const y: usize = @intCast(g.py + dy);
-            pixels[y * picture_width + x] = palette[c];
+        for (0..3) |i| {
+            const x: usize = @intCast(g.px + g.dx[i]);
+            const y: usize = @intCast(g.py + g.dy[i]);
+            pixels[y * picture_width + x] = palette[g.colour[i]];
         }
     }
-    // The next trio, in the panel.
-    const offsets = &shape_offsets[@intFromEnum(g.next_shape)];
-    for (offsets, g.next_colour) |o, c| {
-        const x: usize = @intCast(width + 2 + @as(i32, o[0]));
-        const y: usize = @intCast(height - 3 + @as(i32, o[1]));
-        pixels[y * picture_width + x] = palette[c];
+    // The next trio in the panel: wipe the two rows it can occupy, then
+    // paint its three cells.
+    const corner = (height - 3) * picture_width + width + 1;
+    for ([_]usize{ corner, corner + picture_width }) |row| {
+        for (pixels[row..][0..3]) |*p| p.* = panel_colour;
+    }
+    const offsets = &shape_offsets[g.next_shape];
+    for (0..3) |i| {
+        const x: usize = @intCast(width + 2 + offsets[i][0]);
+        const y: usize = @intCast(height - 3 + offsets[i][1]);
+        pixels[y * picture_width + x] = palette[g.next_colour[i]];
     }
 }
 
@@ -379,7 +418,7 @@ fn resolve(g: *Game) void {
 }
 
 test "the state is plain bytes" {
-    try std.testing.expectEqual(@as(usize, 116), @sizeOf(Game));
+    try std.testing.expectEqual(@as(usize, 172), @sizeOf(Game));
     var a: Game = .{};
     a.init(5);
     _ = a.input(.left);
@@ -423,7 +462,7 @@ test "moves stop at the walls; rotation nudges away from them" {
     // shape back.
     const before = g.dx;
     for (0..4) |_| try std.testing.expect(g.input(.rotate));
-    try std.testing.expectEqualSlices(i8, &before, &g.dx);
+    try std.testing.expectEqualSlices(i32, &before, &g.dx);
     for (g.dx) |dx| try std.testing.expect(g.px + dx >= 0);
 }
 
@@ -458,7 +497,7 @@ test "four of a colour clear, and what falls can chain" {
     // 4 greens x 10 x chain 1, then 4 reds x 10 x chain 2.
     try std.testing.expectEqual(@as(u32, 40 + 80), g.score);
     try std.testing.expectEqual(@as(u32, 2), g.best_chain);
-    try std.testing.expectEqual(@as(u16, 2), g.groups);
+    try std.testing.expectEqual(@as(u32, 2), g.groups);
     try std.testing.expectEqual(@as(u8, 0), g.board[0][0]);
     try std.testing.expectEqual(Phase.falling, g.phase);
 }
@@ -482,7 +521,8 @@ test "the well fills up and the game ends; restart begins again" {
 test "the picture shows the board, the trio and the next one" {
     var g: Game = .{};
     g.init(4);
-    var pixels: [picture_width * picture_height]u32 = undefined;
+    var pixels: Picture = undefined;
+    drawFrame(&pixels);
     draw(&g, &pixels);
     var coloured: u32 = 0;
     var preview: u32 = 0;

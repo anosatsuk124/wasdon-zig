@@ -236,7 +236,8 @@ fn blockfallStatus(game: *const blockfall.Game, buf: []u8) ![]const u8 {
 }
 
 fn expectShows(vm: *Vm, game: *const blockfall.Game) !void {
-    var picture: [blockfall.picture_width * blockfall.picture_height]u32 = undefined;
+    var picture: blockfall.Picture = undefined;
+    blockfall.drawFrame(&picture);
     blockfall.draw(game, &picture);
     const texture = vm.getVar("_texture").?.object;
     try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(&picture), texture.get("rawTextureData").?.array.bytes);
