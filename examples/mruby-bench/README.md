@@ -23,8 +23,8 @@ hence the zero.)
 | Udon Assembly | 498 255 instructions, 99 721 `EXTERN`s, heap 16 707 slots |
 | executed | 107 882 591 instructions, 23 789 796 `EXTERN`s |
 
-That is 128 times the externs of the same workloads compiled ahead of time
-(`bench-wasi-rs`, 185 936), and a fifth of what the Rhai interpreter
+That is 240 times the externs of the same workloads compiled ahead of time
+(`bench-wasi-rs`, 98 376), and a fifth of what the Rhai interpreter
 ([`examples/rhai-bench`](../rhai-bench/)) needs: mruby runs bytecode
 compiled at build time, Rhai walks a syntax tree it parses at run time.
 The bytecode dispatch is one big `switch`, which the translator turns into

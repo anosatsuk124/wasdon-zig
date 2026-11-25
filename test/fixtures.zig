@@ -341,7 +341,7 @@ fn blockfallVerify(vm: *Vm) !void {
 // ---------------------------------------------------------------------
 
 /// One event per workload, so the statistics separate them.
-const usharp_scenario = "Fib,Mandel,Str";
+const usharp_scenario = "Fib,Mandel,Str,Tak,Ack";
 
 /// The integer Mandelbrot of the benchmark, as the reference.
 fn benchMandel() i32 {
@@ -381,6 +381,9 @@ fn benchVerify(vm: *Vm) !void {
     try std.testing.expectEqual(Value{ .int32 = 6765 }, vm.getVar("fibResult").?);
     try std.testing.expectEqual(Value{ .int32 = benchMandel() }, vm.getVar("mandelResult").?);
     try std.testing.expectEqual(Value{ .int32 = 192 }, vm.getVar("strResult").?);
+    // tarai(8, 4, 0) and ack(3, 4).
+    try std.testing.expectEqual(Value{ .int32 = 8 }, vm.getVar("takResult").?);
+    try std.testing.expectEqual(Value{ .int32 = 125 }, vm.getVar("ackResult").?);
 }
 
 /// The programs in `examples/` that are plain WASI programs: `_start` runs

@@ -11,7 +11,10 @@ import sys
 
 I32 = "SystemInt32"
 OPS = {"+": "Addition", "-": "Subtraction", "*": "Multiplication", "/": "Division",
-       "<": "LessThan", ">": "GreaterThan", ">=": "GreaterThanOrEqual"}
+       "<": "LessThan", ">": "GreaterThan", ">=": "GreaterThanOrEqual", "<=": "LessThanOrEqual",
+       "==": "Equality"}
+FIELDS = {"fibN": 20, "fibResult": 0, "mandelResult": 0, "strResult": 0,
+          "takX": 8, "takY": 4, "takZ": 0, "takResult": 0, "ackM": 3, "ackN": 4, "ackResult": 0}
 
 class Gen:
     def __init__(self):
@@ -54,7 +57,7 @@ class Gen:
         for o in operands: self.push(o)
         self.emit(f'EXTERN, "{sig}"', 8)
     def op(self, op, a, b, dst, ty=I32):
-        ret = "SystemBoolean" if op in ("<", ">", ">=") else ty
+        ret = "SystemBoolean" if op in ("<", ">", ">=", "<=", "==") else ty
         self.extern(f"{ty}.__op_{OPS[op]}__{ty}_{ty}__{ret}", a, b, dst)
         return dst
     def label(self, name):
@@ -92,7 +95,7 @@ class Gen:
             ty, _ = self.vars[v]
             self.vars[v] = (ty, f"0x{self.labels[label]:08X}")
         out.write(".data_start\n")
-        for name in ("fibN", "fibResult", "mandelResult", "strResult"):
+        for name in FIELDS:
             out.write(f"    .export {name}\n")
         for name, (ty, init) in self.vars.items():
             out.write(f"    {name}: %{ty}, {init}\n")
@@ -112,9 +115,8 @@ class Gen:
         out.write(".code_end\n")
 
 g = Gen()
-g.var("fibN", I32, "20")
-for f in ("fibResult", "mandelResult", "strResult"):
-    g.var(f, I32, "0")
+for f, default in FIELDS.items():
+    g.var(f, I32, str(default))
 STACK = g.var("__gintnl_SystemObjectArray_0", "SystemObjectArray")
 SP = g.var("__gintnl_SystemInt32_0", I32, "0")
 c = g.const
@@ -263,6 +265,98 @@ g.jump("s_loop")
 g.label("s_end")
 g.comment("strResult = s.Length;")
 g.extern("SystemString.__get_Length__SystemInt32", s, "strResult")
+g.ret()
+
+# ------------------------------------------- recursion with several parameters
+def call_recursive(rp, method, params, ret, args, held):
+    """BoundUserMethodInvocation.EmitValue inside a [RecursiveMethod], after
+    the return point `rp` has been pushed and the arguments evaluated into
+    `args`. `held` are the values that still have an open reference — the
+    results of the earlier arguments of an enclosing call."""
+    stack_check(len(params) + len(held))
+    push_values(params)
+    # An argument that is itself a parameter is read before any parameter
+    # is overwritten (U#'s copy-on-write values).
+    sources = []
+    for a in args:
+        if a in params:
+            keep = g.new("intnl", I32, "0")
+            g.copy(a, keep)
+            a = keep
+        sources.append(a)
+    for a, p in zip(sources, params):
+        g.copy(a, p)
+    push_values(held)
+    g.jump(method + "__body")
+    g.land(rp)
+    result = g.new("intnl", I32, "0")
+    g.copy(ret, result)
+    pop_values(params + held)
+    return result
+
+# ---------------------------------------------------------------- Tak()
+g.method("Tak", True)
+g.comment("takResult = TakRec(takX, takY, takZ);")
+tx, ty, tz = (g.var(f"__0_{v}__param", I32, "0") for v in ("x", "y", "z"))
+tak_ret = g.var("__0_TakRec__ret", I32, "0")
+rp = g.return_point()
+g.copy("takX", tx); g.copy("takY", ty); g.copy("takZ", tz)
+g.jump("TakRec__body")
+g.land(rp)
+g.copy(tak_ret, "takResult")
+g.ret()
+
+# ------------------------------------------- TakRec(int x, int y, int z)
+g.method("TakRec", False)
+g.comment("if (x <= y) return y;")
+g.jif(g.op("<=", tx, ty, tb()), "tak_recurse")
+g.copy(ty, tak_ret)
+g.ret()
+g.label("tak_recurse")
+g.comment("return TakRec(TakRec(x - 1, y, z), TakRec(y - 1, z, x), TakRec(z - 1, x, y));")
+TAK = [tx, ty, tz]
+outer = g.return_point()
+rp = g.return_point()
+r1 = call_recursive(rp, "TakRec", TAK, tak_ret, [g.op("-", tx, c(1), t()), ty, tz], [])
+rp = g.return_point()
+r2 = call_recursive(rp, "TakRec", TAK, tak_ret, [g.op("-", ty, c(1), t()), tz, tx], [r1])
+rp = g.return_point()
+r3 = call_recursive(rp, "TakRec", TAK, tak_ret, [g.op("-", tz, c(1), t()), tx, ty], [r1, r2])
+g.copy(call_recursive(outer, "TakRec", TAK, tak_ret, [r1, r2, r3], []), tak_ret)
+g.ret()
+
+# ---------------------------------------------------------------- Ack()
+g.method("Ack", True)
+g.comment("ackResult = AckRec(ackM, ackN);")
+am, an = (g.var(f"__0_{v}__param", I32, "0") for v in ("m", "n"))
+ack_ret = g.var("__0_AckRec__ret", I32, "0")
+rp = g.return_point()
+g.copy("ackM", am); g.copy("ackN", an)
+g.jump("AckRec__body")
+g.land(rp)
+g.copy(ack_ret, "ackResult")
+g.ret()
+
+# --------------------------------------------------- AckRec(int m, int n)
+g.method("AckRec", False)
+ACK = [am, an]
+g.comment("if (m == 0) return n + 1;")
+g.jif(g.op("==", am, c(0), tb()), "ack_m")
+g.op("+", an, c(1), ack_ret)
+g.ret()
+g.label("ack_m")
+g.comment("if (n == 0) return AckRec(m - 1, 1);")
+g.jif(g.op("==", an, c(0), tb()), "ack_n")
+rp = g.return_point()
+g.copy(call_recursive(rp, "AckRec", ACK, ack_ret, [g.op("-", am, c(1), t()), c(1)], []), ack_ret)
+g.ret()
+g.label("ack_n")
+g.comment("return AckRec(m - 1, AckRec(m, n - 1));")
+outer = g.return_point()
+m1 = g.op("-", am, c(1), t())
+rp = g.return_point()
+inner = call_recursive(rp, "AckRec", ACK, ack_ret, [am, g.op("-", an, c(1), t())], [m1])
+g.copy(call_recursive(outer, "AckRec", ACK, ack_ret, [m1, inner], []), ack_ret)
 g.ret()
 
 g.render(sys.stdout)

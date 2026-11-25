@@ -25,7 +25,7 @@ Read the `docs/` specs before designing or changing any translation logic; the W
 
 - `src/wasm/` — WASM binary parser and `__udon_meta` decoding. Knows nothing about Udon.
 - `src/udon/` — Udon Assembly. `asm.zig` builds and writes programs; `program.zig` reads the text back; `check.zig` validates it; `vm.zig` + `externs.zig` execute it; `nodes.zig` is the node list and signature parser. Knows nothing about WASM.
-- `src/translator/` — the lowering. `translate.zig` is module level (what exists, events, init); `lower.zig` lowers function bodies; `callgraph.zig` finds recursion; `liveness.zig` finds the locals live at each call and the ones that are only conditions; `threads.zig` rewrites atomics for the one thread there is; `wasi.zig` links host interfaces into a module as WebAssembly — WASI preview 1, and the imports `__udon_meta.imports` binds; `inspect.zig` reports what a module needs.
+- `src/translator/` — the lowering. `translate.zig` is module level (what exists, events, init); `lower.zig` lowers function bodies; `callgraph.zig` finds recursion; `liveness.zig` finds the locals live at each call and the ones that are only conditions; `threads.zig` rewrites atomics for the one thread there is; `unroll.zig` gives the first levels of small self-recursive functions copies of their own; `wasi.zig` links host interfaces into a module as WebAssembly — WASI preview 1, and the imports `__udon_meta.imports` binds; `inspect.zig` reports what a module needs.
 - `src/root.zig` — the public library module (`@import("wasdon_zig")`).
 - `src/main.zig` — the CLI; the only place that touches `std.process.Init`/stdio.
 

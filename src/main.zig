@@ -17,8 +17,8 @@ const usage =
     \\      prints the size of the result, including the heap size it needs.
     \\      --without <a,b,…> leaves optimizations out (liveness, stack_return,
     \\      bool_locals, pending_loads, memory_copies, byte_operators, derived,
-    \\      masks, jump_tables), to see whether one of them is behind a wrong
-    \\      result.
+    \\      masks, jump_tables, unroll), to see whether one of them is behind a
+    \\      wrong result.
     \\  wasdon-zig inspect <input.wasm> [--meta <file.json>]
     \\      Report the module's size, its imports, and everything in it the
     \\      translator does not support — all of it, where `translate` stops
@@ -133,7 +133,7 @@ fn runTranslate(cli: *Cli, args: []const []const u8) !u8 {
                         known = true;
                     }
                 }
-                if (!known) return cli.fail("unknown optimization '{s}' (liveness, stack_return, bool_locals, pending_loads, memory_copies, byte_operators, derived, masks, jump_tables)", .{name});
+                if (!known) return cli.fail("unknown optimization '{s}' (liveness, stack_return, bool_locals, pending_loads, memory_copies, byte_operators, derived, masks, jump_tables, unroll)", .{name});
             }
         } else if (std.mem.eql(u8, a, "--strict")) {
             options.strict = true;

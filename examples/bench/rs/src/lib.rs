@@ -1,4 +1,4 @@
-//! The benchmark's three workloads in Rust — the same ones as
+//! The benchmark's five workloads in Rust — the same ones as
 //! `../usharp/UdonBench.cs`, with the same inputs and the same results in
 //! the same Udon variables.
 //!
@@ -29,6 +29,20 @@ unsafe extern "C" {
     fn set_mandel(v: i32);
     #[link_name = "bench.set_str"]
     fn set_str(v: i32);
+    #[link_name = "bench.tak_x"]
+    fn tak_x() -> i32;
+    #[link_name = "bench.tak_y"]
+    fn tak_y() -> i32;
+    #[link_name = "bench.tak_z"]
+    fn tak_z() -> i32;
+    #[link_name = "bench.set_tak"]
+    fn set_tak(v: i32);
+    #[link_name = "bench.ack_m"]
+    fn ack_m() -> i32;
+    #[link_name = "bench.ack_n"]
+    fn ack_n() -> i32;
+    #[link_name = "bench.set_ack"]
+    fn set_ack(v: i32);
 
     #[link_name = "SystemString.__Copy__SystemString__SystemString"]
     fn string_from(ptr: *const u8, len: usize) -> UdonString;
@@ -100,13 +114,49 @@ pub extern "C" fn Str() {
     }
 }
 
+/// The Takeuchi function ("tarai").
+fn tak(x: i32, y: i32, z: i32) -> i32 {
+    if x <= y {
+        return y;
+    }
+    tak(tak(x - 1, y, z), tak(y - 1, z, x), tak(z - 1, x, y))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn Tak() {
+    unsafe { set_tak(tak(tak_x(), tak_y(), tak_z())) }
+}
+
+/// The Ackermann function.
+fn ack(m: i32, n: i32) -> i32 {
+    if m == 0 {
+        return n + 1;
+    }
+    if n == 0 {
+        return ack(m - 1, 1);
+    }
+    ack(m - 1, ack(m, n - 1))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn Ack() {
+    unsafe { set_ack(ack(ack_m(), ack_n())) }
+}
+
 const UDON_META_JSON: &[u8] = br#"{
   "version": 1,
   "fields": {
     "fibN":   { "source": {"kind":"import","name":"bench.fib_n"}, "udonName":"fibN", "type":"int", "export": true, "default": 20 },
     "fib":    { "source": {"kind":"import","name":"bench.fib","setter":"bench.set_fib"}, "udonName":"fibResult", "type":"int", "export": true },
     "mandel": { "source": {"kind":"import","name":"bench.mandel","setter":"bench.set_mandel"}, "udonName":"mandelResult", "type":"int", "export": true },
-    "str":    { "source": {"kind":"import","name":"bench.str","setter":"bench.set_str"}, "udonName":"strResult", "type":"int", "export": true }
+    "str":    { "source": {"kind":"import","name":"bench.str","setter":"bench.set_str"}, "udonName":"strResult", "type":"int", "export": true },
+    "takX":   { "source": {"kind":"import","name":"bench.tak_x"}, "udonName":"takX", "type":"int", "export": true, "default": 8 },
+    "takY":   { "source": {"kind":"import","name":"bench.tak_y"}, "udonName":"takY", "type":"int", "export": true, "default": 4 },
+    "takZ":   { "source": {"kind":"import","name":"bench.tak_z"}, "udonName":"takZ", "type":"int", "export": true, "default": 0 },
+    "tak":    { "source": {"kind":"import","name":"bench.tak","setter":"bench.set_tak"}, "udonName":"takResult", "type":"int", "export": true },
+    "ackM":   { "source": {"kind":"import","name":"bench.ack_m"}, "udonName":"ackM", "type":"int", "export": true, "default": 3 },
+    "ackN":   { "source": {"kind":"import","name":"bench.ack_n"}, "udonName":"ackN", "type":"int", "export": true, "default": 4 },
+    "ack":    { "source": {"kind":"import","name":"bench.ack","setter":"bench.set_ack"}, "udonName":"ackResult", "type":"int", "export": true }
   }
 }"#;
 

@@ -327,6 +327,9 @@ This is not treated as a direct `.sync` line in Udon Assembly itself. Instead, i
   (`docs/spec_call_return_conversion.md` §6).
 - `callStackSize` — the maximum depth of active re-entrant calls (default
   1024); see `docs/spec_call_return_conversion.md` §6.
+- `recursionUnroll` — how many levels of a small self-recursive function
+  get slots of their own and save no frame (default 64; 0 turns it off).
+  More levels are more code; see `docs/spec_call_return_conversion.md` §6.
 - `memory` — see below.
 
 ### `options.memory`

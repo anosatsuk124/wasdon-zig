@@ -296,6 +296,45 @@ caller's component cost nothing extra.
 if no function is ever actually re-entered; it exists for programs where
 indirect calls make the conservative call graph look cyclic.
 
+### The first levels save nothing
+
+Frames are saved because both activations of a function use the same
+slots. A second copy of the function has slots of its own. So before
+translation (`src/translator/unroll.zig`) a small function that calls
+itself is given `depth` copies:
+
+```
+callers ──► f#0 ──► f#1 ──► … ──► f#(depth-1) ──► f ──┐
+                                                  ▲   │ saves its frame
+                                                  └───┘
+```
+
+Every call of `f` from another function goes to the first copy; where the
+original calls itself, each copy calls the next and the last calls the
+original, which still calls itself and saves its frame as described above.
+No copy can be active twice, so the call graph shows them as ordinary
+functions: their calls are argument `COPY`s and two jumps, and they return
+through a slot or straight to their single call site (§4). A recursion
+deeper than the copies simply continues in the original.
+
+A function qualifies when
+
+- it calls itself directly, and is the only member of its call-graph
+  component — nothing it calls, directly or through the table, can lead
+  back to it;
+- 16 copies of it fit in the budget of 2048 WebAssembly instructions, i.e.
+  it has at most 128. Small functions are where the frame is most of the
+  cost, and a few levels of a large one would not pay for the code.
+
+`depth` is `options.recursionUnroll` (default 64) or as many as fit in the
+budget, whichever is less; 0 turns the rewrite off. The cost is code and
+heap: every copy has the function's instructions and its slots. The
+function table and exports keep pointing at the original.
+
+Measured on the benchmark's recursive workloads (`docs/benchmarks.md`,
+step 12): `fib(20)` 142 296 → 76 626 executed externs, `tarai(8, 4, 0)`
+97 682 → 22 058, and `ack(3, 4)`, which goes 123 deep, 51 292 → 38 000.
+
 ## 7. Events and initialization
 
 A function bound to an Udon event (`docs/spec_udonmeta_conversion.md`) gets

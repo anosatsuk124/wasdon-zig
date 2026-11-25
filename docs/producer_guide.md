@@ -208,10 +208,16 @@ parameters and no results becomes an event named after its export
 Every function has one static frame. Functions on a call-graph cycle save
 and restore their frame around the recursive call automatically
 (`docs/spec_call_return_conversion.md` §6). Only what is still needed after
-the call is saved, at two externs per value plus two per call — the
-recursive Fibonacci of `examples/bench` spends 6 of its 12 externs per call
-on it. That is well under what UdonSharp's `[RecursiveMethod]` costs
-(`docs/benchmarks.md`), but a loop is cheaper still.
+the call is saved, at two externs per value plus two per call.
+
+A small function that only calls *itself* does better: its first 64 levels
+are separate copies with slots of their own and save nothing, so a call
+costs no extern at all. The recursive Fibonacci, Takeuchi and Ackermann
+functions of `examples/bench` run 3 to 11 times fewer externs than the same
+code in UdonSharp that way. The copies are code and heap slots — set
+`"options": { "recursionUnroll": 16 }` (or `0`) if that matters more, and
+raise it for a function known to recurse deeper. Mutual recursion, and
+recursion through function pointers, always saves frames.
 
 A program whose only "cycles" come from function pointers that never
 actually recurse can set `"options": { "recursion": "disabled" }`.
@@ -263,8 +269,8 @@ source code, from the examples' optimization log (`docs/benchmarks.md`):
   (`docs/spec_call_return_conversion.md` §5). A chain of `if`/`else if`
   costs one extern per test passed.
 - **Interpreters work, at interpreter cost.** `examples/rhai-bench` and
-  `examples/mruby-bench` run whole scripting engines; they spend about 590
-  and 130 times the externs of the same workloads compiled ahead of time.
+  `examples/mruby-bench` run whole scripting engines; they spend about 1 100
+  and 240 times the externs of the same workloads compiled ahead of time.
   Step such a thing over many frames.
 - **Recursion is affordable, loops are cheaper** (§8).
 

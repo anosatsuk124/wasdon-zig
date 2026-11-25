@@ -514,6 +514,72 @@ loads.
 The existing examples are unchanged by this step: their translations are
 byte for byte what they were (the Unity assets did not need regenerating).
 
+### Step 12 — Takeuchi and Ackermann; recursion without frames
+
+Two workloads were added to `examples/bench`, in UdonSharp, Zig and Rust:
+`Tak`, the Takeuchi function `tarai(8, 4, 0)` (12 605 calls), and `Ack`,
+the Ackermann function `ack(3, 4)` (10 307 calls). The inputs were chosen
+for a size like `fib(20)`'s, before anything was measured.
+
+Their first measurement, with the translator as it was after step 11
+(executed externs):
+
+| | UdonSharp | Zig | Rust | UdonSharp ÷ Zig |
+|---|---:|---:|---:|---:|
+| `Fib` | 251748 | 142296 | 164186 | 1.77 |
+| `Mandel` | 20657 | 16920 | 16920 | 1.22 |
+| `Str` | 194 | 69 | 69 | 2.81 |
+| `Tak` | 248936 | 97682 | 97682 | 2.55 |
+| `Ack` | 164664 | 51292 | 51292 | 3.21 |
+| total | 686199 | 308259 | 330149 | 2.23 |
+| mean of the ratios | | | | 2.31 (Rust 2.26) |
+
+What was left in the recursive ones was frames: an extern per live slot
+each way and the depth counter, around every call. **Unrolling** removes
+them for the first levels: a small function that calls itself gets up to
+64 copies, each with slots of its own, chained so that a copy never calls
+itself (`docs/spec_call_return_conversion.md` §6). After it:
+
+| | UdonSharp | Zig | Rust | UdonSharp ÷ translated |
+|---|---:|---:|---:|---:|
+| `Fib` | 251748 | 76626 | 76626 | 3.29 |
+| `Mandel` | 20657 | 16920 | 16920 | 1.22 |
+| `Str` | 194 | 69 | 69 | 2.81 |
+| `Tak` | 248936 | 22058 | 22058 | 11.29 |
+| `Ack` | 164664 | 38000 | 38000 | 4.33 |
+| total | 686199 | 153673 | 153673 | 4.47 |
+| mean of the ratios | | | | 4.59 (geometric 3.53) |
+| instructions | 3656398 | 1204697 | 1097602 | 3.04, 3.33 |
+
+`Ack` gains least because `ack(3, 4)` recurses 123 deep and only the first
+64 levels are copies. `Mandel` and `Str` are where they were: arithmetic
+and `String.Concat` calls cost the same from any compiler.
+
+What it costs, and what else it changes (`zig build stats -Drust -Drhai
+-Dmruby -Dlinux=…`):
+
+| Example | instr before | after | heap before | after | executed externs before | after |
+|---|---:|---:|---:|---:|---:|---:|
+| `bench-zig` | 2064 | 12084 | 146 | 1297 | 308259 | 153673 |
+| `bench-rs` | 2052 | 12241 | 144 | 1356 | 330149 | 153673 |
+| `bench-wasi-rs` | 59337 | 67352 | 2485 | 3128 | 185936 | 98376 |
+| `wasi-hello` | 33918 | 35966 | 1968 | 2224 | 15438 | 9522 |
+| `wasm-bench` | 10093 | 12141 | 716 | 972 | 8037 | 7509 |
+| `wasm-bench-rs` | 2726 | 4774 | 395 | 651 | 8211 | 7683 |
+| `rhai-bench-rs` | 1180797 | 1275546 | 56412 | 64093 | 109765017 | 109764969 |
+| `mruby-bench` | 498255 | 498255 | 16707 | 16707 | 23789796 | 23789796 |
+| `linux` | 3089877 | 3101762 | 127370 | 128092 | 51691377 | 51691337 |
+
+The interpreters show the other side: Rhai has small self-recursive
+functions that this run never takes deep, so it pays 8 % more code for
+nothing. A first version without a lower bound on the number of copies
+cost it 13 %; requiring that 16 copies fit (functions of at most 128
+instructions) is what brought that down. The examples without recursion
+are unchanged.
+
+The UdonSharp column is the reproduced assembly
+(`examples/bench/README.md`), and every number here is from the emulator.
+
 ### An experiment not adopted: every example at `ReleaseFast`
 
 Building the Zig examples for speed instead of size, measured after step 2:

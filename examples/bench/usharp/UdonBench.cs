@@ -2,11 +2,13 @@ using UdonSharp;
 using UnityEngine;
 
 /// <summary>
-/// The benchmark's three workloads in UdonSharp: the baseline the Zig and
+/// The benchmark's five workloads in UdonSharp: the baseline the Zig and
 /// Rust versions (examples/bench/zig, examples/bench/rs) are measured
-/// against. They are the workloads of the mruby and Rhai benchmarks — a
+/// against. Three are the workloads of the mruby and Rhai benchmarks — a
 /// recursive Fibonacci, an integer Mandelbrot and a string built by
-/// repeated concatenation — written the way one writes U#.
+/// repeated concatenation; two more are the classic recursion tests, the
+/// Takeuchi function (tarai) and the Ackermann function. All written the
+/// way one writes U#.
 ///
 /// Each public method is one workload and leaves its result in a field,
 /// so the cost of formatting and logging is not part of the measurement.
@@ -17,6 +19,13 @@ public class UdonBench : UdonSharpBehaviour
     public int fibResult;
     public int mandelResult;
     public int strResult;
+    public int takX = 8;
+    public int takY = 4;
+    public int takZ = 0;
+    public int takResult;
+    public int ackM = 3;
+    public int ackN = 4;
+    public int ackResult;
 
     public void Fib()
     {
@@ -76,5 +85,30 @@ public class UdonBench : UdonSharpBehaviour
             i += 1;
         }
         strResult = s.Length;
+    }
+
+    public void Tak()
+    {
+        takResult = TakRec(takX, takY, takZ);
+    }
+
+    [RecursiveMethod]
+    private int TakRec(int x, int y, int z)
+    {
+        if (x <= y) return y;
+        return TakRec(TakRec(x - 1, y, z), TakRec(y - 1, z, x), TakRec(z - 1, x, y));
+    }
+
+    public void Ack()
+    {
+        ackResult = AckRec(ackM, ackN);
+    }
+
+    [RecursiveMethod]
+    private int AckRec(int m, int n)
+    {
+        if (m == 0) return n + 1;
+        if (n == 0) return AckRec(m - 1, 1);
+        return AckRec(m - 1, AckRec(m, n - 1));
     }
 }

@@ -106,6 +106,9 @@ pub const Options = struct {
     recursion: RecursionMode = .stack,
     /// Slots in the frame stack used by recursive functions.
     call_stack_size: ?u32 = null,
+    /// Levels of a small self-recursive function that get slots of their
+    /// own instead of saving frames; 0 turns that off.
+    recursion_unroll: ?u32 = null,
 };
 
 /// What the translator can supply for an import of a module that has a
@@ -306,6 +309,7 @@ fn parseOptions(obj: std.json.ObjectMap) errors.ParseError!Options {
         o.recursion = try parseRecursionMode(rs);
     }
     if (obj.get("callStackSize")) |cv| o.call_stack_size = try getU32FromValue(cv);
+    if (obj.get("recursionUnroll")) |uv| o.recursion_unroll = try getU32FromValue(uv);
     return o;
 }
 

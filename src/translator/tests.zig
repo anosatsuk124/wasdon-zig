@@ -40,6 +40,15 @@ const Program = struct {
     }
 };
 
+/// Ways to translate recursion, which every test of it goes through: frames
+/// saved at every level; three levels with slots of their own and frames
+/// below them; and the default.
+const unroll_depths = [_]u32{ 0, 3, 64 };
+
+fn unrolled(depth: u32) wasm.UdonMeta {
+    return .{ .version = 1, .options = .{ .recursion_unroll = depth } };
+}
+
 /// Translate, check and load a module. Any checker finding fails the test.
 fn load(mod: wasm.Module, meta: ?wasm.UdonMeta) !Program {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -1362,14 +1371,20 @@ test "recursion keeps operands and locals live across the call" {
             ifElse(.i32, &.{.{ .i32_const = 1 }}, &.{ .{ .local_get = 0 }, .{ .i32_const = 1 }, .i32_sub, .{ .call = 3 } }),
         } },
     };
-    var p = try load(try callModule(a, &fns, &.{}, null), null);
-    defer p.deinit();
-    _ = try p.vm.runEvent("run");
-    try testing.expectEqual(Value{ .int32 = 610 }, p.global("__G__g0"));
-    try testing.expectEqual(Value{ .int32 = 720 }, p.global("__G__g1"));
-    try testing.expectEqual(Value{ .int32 = 1 }, p.global("__G__g2"));
-    // The frame stack is back where it started.
-    try testing.expectEqual(Value{ .int32 = 0 }, p.global("__frame_depth"));
+    var externs: [unroll_depths.len]u64 = undefined;
+    for (unroll_depths, &externs) |depth, *n| {
+        var p = try load(try callModule(a, &fns, &.{}, null), unrolled(depth));
+        defer p.deinit();
+        _ = try p.vm.runEvent("run");
+        try testing.expectEqual(Value{ .int32 = 610 }, p.global("__G__g0"));
+        try testing.expectEqual(Value{ .int32 = 720 }, p.global("__G__g1"));
+        try testing.expectEqual(Value{ .int32 = 1 }, p.global("__G__g2"));
+        // The frame stack is back where it started.
+        try testing.expectEqual(Value{ .int32 = 0 }, p.global("__frame_depth"));
+        n.* = p.vm.stats.externs;
+    }
+    // Every level that has its own slots saves that much work.
+    try testing.expect(externs[1] < externs[0] and externs[2] < externs[1]);
 }
 
 test "recursion: a local read before the call but used after it survives" {
@@ -1396,10 +1411,12 @@ test "recursion: a local read before the call but used after it survives" {
     mod.types_ = try a.dupe(FuncType, &.{ void_type, .{ .params = &.{.i32}, .results = &.{.i32} } });
     mod.funcs = try a.dupe(u32, &.{ 0, 1 });
     mod.codes = try a.dupe(wasm.module.Code, &.{ mod.codes[0], .{ .locals = &.{}, .body = &f_body } });
-    var p = try load(mod, null);
-    defer p.deinit();
-    _ = try p.vm.runEvent("run");
-    try testing.expectEqual(Value{ .int32 = 55 }, p.global("__G__g2"));
+    for (unroll_depths) |depth| {
+        var p = try load(mod, unrolled(depth));
+        defer p.deinit();
+        _ = try p.vm.runEvent("run");
+        try testing.expectEqual(Value{ .int32 = 55 }, p.global("__G__g2"));
+    }
 }
 
 test "a self call may pass its own parameters in a different order" {
@@ -1415,11 +1432,77 @@ test "a self call may pass its own parameters in a different order" {
             ifElse(.i32, &.{.{ .local_get = 1 }}, &.{ .{ .local_get = 1 }, .{ .local_get = 0 }, .{ .i32_const = 1 }, .i32_sub, .{ .call = 1 } }),
         } },
     };
-    var p = try load(try callModule(a, &fns, &.{}, null), null);
-    defer p.deinit();
-    _ = try p.vm.runEvent("run");
-    // f(3,10) → f(10,2) → f(2,9) → f(9,1) → f(1,8) → f(8,0) → f(0,7) = 7
-    try testing.expectEqual(Value{ .int32 = 7 }, p.global("__G__g0"));
+    for (unroll_depths) |depth| {
+        var p = try load(try callModule(a, &fns, &.{}, null), unrolled(depth));
+        defer p.deinit();
+        _ = try p.vm.runEvent("run");
+        // f(3,10) → f(10,2) → f(2,9) → f(9,1) → f(1,8) → f(8,0) → f(0,7) = 7
+        try testing.expectEqual(Value{ .int32 = 7 }, p.global("__G__g0"));
+    }
+}
+
+test "unrolled recursion: levels with slots of their own save nothing; the original takes over below them" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // sum(n) = n == 0 ? 0 : n + sum(n - 1), with n live across the call.
+    const fns = [_]Fn{
+        .{ .ty = void_type, .body = &.{ .{ .i32_const = 20 }, .{ .call = 1 }, .{ .global_set = 0 } } },
+        .{ .ty = i_i, .body = &.{
+            .{ .local_get = 0 },                                                                                                                            .i32_eqz,
+            ifElse(.i32, &.{.{ .i32_const = 0 }}, &.{ .{ .local_get = 0 }, .{ .i32_const = 1 }, .i32_sub, .{ .call = 1 }, .{ .local_get = 0 }, .i32_add }),
+        } },
+    };
+    const mod = try callModule(a, &fns, &.{}, null);
+    var cost: [3]u64 = undefined;
+    for ([_]u32{ 0, 8, 64 }, &cost) |depth, *n| {
+        var p = try load(mod, unrolled(depth));
+        defer p.deinit();
+        _ = try p.vm.runEvent("run");
+        try testing.expectEqual(Value{ .int32 = 210 }, p.global("__G__g0"));
+        n.* = p.vm.stats.externs;
+        // Deep enough copies: no frame is ever saved, so the frame stack
+        // is not even declared — the original function is still there for
+        // a deeper recursion, but this one never reaches it.
+        if (depth == 64) try testing.expectEqual(Value{ .int32 = 0 }, p.global("__frame_depth"));
+    }
+    // 20 levels each cost a subtraction, a test and an addition; a saved
+    // frame costs four externs more (one slot and the depth, each way).
+    try testing.expectEqual(@as(u64, 4 * 20), cost[0] - cost[2]);
+    try testing.expectEqual(@as(u64, 4 * 8), cost[0] - cost[1]);
+}
+
+test "unrolled recursion: mutual recursion and functions reached through the table are left alone" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const unroll = @import("unroll.zig");
+    // 1: self-recursive, small. 2 ⇄ 3: mutually recursive. 4: calls itself
+    // and, through the table, could be called back by 5, which calls 4.
+    const self_call = [_]I{ .{ .local_get = 0 }, .{ .call = 1 } };
+    const fns = [_]Fn{
+        .{ .ty = void_type, .body = &.{ .{ .i32_const = 1 }, .{ .call = 1 }, .drop, .{ .i32_const = 1 }, .{ .call = 4 }, .drop } },
+        .{ .ty = i_i, .body = &self_call },
+        .{ .ty = i_i, .body = &.{ .{ .local_get = 0 }, .{ .call = 3 } } },
+        .{ .ty = i_i, .body = &.{ .{ .local_get = 0 }, .{ .call = 2 } } },
+        .{ .ty = i_i, .body = &.{ .{ .local_get = 0 }, .{ .call = 4 }, .{ .i32_const = 1 }, .{ .call_indirect = 1 } } },
+        .{ .ty = i_i, .body = &.{ .{ .local_get = 0 }, .{ .call = 4 } } },
+    };
+    const mod = try callModule(a, &fns, &.{5}, null);
+    const out = try unroll.unroll(a, mod, .{ .depth = 4 });
+    // Four copies of function 1 and nothing else.
+    try testing.expectEqual(mod.funcs.len + 4, out.funcs.len);
+    // Callers go to the first copy, each copy to the next, the last to
+    // the original, which still calls itself.
+    try testing.expectEqual(@as(u32, 6), out.codes[0].body[1].call);
+    try testing.expectEqual(@as(u32, 4), out.codes[0].body[4].call);
+    try testing.expectEqual(@as(u32, 7), out.codes[6].body[1].call);
+    try testing.expectEqual(@as(u32, 1), out.codes[9].body[1].call);
+    try testing.expectEqual(@as(u32, 1), out.codes[1].body[1].call);
+    // A function too large for enough copies within the budget is left
+    // alone.
+    try testing.expectEqual(mod.funcs.len, (try unroll.unroll(a, mod, .{ .depth = 4, .budget = 7 })).funcs.len);
+    try testing.expectEqual(mod.funcs.len, (try unroll.unroll(a, mod, .{ .budget = 16 })).funcs.len);
 }
 
 test "call_indirect dispatches through the table; an empty slot traps" {

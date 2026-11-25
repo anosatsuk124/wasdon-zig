@@ -86,6 +86,8 @@ pub const Disable = struct {
     masks: bool = false,
     /// Lower every `br_table` as a chain of comparisons.
     jump_tables: bool = false,
+    /// No copies of self-recursive functions for the first levels.
+    unroll: bool = false,
 };
 
 pub const Stats = Asm.Stats;
@@ -258,13 +260,24 @@ pub const Translator = struct {
     }
 
     /// Rewrites of the module that come before translation: atomics as
-    /// one thread executes them (`threads.zig`), and host interfaces —
+    /// one thread executes them (`threads.zig`), the first levels of
+    /// small recursive functions as copies (`unroll.zig`), and host
+    /// interfaces —
     /// WASI, and whatever `__udon_meta.imports` names — as functions of
     /// the module itself, with the Udon variables those keep state in
     /// (`wasi.zig`).
     fn link(self: *Translator) Error!void {
         const threads = @import("threads.zig");
         if (threads.used(self.mod)) self.mod = try threads.singleThread(self.arena(), self.mod);
+
+        const recursion = if (self.meta) |m| m.options.recursion else .stack;
+        if (!self.options.disable.unroll and recursion == .stack) {
+            var unroll: @import("unroll.zig").Options = .{};
+            if (self.meta) |m| if (m.options.recursion_unroll) |depth| {
+                unroll.depth = depth;
+            };
+            self.mod = try @import("unroll.zig").unroll(self.arena(), self.mod, unroll);
+        }
 
         const wasi = @import("wasi.zig");
         var offender: []const u8 = "";

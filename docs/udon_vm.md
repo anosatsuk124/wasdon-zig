@@ -186,7 +186,7 @@ on. Three facilities narrow it down:
   derived,pending_loads` disables the named lowering optimizations
   (`translate.Disable`: `liveness`, `stack_return`, `bool_locals`,
   `pending_loads`, `memory_copies`, `byte_operators`, `derived`, `masks`,
-  `jump_tables`). The smallest set that makes the fault disappear names the
+  `jump_tables`, `unroll`). The smallest set that makes the fault disappear names the
   code to read.
 - **The store digest.** The emulator keeps a running digest of every write
   to a byte array (`Vm.stores`: count and hash). `run --stop-at-store N`

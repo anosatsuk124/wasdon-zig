@@ -24,8 +24,8 @@ called through the function table, deep mutual recursion.
 | executed | 624 933 773 instructions, 109 765 017 `EXTERN`s |
 
 The same three workloads compiled ahead of time
-([`examples/bench/wasi-rs`](../bench/wasi-rs/)) execute 185 936 externs, so
-interpreting them costs about 590 times as much. This example is a test of
+([`examples/bench/wasi-rs`](../bench/wasi-rs/)) execute 98 376 externs, so
+interpreting them costs about 1 100 times as much. This example is a test of
 the translator, not a recommendation: one Udon event has ten seconds, and
 this run does not fit in them. A script interpreter in a world has to be
 stepped over many frames, the way [`examples/pi`](../pi/) steps its
