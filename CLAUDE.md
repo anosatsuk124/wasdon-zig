@@ -13,7 +13,7 @@ Read the `docs/` specs before designing or changing any translation logic; the W
 - Zig is pinned via `mise` (`mise.toml`); `build.zig.zon` requires `minimum_zig_version = "0.16.0"`.
 - Build the CLI: `zig build` → `zig-out/bin/wasdon_zig`
 - Run the CLI: `zig build run -- <args>` (`inspect`, `translate`, `check`, `run`)
-- Run all tests: `zig build test` (add `-Drust` to include the Rust examples; needs `cargo` + the `wasm32v1-none` and `wasm32-wasip1` targets. `-Drhai` adds `examples/rhai-bench` and `-Dmruby` adds `examples/mruby-bench`, whole interpreters in Rust and C: run them after any change to `lower.zig` — they are the tests that find miscompilations)
+- Run all tests: `zig build test` (add `-Drust` to include the Rust examples; needs `cargo` + the `wasm32v1-none` and `wasm32-wasip1` targets. `-Drhai` adds `examples/rhai-bench` and `-Dmruby` adds `examples/mruby-bench`, whole interpreters in Rust and C: run them after any change to `lower.zig` — they are the tests that find miscompilations. `-Dlinux=<path to vmlinux.wasm>` translates and boots a Linux kernel, see `examples/linux`)
 - Build the example modules: `zig build examples`
 - Size / executed-instruction table for every example: `zig build stats` (`-- --profile <example>` for an extern profile)
 - Regenerate the examples' Unity assets: `zig build unity` — required after any change to the translator's output; `zig build test` fails while `unity/Wasdon/Examples/*.uasm.txt` is stale
@@ -25,7 +25,7 @@ Read the `docs/` specs before designing or changing any translation logic; the W
 
 - `src/wasm/` — WASM binary parser and `__udon_meta` decoding. Knows nothing about Udon.
 - `src/udon/` — Udon Assembly. `asm.zig` builds and writes programs; `program.zig` reads the text back; `check.zig` validates it; `vm.zig` + `externs.zig` execute it; `nodes.zig` is the node list and signature parser. Knows nothing about WASM.
-- `src/translator/` — the lowering. `translate.zig` is module level (what exists, events, init); `lower.zig` lowers function bodies; `callgraph.zig` finds recursion; `liveness.zig` finds the locals live at each call and the ones that are only conditions; `wasi.zig` links WASI preview 1 into a module as WebAssembly; `inspect.zig` reports what a module needs.
+- `src/translator/` — the lowering. `translate.zig` is module level (what exists, events, init); `lower.zig` lowers function bodies; `callgraph.zig` finds recursion; `liveness.zig` finds the locals live at each call and the ones that are only conditions; `threads.zig` rewrites atomics for the one thread there is; `wasi.zig` links host interfaces into a module as WebAssembly — WASI preview 1, and the imports `__udon_meta.imports` binds; `inspect.zig` reports what a module needs.
 - `src/root.zig` — the public library module (`@import("wasdon_zig")`).
 - `src/main.zig` — the CLI; the only place that touches `std.process.Init`/stdio.
 

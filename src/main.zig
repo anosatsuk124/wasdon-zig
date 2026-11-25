@@ -19,7 +19,7 @@ const usage =
     \\      bool_locals, pending_loads, memory_copies, byte_operators, derived,
     \\      masks, jump_tables), to see whether one of them is behind a wrong
     \\      result.
-    \\  wasdon-zig inspect <input.wasm>
+    \\  wasdon-zig inspect <input.wasm> [--meta <file.json>]
     \\      Report the module's size, its imports, and everything in it the
     \\      translator does not support — all of it, where `translate` stops
     \\      at the first.
@@ -72,12 +72,26 @@ pub fn main(init: std.process.Init) !u8 {
 }
 
 fn runInspect(cli: *Cli, args: []const []const u8) !u8 {
-    if (args.len != 1) return cli.fail("inspect takes one WASM file", .{});
-    const bytes = readFile(cli, args[0]) catch |e| return cli.fail("{s}: {t}", .{ args[0], e });
-    const mod = wasdon_zig.wasm.parseModule(cli.arena, bytes) catch |e| return cli.fail("{s}: not a module this parser reads: {t}", .{ args[0], e });
+    var input: ?[]const u8 = null;
+    var meta_path: ?[]const u8 = null;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--meta") and i + 1 < args.len) {
+            i += 1;
+            meta_path = args[i];
+        } else if (input == null) {
+            input = args[i];
+        } else return cli.fail("inspect takes one WASM file", .{});
+    }
+    const path = input orelse return cli.fail("inspect takes one WASM file", .{});
+    const bytes = readFile(cli, path) catch |e| return cli.fail("{s}: {t}", .{ path, e });
+    const mod = wasdon_zig.wasm.parseModule(cli.arena, bytes) catch |e| return cli.fail("{s}: not a module this parser reads: {t}", .{ path, e });
     // Metadata that cannot be read is reported by `translate`; here it only
     // decides which imports count as bound.
-    const meta = wasdon_zig.wasm.parseUdonMetaFromModule(cli.arena, mod) catch null;
+    const meta = if (meta_path) |p| meta: {
+        const json = readFile(cli, p) catch |e| return cli.fail("cannot read {s}: {t}", .{ p, e });
+        break :meta wasdon_zig.wasm.udon_meta.parse(cli.arena, json) catch null;
+    } else wasdon_zig.wasm.parseUdonMetaFromModule(cli.arena, mod) catch null;
     const census = try wasdon_zig.translator.inspect.census(cli.arena, mod, meta);
     const w = &cli.out.interface;
     try wasdon_zig.translator.inspect.report(&census, w);

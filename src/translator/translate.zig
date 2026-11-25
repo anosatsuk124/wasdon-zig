@@ -100,7 +100,7 @@ pub fn translate(
 ) Error!Stats {
     var t: Translator = try .init(gpa, mod, meta, options);
     defer t.deinit();
-    try t.linkWasi();
+    try t.link();
     try t.run();
     try t.a.render(writer);
     return t.a.stats();
@@ -257,28 +257,29 @@ pub const Translator = struct {
         return self.arena_state.allocator();
     }
 
-    /// A module built for WASI gets its system interface as functions of
-    /// its own (`wasi.zig`), and the Udon variables those keep state in.
-    fn linkWasi(self: *Translator) Error!void {
+    /// Rewrites of the module that come before translation: atomics as
+    /// one thread executes them (`threads.zig`), and host interfaces —
+    /// WASI, and whatever `__udon_meta.imports` names — as functions of
+    /// the module itself, with the Udon variables those keep state in
+    /// (`wasi.zig`).
+    fn link(self: *Translator) Error!void {
+        const threads = @import("threads.zig");
+        if (threads.used(self.mod)) self.mod = try threads.singleThread(self.arena(), self.mod);
+
         const wasi = @import("wasi.zig");
-        if (!wasi.used(self.mod)) return;
         var offender: []const u8 = "";
-        self.mod = wasi.link(self.arena(), self.mod, self.strict(), &offender) catch |e| switch (e) {
+        var fields: std.ArrayList(wasm.udon_meta.Field) = .empty;
+        if (self.meta) |m| try fields.appendSlice(self.arena(), m.fields);
+        const before = fields.items.len;
+        const bindings: []const wasm.udon_meta.ImportBinding = if (self.meta) |m| m.imports else &.{};
+        self.mod = wasi.link(self.arena(), self.mod, bindings, self.strict(), &fields, &offender) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
             error.WasiUnknownImport => return self.fail(error.Unsupported, "'{s}' is not a function of " ++ wasi.module_name, .{offender}),
-            error.WasiSignatureMismatch => return self.fail(error.Invalid, "import " ++ wasi.module_name ++ ".{s} does not have that function's type", .{offender}),
+            error.WasiSignatureMismatch => return self.fail(error.Invalid, "import '{s}' does not have the type of the host function it is bound to", .{offender}),
         };
+        if (fields.items.len == before) return;
         var meta: wasm.UdonMeta = self.meta orelse .{ .version = 1 };
-        var all: std.ArrayList(wasm.udon_meta.Field) = .empty;
-        try all.appendSlice(self.arena(), meta.fields);
-        for (wasi.fields) |f| {
-            // Only the buffers the linked functions actually use.
-            const bound = for (self.mod.imports) |imp| {
-                if (std.mem.eql(u8, imp.name, f.source.name.?) or std.mem.eql(u8, imp.name, f.source.setter.?)) break true;
-            } else false;
-            if (bound) try all.append(self.arena(), f);
-        }
-        meta.fields = all.items;
+        meta.fields = fields.items;
         self.meta = meta;
     }
 
@@ -543,7 +544,7 @@ pub const Translator = struct {
 
     fn declareMemory(self: *Translator) Error!void {
         const limits = self.memoryLimits() orelse return;
-        if (limits.shared) return self.fail(error.Unsupported, "the module's memory is shared (threads proposal); the Udon VM runs one thread. `wasdon-zig inspect` lists everything a module needs", .{});
+        // A shared memory is an ordinary one when there is one thread.
         const opts: wasm.udon_meta.MemoryOptions = if (self.meta) |m| m.options.memory else .{};
 
         // The initial size must cover what the module declares and every
@@ -741,10 +742,14 @@ pub const Translator = struct {
                         continue;
                     };
                     var v: udon.asm_.Var = .{ .name = f.udon_name orelse f.key, .type_name = try self.fieldType(f, "SystemInt32") };
-                    const int = std.mem.eql(u8, v.type_name, "SystemInt32");
-                    if (!int and !std.mem.eql(u8, v.type_name, "SystemSingle"))
-                        return self.fail(error.Unsupported, "field '{s}': a memory-backed field must be int or float", .{f.key});
-                    v.init = if (int) .{ .int32 = 0 } else .{ .single = 0 };
+                    v.init = if (std.mem.eql(u8, v.type_name, "SystemInt32"))
+                        .{ .int32 = 0 }
+                    else if (std.mem.eql(u8, v.type_name, "SystemSingle"))
+                        .{ .single = 0 }
+                    else if (std.mem.eql(u8, v.type_name, "SystemString"))
+                        .{ .string = "" }
+                    else
+                        return self.fail(error.Unsupported, "field '{s}': a memory-backed field must be int, float or string", .{f.key});
                     try self.applyFieldAttributes(&v, f);
                     try self.symbol_fields.append(a, .{ .sym = try self.declareUnique(v), .type_name = v.type_name, .address = @bitCast(addr) });
                 },
@@ -1099,7 +1104,13 @@ pub const Translator = struct {
     fn emitInit(self: *Translator, inited: Sym) Error!void {
         const a = &self.a;
         const c0 = try self.constI32(0);
-        for (self.symbol_fields.items) |sf| _ = try self.storeArray(symbolFieldType(sf));
+        for (self.symbol_fields.items) |sf| {
+            if (std.mem.eql(u8, sf.type_name, "SystemString")) {
+                _ = try self.utf8Sym();
+                _ = try self.poolSym();
+                _ = try self.poolOffset(1, 0);
+            } else _ = try self.storeArray(symbolFieldType(sf));
+        }
         // `true` cannot be written as a literal; compute it.
         try a.call("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean", &.{ c0, c0, inited });
 
@@ -1199,20 +1210,34 @@ pub const Translator = struct {
 
         try self.emitGlobalInits();
 
-        // Inspector-assigned values of memory-backed fields go into memory
-        // once, after the data segments that hold their defaults.
-        for (self.symbol_fields.items) |sf| {
-            const ty = symbolFieldType(sf);
-            const mem = self.mem orelse return self.fail(error.Invalid, "memory-backed field without a linear memory", .{});
-            const st = try self.storeArray(ty);
-            try a.call(if (ty == .i32) "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid" else "SystemSingleArray.__Set__SystemInt32_SystemSingle__SystemVoid", &.{ st, c0, sf.sym });
-            try a.call(block_copy, &.{ st, c0, mem, try self.constI32(@bitCast(sf.address)), try self.constI32(4) });
-        }
-
         if (self.mod.start) |s| {
             const f = &self.funcs[s];
             if (f.import != null or f.ty.params.len != 0) return self.fail(error.Unsupported, "the start function must be a defined function without parameters", .{});
             try self.emitCall(f);
+        }
+
+        // Inspector-assigned values of memory-backed fields go into memory
+        // once, after everything that puts their defaults there: the data
+        // segments, and the start function of a module that copies its
+        // data in itself (passive segments).
+        for (self.symbol_fields.items) |sf| {
+            const mem = self.mem orelse return self.fail(error.Invalid, "memory-backed field without a linear memory", .{});
+            const at = try self.constI32(@bitCast(sf.address));
+            if (std.mem.eql(u8, sf.type_name, "SystemString")) {
+                // The text as UTF-8, and the NUL a C string ends with.
+                const bytes = try a.declare(.{ .name = "__field_bytes", .type_name = "SystemByteArray" });
+                const len = try a.declare(.{ .name = "__field_len", .type_name = "SystemInt32", .init = .{ .int32 = 0 } });
+                try a.call("SystemTextEncoding.__GetBytes__SystemString__SystemByteArray", &.{ try self.utf8Sym(), sf.sym, bytes });
+                try a.call("SystemByteArray.__get_Length__SystemInt32", &.{ bytes, len });
+                try a.call(block_copy, &.{ bytes, c0, mem, at, len });
+                try a.call("SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32", &.{ at, len, len });
+                try a.call(block_copy, &.{ try self.poolSym(), try self.constI32(@intCast(try self.poolOffset(1, 0))), mem, len, try self.constI32(1) });
+                continue;
+            }
+            const ty = symbolFieldType(sf);
+            const st = try self.storeArray(ty);
+            try a.call(if (ty == .i32) "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid" else "SystemSingleArray.__Set__SystemInt32_SystemSingle__SystemVoid", &.{ st, c0, sf.sym });
+            try a.call(block_copy, &.{ st, c0, mem, at, try self.constI32(4) });
         }
     }
 

@@ -682,6 +682,10 @@ const str = struct {
         if (c.c > 0x7F) return -1;
         return if (std.mem.indexOfScalar(u8, s, @intCast(c.c))) |i| @intCast(i) else -1;
     }
+    /// `TrimEnd()`: without the white space at the end.
+    fn trimEnd(_: *Vm, s: []const u8) Error![]const u8 {
+        return std.mem.trimEnd(u8, s, " \t\r\n\x0b\x0c");
+    }
     fn substring1(vm: *Vm, s: []const u8, start: i32) Error![]const u8 {
         return substring2(vm, s, start, @as(i32, @intCast(s.len)) - start);
     }
@@ -1170,6 +1174,7 @@ const fixed_entries = [_]KV{
     .{ "SystemString.__Equals__SystemString__SystemBoolean", wrap(str.equal) },
     .{ "SystemString.__IsNullOrEmpty__SystemString__SystemBoolean", wrap(str.isNullOrEmpty) },
     .{ "SystemString.__Substring__SystemInt32__SystemString", wrap(str.substring1) },
+    .{ "SystemString.__TrimEnd__SystemString", wrap(str.trimEnd) },
     .{ "SystemString.__Substring__SystemInt32_SystemInt32__SystemString", wrap(str.substring2) },
     .{ "SystemString.__Format__SystemString_SystemObject__SystemString", wrap(str.format1) },
     .{ "SystemString.__Format__SystemString_SystemObject_SystemObject__SystemString", wrap(str.format2) },

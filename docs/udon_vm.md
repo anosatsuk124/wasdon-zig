@@ -125,6 +125,13 @@ does it — with one deliberate exception, which the emulator recognizes: a
 return address left standing at a `JUMP` and popped later by a `COPY` with
 a single operand (`docs/spec_call_return_conversion.md` §4, `stack` mode).
 
+An event that ends inside such calls — a trap, `proc_exit`, a host call
+bound to `halt` — leaves their parked return addresses where they are. The
+real VM's stack is not cleared between events, so they stay below
+everything pushed later, unused; it grows by the depth of the abandoned
+recursion each time that happens. The emulator accepts this (and discards
+them); any *other* entry left at the end of an event is still a fault.
+
 Udon Assembly from other compilers can be run with the check off. That is
 how the UdonSharp side of the benchmark is measured
 (`examples/bench/usharp`): UdonSharp parks every return address on the

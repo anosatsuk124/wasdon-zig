@@ -663,7 +663,11 @@ pub const Vm = struct {
                 .invalid => return self.raise("executed a non-instruction (parameter word or unresolved symbol)", .{}),
             }
         }
-        if (strict and self.sp != frame_sp) return self.raise("stack not empty when the event returned", .{});
+        if (strict and self.sp != base_sp) return self.raise("stack not empty when the event returned", .{});
+        // An event that ends inside recursive calls — a trap, an exit —
+        // leaves their parked return addresses behind. The real VM keeps
+        // them on its stack, where nothing will ever look at them.
+        self.sp = frame_sp;
     }
 
     /// Extern signatures by descending execution count.

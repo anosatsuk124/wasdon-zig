@@ -18,6 +18,8 @@ pub const Example = struct {
     name: []const u8,
     /// The module to translate; empty when `uasm` is given.
     wasm: []const u8 = "",
+    /// `__udon_meta` JSON kept beside the module instead of in it.
+    meta: ?[]const u8 = null,
     /// Udon Assembly from another compiler, run as it is. It is not held
     /// to the checker's rules for translator output (UdonSharp, for one,
     /// keeps return addresses on the VM stack across jumps).
@@ -447,7 +449,34 @@ const mruby_examples = if (build_options.with_mruby) [_]Example{.{
     .optional = true,
 }} else [_]Example{};
 
-pub const examples = zig_examples ++ bench_examples ++ rust_examples ++ rhai_examples ++ mruby_examples;
+/// The Linux kernel built for WebAssembly (`examples/linux`), booted as far
+/// as one thread goes: all of `start_kernel`, up to the first switch to
+/// another task. The binary is not in the repository; `-Dlinux=<path>`
+/// names one.
+const linux_examples = if (build_options.with_linux) [_]Example{.{
+    .name = "linux",
+    .wasm = @embedFile("vmlinux.wasm"),
+    .meta = @embedFile("vmlinux.udon_meta.json"),
+    .scenario = "_start",
+    .verify = linuxVerify,
+    .optional = true,
+}} else [_]Example{};
+
+fn linuxVerify(vm: *Vm) !void {
+    const log = try vm.logText();
+    // Whatever build of the kernel this is, it says so first, …
+    try std.testing.expect(std.mem.startsWith(u8, log, "Linux version "));
+    // … gets its command line from the Udon variable, brings up its
+    // console, …
+    for ([_][]const u8{ "Kernel command line: console=hvc\n", "printk: console [hvc0] enabled\n", "Mount-cache hash table entries" }) |line| {
+        try std.testing.expect(std.mem.indexOf(u8, log, line) != null);
+    }
+    // … and stops where it needs a second thread of execution.
+    try std.testing.expect(std.mem.endsWith(u8, log, "env.wasm_create_and_run_task was called: this host does not have it, and the event ends here\n"));
+    try std.testing.expectEqual(udon.vm.LogLevel.err, vm.logs.items[vm.logs.items.len - 1].level);
+}
+
+pub const examples = zig_examples ++ bench_examples ++ rust_examples ++ rhai_examples ++ mruby_examples ++ linux_examples;
 
 pub fn find(name: []const u8) ?Example {
     for (examples) |e| if (std.mem.eql(u8, e.name, name)) return e;
@@ -496,7 +525,7 @@ pub fn run(gpa: std.mem.Allocator, ex: Example, options: wasdon.Options) !Result
     const a = arena.allocator();
 
     var text: std.Io.Writer.Allocating = .init(a);
-    const size: ?wasdon.Stats = if (ex.uasm == null) try wasdon.translateBytes(gpa, ex.wasm, &text.writer, options) else null;
+    const size: ?wasdon.Stats = if (ex.uasm == null) try wasdon.translateWithMeta(gpa, ex.wasm, ex.meta, &text.writer, options) else null;
     const uasm = ex.uasm orelse text.written();
 
     const prog = try a.create(udon.program.Program);

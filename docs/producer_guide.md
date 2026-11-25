@@ -24,9 +24,15 @@ table index of `call_indirect` are read as well, so the output of
 toolchains that enable bulk memory and reference types by default
 translates.
 
+A module built with threads — shared memory, atomic instructions — is
+translated as the one thread the Udon VM has executes it: atomics become
+ordinary accesses, and a wait that nothing could end is a trap
+(`docs/spec_linear_memory.md` §12). There is no reason to build for
+threads on purpose; this is for modules that already are.
+
 Not supported: multi-value block parameters, reference-typed values and
-table instructions, SIMD, threads/atomics, tail calls, exception handling,
-memory64. `wasdon_zig inspect` lists what a given module uses.
+table instructions, SIMD, tail calls, exception handling, memory64.
+`wasdon_zig inspect` lists what a given module uses.
 
 | Toolchain | Setup |
 |---|---|
@@ -287,6 +293,34 @@ wasdon_zig run app.uasm --events _start
   program that uses them only for error exits can be built with a shim
   header (`examples/mruby-bench/shim/setjmp.h`).
 
+## 9c. Modules you cannot rebuild
+
+A WebAssembly module made for another host imports that host's functions.
+A sidecar file can stand in for the host without touching the module
+(`docs/spec_host_import_conversion.md` §8):
+
+```json
+{
+  "version": 1,
+  "fields": {
+    "commandLine": { "source": { "kind": "symbol", "name": "boot_command_line" }, "type": "string", "default": "console=hvc" }
+  },
+  "imports": {
+    "env.console_put": { "as": "write" },
+    "env.now":         { "as": "clock" },
+    "env.sys_*":       { "returns": -38 },
+    "env.*":           { "as": "halt" }
+  }
+}
+```
+
+```sh
+wasdon_zig inspect   module.wasm --meta module.udon_meta.json   # what is still unbound
+wasdon_zig translate module.wasm --meta module.udon_meta.json -o module.uasm
+```
+
+`examples/linux` does this with a Linux kernel.
+
 ---
 
 ## 10. Build, translate, check, run
@@ -314,7 +348,7 @@ Udon Assembly Program Asset only holds programs of up to 512 heap slots.
 
 ## Checklist
 
-- [ ] Bulk memory enabled; no multi-value, reference types, or threads.
+- [ ] Bulk memory enabled; no multi-value or reference types.
 - [ ] Every extern import name appears verbatim in `docs/udon_nodes.txt`
       (`translate --strict` checks).
 - [ ] Handles never stored in memory or used as numbers.

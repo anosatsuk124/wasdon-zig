@@ -17,7 +17,7 @@ test`; `zig build stats` prints what each costs (`docs/benchmarks.md`).
 | [`mruby-bench`](mruby-bench/) | Ruby: mruby, 60 000 lines of C built with `zig cc`, running the same workloads from bytecode. Built with `-Dmruby`. |
 | [`udon-orbit`](udon-orbit/), [`udon-orbit-rs`](udon-orbit-rs/) | The basics, in Zig and Rust: Inspector fields, object handles, instantiating a prefab. |
 | [`wasm-bench`](wasm-bench/), [`wasm-bench-rs`](wasm-bench-rs/), [`wasm-bench-alloc-rs`](wasm-bench-alloc-rs/) | A self-checking tour of the WebAssembly instruction set; the last one with a heap allocator. |
-| [`linux`](linux/) | What happens when the input is the Linux kernel built for WebAssembly. |
+| [`linux`](linux/) | The Linux kernel built for WebAssembly: translated whole, it boots through `start_kernel` in the emulator and prints its log. Needs a `vmlinux.wasm` (`-Dlinux=<path>`). |
 
 Layout of the Zig examples:
 

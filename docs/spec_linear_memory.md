@@ -193,8 +193,11 @@ The init routine (`docs/spec_call_return_conversion.md` §7):
    ```
 
    Two externs per segment regardless of its size.
-3. Memory-backed fields (`docs/spec_udonmeta_conversion.md`) are written
-   after the segments.
+3. The module's start function runs. For a module built with threads
+   this is where its data arrives: such a module keeps all of it in
+   passive segments and copies them in itself (`memory.init`, §6).
+4. Memory-backed fields (`docs/spec_udonmeta_conversion.md`) are written
+   last, over whatever defaults steps 2 and 3 put there.
 
 Segment offsets must be constant expressions.
 
@@ -240,8 +243,37 @@ each loaded `UInt32` into an `Int32` slot.
 
 Measured effect on whole programs is in `docs/benchmarks.md`.
 
-## 12. Limits
+## 12. Shared memory and atomics
+
+A module built for threads (`-matomics`; in Rust and C, any target with
+`+atomics`) declares its memory `shared` and uses the instructions of the
+0xFE prefix. The Udon VM runs one thread, and on one thread an atomic
+access is an ordinary one: nothing can come between its read and its
+write. `src/translator/threads.zig` rewrites those instructions into plain
+WebAssembly before translation, so the lowering never sees them:
+
+| Instruction | Becomes |
+|---|---|
+| `T.atomic.load*`, `T.atomic.store*` | the plain load (zero-extending) or store of that width |
+| `T.atomic.rmw*.{add,sub,and,or,xor}` | `old = load; store(old op operand); old` |
+| `T.atomic.rmw*.xchg` | `old = load; store(operand); old` |
+| `T.atomic.rmw*.cmpxchg` | `old = load; store(old == expected ? replacement : old); old` — for a narrow access `expected` is masked to its width first |
+| `atomic.fence` | nothing |
+| `memory.atomic.notify` | `0`: nobody is waiting |
+| `memory.atomic.wait32/64` | `1` ("not equal") if the cell differs from the expected value; otherwise `2` ("timed out") — or, with no timeout, a trap: nobody can wake it |
+
+The rewriting uses seven scratch locals appended to each function that
+needs them. A shared memory is declared like any other; its maximum is
+capped at what one `byte[]` can hold (§13).
+
+What this does not give a threaded program is its other threads. Code
+that only protects its data with atomics runs as it would with no
+contention; code that waits for another thread traps, or reaches a host
+call that would have started one
+(`docs/spec_host_import_conversion.md` §8, `examples/linux`).
+
+## 13. Limits
 
 - At most 2 GiB − 64 KiB of memory.
-- One memory; no shared memory, no atomics, no memory64.
-- Passive data segments are rejected.
+- One memory; no memory64. Shared memory and atomics as one thread
+  executes them (§12).

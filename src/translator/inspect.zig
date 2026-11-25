@@ -55,8 +55,7 @@ pub const Census = struct {
 
     /// Nothing in the module is beyond the translator.
     pub fn translatable(c: *const Census) bool {
-        const shared = if (c.memory) |m| m.shared else false;
-        return !shared and c.atomicTotal() == 0 and c.multi_value_blocks == 0 and c.unknown_imports.items.len == 0;
+        return c.multi_value_blocks == 0 and c.unknown_imports.items.len == 0;
     }
 };
 
@@ -106,6 +105,7 @@ pub fn census(arena: std.mem.Allocator, mod: wasm.Module, meta: ?wasm.UdonMeta) 
 
 fn boundByMeta(meta: ?wasm.UdonMeta, imp: wasm.module.Import) bool {
     const m = meta orelse return false;
+    for (m.imports) |b| if (@import("wasi.zig").matches(b.pattern, imp)) return true;
     for (m.fields) |f| {
         if (f.source.kind != .import) continue;
         if (f.source.name) |n| if (std.mem.eql(u8, n, imp.name)) return true;
@@ -168,20 +168,18 @@ pub fn report(c: *const Census, w: *std.Io.Writer) !void {
     if (c.wasi_implemented + c.wasi_stubbed != 0)
         try w.print("WASI preview 1       {d} functions implemented, {d} answered \"not available\"\n", .{ c.wasi_implemented, c.wasi_stubbed });
 
-    try w.writeAll("\nNot supported by the translator:\n");
-    var any = false;
-    if (c.memory) |m| if (m.shared) {
-        any = true;
-        try w.writeAll("  - shared memory (threads): the Udon VM runs one thread\n");
-    };
-    if (c.atomicTotal() != 0) {
-        any = true;
-        try w.print("  - {d} atomic instructions (threads):", .{c.atomicTotal()});
+    const shared = if (c.memory) |m| m.shared else false;
+    if (shared or c.atomicTotal() != 0) {
+        // Translated, but as one thread executes them: say so.
+        try w.print("threads              {s}{d} atomic instructions, run as the one thread there is:", .{ if (shared) "shared memory, " else "", c.atomicTotal() });
         inline for (@typeInfo(wasm.instruction.Atomic.Kind).@"enum".fields, 0..) |f, i| {
             if (c.atomics[i] != 0) try w.print(" {s} {d}", .{ f.name, c.atomics[i] });
         }
         try w.writeAll("\n");
     }
+
+    try w.writeAll("\nNot supported by the translator:\n");
+    var any = false;
     if (c.multi_value_blocks != 0) {
         any = true;
         try w.print("  - {d} blocks with parameters or several results (multi-value)\n", .{c.multi_value_blocks});
@@ -236,6 +234,10 @@ test "census names what a threaded module needs" {
     };
     var c = try census(arena.allocator(), mod, null);
     try std.testing.expect(!c.translatable());
+    // Bound by the metadata, the one unknown import is no obstacle.
+    const bound = try census(arena.allocator(), mod, .{ .version = 1, .imports = &.{.{ .pattern = "env.spawn_*", .as = .halt }} });
+    try std.testing.expect(bound.translatable());
+    try std.testing.expectEqual(@as(usize, 1), bound.bound_imports);
     try std.testing.expect(c.memory.?.shared and c.memory_imported);
     try std.testing.expectEqual(@as(u64, 1), c.atomicTotal());
     try std.testing.expectEqual(@as(usize, 1), c.passive_segments);
@@ -244,5 +246,5 @@ test "census names what a threaded module needs" {
     try std.testing.expectEqualStrings("env.spawn_worker", c.unknown_imports.items[0]);
     var out: std.Io.Writer.Allocating = .init(arena.allocator());
     try report(&c, &out.writer);
-    try std.testing.expect(std.mem.indexOf(u8, out.written(), "shared memory (threads)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "shared memory, 1 atomic instructions, run as the one thread there is: load 1") != null);
 }

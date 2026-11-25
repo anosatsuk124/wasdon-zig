@@ -108,11 +108,35 @@ pub const Options = struct {
     call_stack_size: ?u32 = null,
 };
 
+/// What the translator can supply for an import of a module that has a
+/// host of its own and cannot be rebuilt.
+pub const HostFunction = enum {
+    /// `(pointer, length) [→ length]`: console output, logged by line.
+    write,
+    /// `() → i64`: nanoseconds since the application started.
+    clock,
+    /// `(message)`: a NUL-terminated string for the error log; the event
+    /// ends.
+    panic,
+    /// Any type: the call is reported and the event ends.
+    halt,
+};
+
+pub const ImportBinding = struct {
+    /// `module.name`; a trailing `*` stands for any rest. The first
+    /// binding that matches an import applies.
+    pattern: []const u8,
+    as: ?HostFunction = null,
+    /// Without `as`: the function's result, whatever its arguments.
+    returns: i64 = 0,
+};
+
 pub const UdonMeta = struct {
     version: u32,
     behaviour: ?Behaviour = null,
     fields: []const Field = &.{},
     functions: []const Function = &.{},
+    imports: []const ImportBinding = &.{},
     options: Options = .{},
     /// Keeps the backing std.json.Value alive for the duration of the meta
     /// (Field.default, Field.comment etc. may alias strings inside it).
@@ -330,6 +354,23 @@ pub fn parse(allocator: std.mem.Allocator, json_bytes: []const u8) errors.ParseE
             list[i] = try parseFunction(allocator, entry.key_ptr.*, entry.value_ptr.*);
         }
         meta.functions = list;
+    }
+
+    if (obj.get("imports")) |iv| {
+        const iobj = try getObjectFromValue(iv);
+        const list = try allocator.alloc(ImportBinding, iobj.count());
+        for (list, iobj.keys(), iobj.values()) |*b, pattern, v| {
+            const bobj = try getObjectFromValue(v);
+            b.* = .{ .pattern = pattern };
+            if (bobj.get("as")) |a| b.as = try enumFromStringOrError(HostFunction, try getStringFromValue(a), error.MalformedMeta);
+            if (bobj.get("returns")) |r| b.returns = switch (r) {
+                .integer => |x| x,
+                else => return error.MalformedMeta,
+            };
+            // Exactly one of the two.
+            if ((b.as != null) == (bobj.get("returns") != null)) return error.MalformedMeta;
+        }
+        meta.imports = list;
     }
 
     if (obj.get("options")) |ov| {
@@ -677,4 +718,29 @@ test "parseFromModule returns null when meta is absent" {
     const mod: Module = .{};
     const meta_opt = try parseFromModule(arena.allocator(), mod);
     try std.testing.expect(meta_opt == null);
+}
+
+test "imports: host functions and constant answers, in the order written" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const meta = try parse(arena.allocator(),
+        \\{"version":1,"imports":{
+        \\  "env.put":{"as":"write"},
+        \\  "env.sys_*":{"returns":-38},
+        \\  "env.*":{"as":"halt"}}}
+    );
+    try std.testing.expectEqual(@as(usize, 3), meta.imports.len);
+    try std.testing.expectEqualStrings("env.put", meta.imports[0].pattern);
+    try std.testing.expectEqual(HostFunction.write, meta.imports[0].as.?);
+    try std.testing.expectEqual(@as(i64, -38), meta.imports[1].returns);
+    try std.testing.expect(meta.imports[1].as == null);
+    try std.testing.expectEqual(HostFunction.halt, meta.imports[2].as.?);
+    // Exactly one of "as" and "returns"; a known host function.
+    for ([_][]const u8{
+        \\{"version":1,"imports":{"env.x":{}}}
+        ,
+        \\{"version":1,"imports":{"env.x":{"as":"write","returns":0}}}
+        ,
+        \\{"version":1,"imports":{"env.x":{"as":"teleport"}}}
+    }) |bad| try std.testing.expectError(error.MalformedMeta, parse(arena.allocator(), bad));
 }

@@ -1636,3 +1636,213 @@ test "WASI: an import the interface does not have is refused in strict mode" {
     defer p.deinit();
     _ = try p.vm.runEvent("_start");
 }
+
+// ----------------------------------------------------------------------
+//  Threads, for one thread
+// ----------------------------------------------------------------------
+
+fn atomic(op: u32) I {
+    return .{ .atomic = .{ .op = op, .memarg = .{ .@"align" = 0, .offset = 0 } } };
+}
+
+fn word(p: *Program, address: usize) u32 {
+    return std.mem.readInt(u32, p.global("__G__memory").array.bytes[address..][0..4], .little);
+}
+
+test "atomics on one thread: loads, stores, read-modify-write, compare-exchange, wait and notify" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const m0 = wasm.instruction.MemArg{ .@"align" = 2, .offset = 0 };
+    // The cell is at 16; each instruction's result goes to 64, 68, ….
+    const rmw = struct {
+        fn f(comptime result_at: i32, comptime op: u32, comptime operand: i32) [5]I {
+            return .{ .{ .i32_const = result_at }, .{ .i32_const = 16 }, .{ .i32_const = operand }, atomic(op), .{ .i32_store = .{ .@"align" = 2, .offset = 0 } } };
+        }
+    }.f;
+    const body = [_]I{ .{ .i32_const = 16 }, .{ .i32_const = 100 }, atomic(0x17) } ++
+        rmw(64, 0x1E, 5) ++ // add:  100 → 105
+        rmw(68, 0x25, 3) ++ // sub:  105 → 102
+        rmw(72, 0x2C, 0x0F) ++ // and:  102 → 6
+        rmw(76, 0x33, 0x30) ++ // or:   6 → 54
+        rmw(80, 0x3A, 0xFF) ++ // xor:  54 → 201
+        rmw(84, 0x41, 7) ++ // xchg: 201 → 7
+        [_]I{
+            // cmpxchg that succeeds (7 → 9), then one that does not.
+            .{ .i32_const = 88 },  .{ .i32_const = 16 },      .{ .i32_const = 7 },     .{ .i32_const = 9 },    atomic(0x48),          .{ .i32_store = m0 },
+            .{ .i32_const = 92 },  .{ .i32_const = 16 },      .{ .i32_const = 7 },     .{ .i32_const = 11 },   atomic(0x48),          .{ .i32_store = m0 },
+            .{ .i32_const = 96 },  .{ .i32_const = 16 },      atomic(0x10),            .{ .i32_store = m0 },
+            // One byte of a word: 0x1FF + 2 wraps within the byte.
+              .{ .i32_const = 32 },  .{ .i32_const = 0x1FF },
+            .{ .i32_store = m0 },  .{ .i32_const = 100 },     .{ .i32_const = 32 },    .{ .i32_const = 2 },    atomic(0x20),          .{ .i32_store = m0 },
+            // cmpxchg8 compares only the byte: 0x701 matches 0x01.
+            .{ .i32_const = 104 }, .{ .i32_const = 32 },      .{ .i32_const = 0x701 }, .{ .i32_const = 0x55 }, atomic(0x4A),          .{ .i32_store = m0 },
+            // 64 bits.
+            .{ .i32_const = 40 },  .{ .i64_const = 1 << 40 }, .{ .i64_store = m0 },    .{ .i32_const = 40 },   .{ .i64_const = 1 },   atomic(0x1F),
+            .{ .global_set = 0 },  .{ .i32_const = 40 },      atomic(0x11),            .{ .global_set = 1 },
+            // Nobody to wake; a wait on a different value, and one that
+            // times out.
+              .{ .i32_const = 108 }, .{ .i32_const = 16 },
+            .{ .i32_const = 1 },   atomic(0x00),              .{ .i32_const = 40 },    .i32_add,               .{ .i32_store = m0 },  .{ .i32_const = 112 },
+            .{ .i32_const = 16 },  .{ .i32_const = 8 },       .{ .i64_const = -1 },    atomic(0x01),           .{ .i32_store = m0 },  .{ .i32_const = 116 },
+            .{ .i32_const = 16 },  .{ .i32_const = 9 },       .{ .i64_const = 1000 },  atomic(0x01),           .{ .i32_store = m0 },  atomic(0x03),
+        };
+    var p = try runBody(a, &body, &.{});
+    defer p.deinit();
+    const expected = [_]u32{ 100, 105, 102, 6, 54, 201, 7, 9, 9, 0xFF, 0x01, 40, 1, 2 };
+    for (expected, 0..) |want, i| try testing.expectEqual(want, word(&p, 64 + i * 4));
+    try testing.expectEqual(@as(u32, 9), word(&p, 16));
+    try testing.expectEqual(@as(u32, 0x155), word(&p, 32));
+    try testing.expectEqual(Value{ .int64 = 1 << 40 }, p.global("__G__g0"));
+    try testing.expectEqual(Value{ .int64 = (1 << 40) + 1 }, p.global("__G__g1"));
+}
+
+test "atomics on one thread: a wait nobody can end is a trap" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const body = [_]I{ .{ .i32_const = 16 }, .{ .i32_const = 0 }, .{ .i64_const = -1 }, atomic(0x01), .{ .global_set = 2 } };
+    const mod = try simpleModule(a, &.{ .i64, .i64, .i32, .i32 }, &.{}, &body);
+    var p = try load(mod, null);
+    defer p.deinit();
+    _ = try p.vm.runEvent("run");
+    // The trap routine logs and ends the event; the result was never set.
+    try testing.expectEqual(udon.vm.LogLevel.err, p.vm.logs.items[0].level);
+    try testing.expectEqual(Value{ .int32 = 0 }, p.global("__G__g2"));
+}
+
+// ----------------------------------------------------------------------
+//  Imports of a module with its own host (`__udon_meta.imports`)
+// ----------------------------------------------------------------------
+
+const host_types = [_]FuncType{
+    void_type,
+    .{ .params = &.{ .i32, .i32 }, .results = &.{.i32} },
+    .{ .params = &.{}, .results = &.{.i64} },
+    .{ .params = &.{.i32}, .results = &.{.i32} },
+    .{ .params = &.{.i32}, .results = &.{} },
+};
+
+const host_imports = [_]wasm.module.Import{
+    .{ .module = "env", .name = "console_put", .desc = .{ .func = 1 } },
+    .{ .module = "env", .name = "now", .desc = .{ .func = 2 } },
+    .{ .module = "env", .name = "sys_frob", .desc = .{ .func = 3 } },
+    .{ .module = "env", .name = "die", .desc = .{ .func = 4 } },
+    .{ .module = "env", .name = "spawn", .desc = .{ .func = 1 } },
+};
+
+const host_meta: wasm.UdonMeta = .{
+    .version = 1,
+    .imports = &.{
+        .{ .pattern = "env.console_put", .as = .write },
+        .{ .pattern = "env.now", .as = .clock },
+        .{ .pattern = "env.die", .as = .panic },
+        .{ .pattern = "env.sys_*", .returns = -38 },
+        // Whatever else the module wants from its host.
+        .{ .pattern = "env.*", .as = .halt },
+    },
+};
+
+fn hostModule(a: std.mem.Allocator, body: []const I) !wasm.Module {
+    var mod = try simpleModule(a, &.{ .i64, .i64, .i32, .i32 }, &.{}, body);
+    mod.types_ = &host_types;
+    mod.imports = &host_imports;
+    const exports = try a.dupe(wasm.module.Export, mod.exports);
+    exports[exports.len - 1] = .{ .name = "run", .desc = .{ .func = host_imports.len } };
+    mod.exports = exports;
+    // The first line ends the way a console driver ends lines.
+    const text = "boot: one\r\n" ++ "\x00" ** 5 ++ "partial" ++ "\x00" ** 9 ++ "Out of cheese\x00";
+    mod.datas = try a.dupe(wasm.module.Data, &.{.{ .memory_index = 0, .offset = try a.dupe(I, &.{.{ .i32_const = 0 }}), .init = text }});
+    return mod;
+}
+
+test "host imports bound by metadata: console, clock, constant answers, and a call nobody can serve" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const body = [_]I{
+        .{ .i32_const = 0 },  .{ .i32_const = 11 }, .{ .call = 0 },       .{ .global_set = 2 },
+        .{ .call = 1 },       .{ .global_set = 0 }, .{ .i32_const = 1 },  .{ .call = 2 },
+        .{ .global_set = 3 },
+        // An unfinished line is shown before the event ends.
+        .{ .i32_const = 16 }, .{ .i32_const = 7 },  .{ .call = 0 },
+        .drop,                .{ .i32_const = 1 },  .{ .i32_const = 2 },  .{ .call = 4 },
+        .drop,                .{ .i64_const = 99 }, .{ .global_set = 1 },
+    };
+    var p = try load(try hostModule(a, &body), host_meta);
+    defer p.deinit();
+    p.vm.host.time = 1.5;
+    _ = try p.vm.runEvent("run");
+    try testing.expectEqualStrings(
+        "boot: one\npartial\nenv.spawn was called: this host does not have it, and the event ends here\n",
+        try p.vm.logText(),
+    );
+    try testing.expectEqual(udon.vm.LogLevel.err, p.vm.logs.items[2].level);
+    try testing.expectEqual(Value{ .int32 = 11 }, p.global("__G__g2"));
+    try testing.expectEqual(Value{ .int64 = 1_500_000_000 }, p.global("__G__g0"));
+    try testing.expectEqual(Value{ .int32 = -38 }, p.global("__G__g3"));
+    try testing.expectEqual(Value{ .int64 = 0 }, p.global("__G__g1"));
+}
+
+test "host imports bound by metadata: a panic logs its C string and ends the event" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const body = [_]I{ .{ .i32_const = 32 }, .{ .call = 3 }, .{ .i64_const = 99 }, .{ .global_set = 1 } };
+    var p = try load(try hostModule(a, &body), host_meta);
+    defer p.deinit();
+    _ = try p.vm.runEvent("run");
+    try testing.expectEqualStrings("Out of cheese\n", try p.vm.logText());
+    try testing.expectEqual(udon.vm.LogLevel.err, p.vm.logs.items[0].level);
+    try testing.expectEqual(Value{ .int64 = 0 }, p.global("__G__g1"));
+}
+
+test "host imports bound by metadata: a type the host function does not have is refused" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const mod = try hostModule(a, &.{});
+    var diag: translate_.Diagnostics = .init(a);
+    var out: std.Io.Writer.Allocating = .init(a);
+    const meta: wasm.UdonMeta = .{ .version = 1, .imports = &.{.{ .pattern = "env.now", .as = .write }} };
+    try testing.expectError(error.Invalid, translate_.translate(testing.allocator, mod, meta, &out.writer, .{ .diagnostics = &diag }));
+    try testing.expect(std.mem.indexOf(u8, diag.message, "now") != null);
+}
+
+test "a string field backed by memory is written after the start function, with its terminator" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const m0 = wasm.instruction.MemArg{ .@"align" = 0, .offset = 0 };
+    // The start function fills the buffer, as a module that sets up its
+    // own data does; `run` reads the first byte and the one after the text.
+    const fns = [_]Fn{
+        .{ .ty = void_type, .body = &.{
+            .{ .i32_const = 200 }, .{ .i32_load8_u = m0 }, .{ .global_set = 0 },
+            .{ .i32_const = 211 }, .{ .i32_load8_u = m0 }, .{ .global_set = 1 },
+            .{ .i32_const = 212 }, .{ .i32_load8_u = m0 }, .{ .global_set = 2 },
+        } },
+        .{ .ty = void_type, .body = &.{ .{ .i32_const = 200 }, .{ .i32_const = 0xEE }, .{ .i32_const = 32 }, .memory_fill } },
+    };
+    var mod = try callModule(a, &fns, &.{}, 1);
+    const globals = try a.alloc(wasm.module.Global, mod.globals.len + 1);
+    @memcpy(globals[0..mod.globals.len], mod.globals);
+    globals[mod.globals.len] = .{ .ty = .{ .valtype = .i32, .mut = .immutable }, .init = try a.dupe(I, &.{.{ .i32_const = 200 }}) };
+    const exports = try a.alloc(wasm.module.Export, mod.exports.len + 1);
+    @memcpy(exports[0..mod.exports.len], mod.exports);
+    exports[mod.exports.len] = .{ .name = "command_line", .desc = .{ .global = @intCast(mod.globals.len) } };
+    mod.globals = globals;
+    mod.exports = exports;
+    const meta: wasm.UdonMeta = .{ .version = 1, .fields = &.{.{
+        .key = "commandLine",
+        .source = .{ .kind = .symbol, .name = "command_line" },
+        .type_name = "SystemString",
+        .default = .{ .string = "console=hvc" },
+    }} };
+    var p = try load(mod, meta);
+    defer p.deinit();
+    _ = try p.vm.runEvent("run");
+    try testing.expectEqual(Value{ .int32 = 'c' }, p.global("__G__g0"));
+    try testing.expectEqual(Value{ .int32 = 0 }, p.global("__G__g1"));
+    try testing.expectEqual(Value{ .int32 = 0xEE }, p.global("__G__g2"));
+}

@@ -1,103 +1,167 @@
-# Linux, built for WebAssembly
+# Linux, built for WebAssembly, on the Udon VM
 
-Two projects build the Linux kernel as a WebAssembly module and boot it in
-a browser: [joelseverin/linux-wasm](https://github.com/joelseverin/linux-wasm)
-and [tombl/linux](https://github.com/tombl/linux). This directory records
-what happens when their `vmlinux.wasm` is given to wasdon-zig — which is
-the largest and least Udon-shaped input available — and why the answer is
-"it cannot run", in detail.
+[joelseverin/linux-wasm](https://github.com/joelseverin/linux-wasm) builds
+the Linux kernel as a WebAssembly module and boots it in a browser. This
+directory gives that `vmlinux.wasm` to wasdon-zig. The result is the
+largest program the translator has produced — and it runs: in the
+repository's Udon VM emulator the kernel boots through all of
+`start_kernel`, printing its log through `Debug.Log`, until the scheduler
+wants to switch to a second task.
 
-No kernel binary is checked in (30 MB, GPL); the numbers below are
-reproducible with either project's build or the `vmlinux.wasm` its demo
-page loads:
+```
+Linux version 6.4.16-00012-gf3e782cb608b (joel@joel-linux) (clang version 18.1.2 (https://github.com/llvm/l…
+Zone ranges:
+  Normal   [mem 0x0000000000010000-0x000000001fefffff]
+Movable zone start for each node
+Early memory node ranges
+  node   0: [mem 0x0000000000010000-0x000000001fefffff]
+Initmem setup node 0 [mem 0x0000000000010000-0x000000001fefffff]
+smp_init_cpus: Core Count = 64
+percpu: max_distance=0x240000 too large for vmalloc space 0x0
+percpu: Embedded 9 pages/cpu s12496 r0 d24368 u36864
+percpu: wasting 448 pages per chunk
+Kernel command line: console=hvc
+printk: log_buf_len individual max cpu contribution: 4096 bytes
+printk: log_buf_len total cpu_extra contributions: 258048 bytes
+printk: log_buf_len min size: 131072 bytes
+printk: log_buf_len: 524288 bytes
+printk: early log buf free: 129536(98%)
+Dentry cache hash table entries: 65536 (order: 6, 262144 bytes, linear)
+Inode-cache hash table entries: 32768 (order: 5, 131072 bytes, linear)
+Built 1 zonelists, mobility grouping on.  Total pages: 129778
+mem auto-init: stack:all(zero), heap alloc:off, heap free:off
+Memory: 513404K/523200K available (0K kernel code, 32K rwdata, 200K rodata, 32K init, 7K bss, 9796K reserve…
+rcu: Hierarchical RCU implementation.
+rcu: 	RCU event tracing is enabled.
+rcu: RCU calculated value of scheduler-enlistment delay is 10 jiffies.
+NR_IRQS: 32
+rcu: srcu_init: Setting srcu_struct sizes based on contention.
+clocksource: wasm_cpu_clock: mask: 0xffffffffffffffff max_cycles: 0x1cd42e4dffb, max_idle_ns: 881590591483 ns
+Console: colour dummy device 80x25
+printk: console [hvc0] enabled
+pid_max: default: 32768 minimum: 512
+Mount-cache hash table entries: 1024 (order: 0, 4096 bytes, linear)
+Mountpoint-cache hash table entries: 1024 (order: 0, 4096 bytes, linear)
+env.wasm_create_and_run_task was called: this host does not have it, and the event ends here
+```
+
+(`boot.log`, complete. The last line is the translator's: the host
+function the kernel called has no counterpart here.)
+
+| | |
+|---|---:|
+| `vmlinux.wasm` | 29 966 656 bytes, 9 970 functions, 1 080 446 instructions |
+| Udon Assembly | 3 089 877 instructions, 587 249 `EXTERN`s, 124 MB of text |
+| heap | 127 370 slots |
+| checker findings | 0 |
+| executed up to the task switch | 249 565 381 instructions, 51 691 377 `EXTERN`s |
+
+This has been run in the emulator only. It is not a world asset: the Udon
+VM ends an event after ten seconds and this boot is one event of fifty
+million externs, the kernel takes half a gigabyte of linear memory for
+itself, and nobody has given the Unity assembler a 124 MB program.
+
+## Reproducing it
+
+No kernel binary is checked in (30 MB, GPL-2.0). The one used here is the
+build the project's demo page loads,
+`https://joelseverin.github.io/linux-wasm/vmlinux.wasm` (Linux 6.4.16,
+clang 18.1.2; SHA-256 `3fa6b282…1353d39`).
 
 ```sh
-wasdon_zig inspect vmlinux.wasm
+zig build test  -Dlinux=/path/to/vmlinux.wasm   # translate, check, boot, verify the log
+zig build stats -Dlinux=/path/to/vmlinux.wasm   # its row in the statistics table
 ```
 
-`inspect` reports everything in a module that the translator does not
-support, where `translate` stops at the first. It was added for this.
+By hand (a release build of the CLI boots it in three seconds):
 
-## The census
-
-`joelseverin/linux-wasm` (Linux 6.4.16, clang 18.1.2; target features: atomics,
-bulk-memory, mutable-globals, sign-ext):
-
-```
-functions            9970 defined, 96 imported
-instructions         1080446 (blocks nest up to 226 deep)
-calls                38199 direct, 1910 indirect; table of 2879
-memory accesses      124617
-memory               15 pages initially, at most 65536, shared, imported
-data                 712116 bytes in 0 active and 33 passive segments
-globals, exports     638, 7038 (345 exported functions could be events)
-imports              0 Udon externs, 0 bound by __udon_meta, 96 unknown
-
-Not supported by the translator:
-  - shared memory (threads): the Udon VM runs one thread
-  - 6523 atomic instructions (threads): notify 8 wait 3 fence 3977 load 1 store 2 rmw 95 cmpxchg 2437
-  - 96 imports that are neither Udon externs nor bound by __udon_meta:
-      env.wasm_user_mode_tail
-      env.wasm_create_and_run_task
-      env.wasm_serialize_tasks
-      env.wasm_load_executable
-      …
+```sh
+zig build -Doptimize=ReleaseFast
+wasdon_zig inspect   vmlinux.wasm --meta examples/linux/vmlinux.udon_meta.json
+wasdon_zig translate vmlinux.wasm --meta examples/linux/vmlinux.udon_meta.json -o vmlinux.uasm
+wasdon_zig check     vmlinux.uasm
+wasdon_zig run       vmlinux.uasm --events _start --max-steps 1000000000
 ```
 
-`tombl/linux` (Linux 6.1.132, clang 19.1.7; 10010 functions, 2216 data
-segments) does not get that far: its module also uses exception handling,
-reference types, multi-value and SIMD (per its `target_features` section),
-which the parser does not read.
+## What it took
 
-## What stands in the way
+The module is nothing like the programs written for Udon: it shares its
+memory between threads, uses 6 523 atomic instructions, keeps its data in
+33 passive segments that its own start function copies in, and imports 96
+functions from a JavaScript host. The translator needed four things, none
+of them specific to Linux:
 
-In order of how fundamental the obstacle is:
+1. **Threads, for one thread** (`src/translator/threads.zig`,
+   `docs/spec_linear_memory.md` §12). On one thread an atomic access is an
+   ordinary access. Every instruction of the threads proposal is rewritten
+   into plain WebAssembly before translation: loads and stores as they
+   are, read-modify-write and compare-exchange as load / compute / store,
+   `notify` as "nobody woken", `wait` as "not equal" or "timed out" — and a
+   trap where it would wait forever.
+2. **A host described in metadata** (`vmlinux.udon_meta.json`,
+   `docs/spec_host_import_conversion.md` §8). The imports are bound by
+   name to the few things a host function usually is:
 
-1. **Threads.** Both ports run every kernel task (and every CPU) as its own
-   Web Worker sharing one memory; a context switch is a hand-over between
-   workers, and blocking is `memory.atomic.wait`. The Udon VM has one
-   thread and no way to suspend an event in the middle and resume it
-   later. Lowering the 6523 atomic instructions as ordinary loads and
-   stores would be correct for a single thread, but the three `wait`s are
-   where the kernel's scheduler lives, and there is nobody to wake them.
+   | Import | Bound to |
+   |---|---|
+   | `wasm_driver_hvc_put(buffer, count)` | `write`: console output, to the log a line at a time |
+   | `wasm_cpu_clock_get_monotonic()` | `clock`: nanoseconds since start |
+   | `wasm_panic(message)` | `panic`: the message to the error log, end of event |
+   | `sys_*` (84 system calls the port leaves to the host) | the constant `-38`, `-ENOSYS`, as the JavaScript host answers |
+   | every other `wasm_*` (tasks, CPUs, user programs) | `halt`: say which was called, end the event |
 
-2. **Loading code at run time.** User-space programs are separate
-   WebAssembly modules that the host compiles and instantiates when the
-   kernel `exec`s them (`wasm_load_executable`; `user.compile` /
-   `user.instantiate` in the other port). An Udon program is fixed when it
-   is assembled in the Unity editor; there is no interpreter or loader to
-   hand a new module to. Even a kernel that booted would have nothing to
-   run — not even `init`.
+3. **A string field backed by memory** (`docs/spec_udonmeta_conversion.md`).
+   The host hands the kernel its command line by writing it to the buffer
+   the exported global `boot_command_line` points at. Here that is an Udon
+   variable, `commandLine`, copied into memory at start-up — after the
+   module's start function, which is what fills memory from the passive
+   segments. Without `console=hvc` in it the kernel prints nothing.
+4. **Events that end inside recursion** (`docs/udon_vm.md`). The halt
+   arrives deep in the scheduler, below recursive functions whose return
+   addresses are parked on the VM stack.
 
-3. **The host.** The 96 imports are the machine the kernel runs on: clock,
-   console, task creation, the system-call path into user programs. None is
-   an Udon extern. A console could be built from `Debug.Log` and a clock
-   from `Time`, but 1 and 2 are among them.
+Three things that were already there mattered: `memory.init` for the
+passive segments, `br_table` as an indexed jump for the kernel's many
+`switch`es, and an operand stack that copes with blocks nested 226 deep.
 
-4. **Time.** Udon stops a behaviour whose event runs longer than ten
-   seconds, and it executes — generously — a few hundred thousand externs
-   per second. Translated code spends 3–4 externs per memory access; the
-   kernel executes on the order of 10⁸–10⁹ instructions before its first
-   user process. Cut into frames, booting would take days.
+## Why it stops there
 
-5. **Size.** 1.08 million WebAssembly instructions would become several
-   million Udon instructions and, at roughly one heap slot per local and
-   per distinct constant, a heap in the hundreds of thousands of slots —
-   under the VM's limit of 1048576, but far beyond anything the Unity
-   editor's assembler and serializer are used with.
+`wasm_create_and_run_task` is the kernel's context switch to a task that
+has never run: the idle task, at the end of `rest_init`, hands over to
+`kernel_init`. In the browser the host starts a Web Worker for the new
+task — another instance of the module on the same memory — and blocks the
+calling worker until something switches back to it.
 
-What the translator itself lacks for this module — shared memory accepted
-as ordinary memory, atomics lowered for one thread, trapping stubs for
-unknown imports — is the small part, and could be added; it would produce
-a very large program that stops at the first `wait`. (Its 33 passive data
-segments are no obstacle: `memory.init` is supported.)
+An Udon behaviour is one instance with one flow of control, and the
+translated program keeps every function's locals in fixed heap slots. A
+second task running `schedule()` would overwrite the first one's. So the
+boot ends where the kernel stops being one sequential program.
 
-## What does work
+What going further would take, in increasing order of doubt:
 
-The realistic way to run "a computer inside Udon" is the other way round: a
-small interpreter or emulator, written in Zig or Rust and translated,
-stepping a fixed number of guest instructions per frame — the same shape as
-`examples/pi` or `examples/image-codec`, where the work is cut into pieces
-that fit a frame. `examples/wasm-bench` shows the translator handling the
-whole WebAssembly instruction set, and `examples/blockfall` an event-driven
-world object; those are the shapes that fit the VM.
+- **One behaviour per task**, all sharing one `byte[]` as memory — the
+  same shape as the browser's one worker per task. Udon variables can hold
+  a reference to the same array.
+- **Suspending an event.** A task that switches away has to stop in the
+  middle of a call chain and continue later. Translated code keeps no
+  state outside the heap, so in principle the lowering could record a
+  resume address, end the event, and jump back in from a later one. It
+  does not do that today.
+- **User space.** `init` is a separate WebAssembly module which the host
+  compiles and instantiates when the kernel `exec`s it
+  (`wasm_load_executable`). An Udon program is fixed when it is assembled;
+  there is nothing to hand a new module to. A kernel that got this far
+  would end in "No working init found".
+- **Time.** Fifty million externs for the first phase of the boot is
+  minutes of frames even when cut into pieces, if the Udon VM manages a
+  few hundred thousand a second (an estimate; this has not been measured
+  in VRChat).
+
+The other port, [tombl/linux](https://github.com/tombl/linux) (Linux
+6.1.132, clang 19), does not get this far: its module uses exception
+handling, reference types, multi-value and SIMD, which the parser does not
+read.
+
+The shape that does fit the VM is the other way round — a small
+interpreter or emulator written for it, stepping a bounded amount of work
+per frame, like `examples/pi` or `examples/image-codec`.

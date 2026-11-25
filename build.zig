@@ -45,6 +45,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const with_rust = b.option(bool, "rust", "Also build and test the Rust examples (needs cargo and the wasm32v1-none target)") orelse false;
     const with_mruby = b.option(bool, "mruby", "Also build and run the mruby interpreter benchmark (needs make, ruby with rake, a host C compiler and git)") orelse false;
+    const linux_wasm = b.option([]const u8, "linux", "Path to a vmlinux.wasm (examples/linux): also translate it and boot it as far as one thread goes");
     const with_rhai = b.option(bool, "rhai", "Also build and run the Rhai interpreter benchmark (needs cargo, the wasm32-wasip1 target and the rhai crate)") orelse false;
 
     // ---- library modules ----
@@ -115,6 +116,7 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "with_rust", with_rust);
     options.addOption(bool, "with_rhai", with_rhai);
     options.addOption(bool, "with_mruby", with_mruby);
+    options.addOption(bool, "with_linux", linux_wasm != null);
     fixtures.addOptions("build_options", options);
     // The UdonSharp side of the benchmark is Udon Assembly already.
     fixtures.addAnonymousImport("bench-usharp.uasm", .{ .root_source_file = b.path("examples/bench/usharp/UdonBench.uasm") });
@@ -174,6 +176,11 @@ pub fn build(b: *std.Build) void {
         const bin = copy.addCopyFile(b.path("target/wasm32-wasip1/release/rhai_bench.wasm"), "rhai_bench.wasm");
         fixtures.addAnonymousImport("rhai-bench-rs.wasm", .{ .root_source_file = bin });
         examples_step.dependOn(&b.addInstallFileWithDir(bin, .{ .custom = "wasm" }, "rhai-bench-rs.wasm").step);
+    }
+
+    if (linux_wasm) |path| {
+        fixtures.addAnonymousImport("vmlinux.wasm", .{ .root_source_file = .{ .cwd_relative = path } });
+        fixtures.addAnonymousImport("vmlinux.udon_meta.json", .{ .root_source_file = b.path("examples/linux/vmlinux.udon_meta.json") });
     }
 
     if (with_mruby) {

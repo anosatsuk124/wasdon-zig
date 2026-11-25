@@ -192,3 +192,45 @@ EXTERN, "SystemTextEncoding.__GetString__SystemByteArray_SystemInt32_SystemInt32
 PUSH, ___interact_T1__
 EXTERN, "UnityEngineDebug.__Log__SystemObject__SystemVoid"
 ```
+
+## 8. Imports of a module with its own host
+
+Everything above is for modules written with Udon in mind: their imports
+*are* extern signatures. A module built for some other host — a browser,
+a custom runtime — imports that host's functions, by that host's names,
+and often cannot be rebuilt. `__udon_meta.imports`
+(`docs/spec_udonmeta_conversion.md`), usually given as a sidecar file,
+binds such imports by name to one of the few things a host function
+typically is:
+
+| Binding | Import type | What the function does |
+|---|---|---|
+| `{ "as": "write" }` | `(pointer, length)` with or without an `i32` result | Console output. The bytes are UTF-8 text for the log, shown a line at a time (`Debug.Log`), in the same buffer as WASI's stdout; white space at the end of a line — the `\r` of a terminal's `\r\n` — is dropped. Returns `length`. |
+| `{ "as": "clock" }` | `() → i64` | Nanoseconds since the application started. |
+| `{ "as": "panic" }` | `(message)` | The NUL-terminated string at `message` goes to the error log; pending console output is shown first; the event ends. |
+| `{ "as": "halt" }` | any | `Debug.LogError("<module>.<name> was called: this host does not have it, and the event ends here")`; the event ends. For functions that cannot be given a meaning: starting a thread, loading code. |
+| `{ "returns": n }` | any parameters; no result, `i32` or `i64` | The constant `n`. For functions whose "not available" answer is a number. |
+
+A key is `module.name`; a trailing `*` matches any rest. Bindings are
+tried in the order written and the first match applies, so specific names
+go before patterns:
+
+```json
+"imports": {
+  "env.console_put": { "as": "write" },
+  "env.sys_*":       { "returns": -38 },
+  "env.*":           { "as": "halt" }
+}
+```
+
+Like WASI (`docs/spec_wasi_preview_1.md` §2), these are *linked*, not
+lowered: before translation each bound import is replaced by a function
+defined in the module, its body WebAssembly over Udon externs
+(`src/translator/wasi.zig`). The message of a halting import is the
+default value of an Udon string variable, `__import{n}`. An import whose
+type is not the bound function's is an error. Imports that match no
+binding are treated as before: an extern signature, or an error.
+
+`wasdon-zig inspect module.wasm --meta sidecar.json` shows how many
+imports the metadata covers and names the ones left over.
+

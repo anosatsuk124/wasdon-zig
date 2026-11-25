@@ -1,0 +1,34 @@
+Linux version 6.4.16-00012-gf3e782cb608b (joel@joel-linux) (clang version 18.1.2 (https://github.com/llvm/llvm-project.git 655e5d880b53f04d4978d0ab4ac9a333f35c48a9), LLD 18.1.2) #26 SMP Fri Oct 31 16:44:59 CET 2025
+Zone ranges:
+  Normal   [mem 0x0000000000010000-0x000000001fefffff]
+Movable zone start for each node
+Early memory node ranges
+  node   0: [mem 0x0000000000010000-0x000000001fefffff]
+Initmem setup node 0 [mem 0x0000000000010000-0x000000001fefffff]
+smp_init_cpus: Core Count = 64
+percpu: max_distance=0x240000 too large for vmalloc space 0x0
+percpu: Embedded 9 pages/cpu s12496 r0 d24368 u36864
+percpu: wasting 448 pages per chunk
+Kernel command line: console=hvc
+printk: log_buf_len individual max cpu contribution: 4096 bytes
+printk: log_buf_len total cpu_extra contributions: 258048 bytes
+printk: log_buf_len min size: 131072 bytes
+printk: log_buf_len: 524288 bytes
+printk: early log buf free: 129536(98%)
+Dentry cache hash table entries: 65536 (order: 6, 262144 bytes, linear)
+Inode-cache hash table entries: 32768 (order: 5, 131072 bytes, linear)
+Built 1 zonelists, mobility grouping on.  Total pages: 129778
+mem auto-init: stack:all(zero), heap alloc:off, heap free:off
+Memory: 513404K/523200K available (0K kernel code, 32K rwdata, 200K rodata, 32K init, 7K bss, 9796K reserved, 0K cma-reserved)
+rcu: Hierarchical RCU implementation.
+rcu: 	RCU event tracing is enabled.
+rcu: RCU calculated value of scheduler-enlistment delay is 10 jiffies.
+NR_IRQS: 32
+rcu: srcu_init: Setting srcu_struct sizes based on contention.
+clocksource: wasm_cpu_clock: mask: 0xffffffffffffffff max_cycles: 0x1cd42e4dffb, max_idle_ns: 881590591483 ns
+Console: colour dummy device 80x25
+printk: console [hvc0] enabled
+pid_max: default: 32768 minimum: 512
+Mount-cache hash table entries: 1024 (order: 0, 4096 bytes, linear)
+Mountpoint-cache hash table entries: 1024 (order: 0, 4096 bytes, linear)
+env.wasm_create_and_run_task was called: this host does not have it, and the event ends here

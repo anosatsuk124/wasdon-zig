@@ -491,6 +491,29 @@ All examples after step 10 (`zig build stats -Drust -Drhai -Dmruby`):
 | `rhai-bench-rs` | 56412 | 1180797 | 211912 | 624933773 | 109765017 |
 | `mruby-bench` | 16707 | 498255 | 99721 | 107882591 | 23789796 |
 
+### Step 11 — the Linux kernel
+
+`examples/linux`: the `vmlinux.wasm` of joelseverin/linux-wasm (Linux
+6.4.16), 29 966 656 bytes, 9 970 functions, 6 523 atomic instructions, 96
+host imports. With atomics rewritten for one thread, the imports bound in
+a sidecar and the command line given through a string field, it
+translates, passes the checker, and boots in the emulator through
+`start_kernel` to the first context switch, printing 33 lines of kernel
+log (`zig build stats -Dlinux=<path>`):
+
+| Example | heap | instr | externs | executed instr | executed externs |
+|---|---:|---:|---:|---:|---:|
+| `linux` | 127370 | 3089877 | 587249 | 249565381 | 51691377 |
+
+The translation takes under a second and the run three, in a release
+build. Where the externs go: 17.3 M `Int32 +`, 13.9 M `BlockCopy` and
+12.6 M `Int32Array.Set` — the kernel clearing and initializing its page
+structures a word at a time — then 2.6 M `Int32 ==` and 1.0 M `ToInt32`
+loads.
+
+The existing examples are unchanged by this step: their translations are
+byte for byte what they were (the Unity assets did not need regenerating).
+
 ### An experiment not adopted: every example at `ReleaseFast`
 
 Building the Zig examples for speed instead of size, measured after step 2:
@@ -504,6 +527,7 @@ says when the trade is worth making.
 ```sh
 zig build stats -Drust                       # the tables above (Markdown)
 zig build stats -Drust -Drhai -Dmruby        # … with the Rhai and mruby interpreters
+zig build stats -Dlinux=vmlinux.wasm         # … with a Linux kernel (examples/linux)
 zig build stats -Drust -- --profile wasm-bench   # plus an extern profile
 zig build stats -- --emit zig-out            # also write each .uasm
 ```

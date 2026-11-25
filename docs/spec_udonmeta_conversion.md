@@ -113,9 +113,15 @@ acceptable; the translator must tolerate both.
   "behaviour": {},
   "fields": {},
   "functions": {},
+  "imports": {},
   "options": {}
 }
 ```
+
+`imports` is for a module built for another host: it binds imports that
+are not Udon externs to a console, a clock, a panic, a constant answer or
+a halt. Its keys, values and semantics are in
+`docs/spec_host_import_conversion.md` §8.
 
 ---
 
@@ -185,14 +191,20 @@ field describes that global.
 { "kind": "symbol", "name": "radius" }
 ```
 
-`name` is an exported global holding the **address** of a 4-byte variable
-in linear memory — what `export var radius: f32` (Zig) or an exported
-`static` (Rust, C) produces. The field is an **input**: the init routine
-copies the field's value (as set in the Inspector, or its `default`) into
-memory once, after the data segments. Later changes on either side are not
-propagated; use an `import` field for state that must stay visible.
+`name` is an exported global holding the **address** of a variable in
+linear memory — what `export var radius: f32` (Zig) or an exported `static`
+(Rust, C) produces. The field is an **input**: the init routine copies the
+field's value (as set in the Inspector, or its `default`) into memory once,
+after the data segments and after the module's start function. Later
+changes on either side are not propagated; use an `import` field for state
+that must stay visible.
 
-`type` must be `int` or `float`.
+`type` must be `int`, `float` or `string`. An `int` or `float` is a 4-byte
+variable. A `string` is a character buffer: the text is written at the
+address as UTF-8, followed by a NUL — a C string. The translator does not
+know the buffer's size; the text must fit. This is how a program that
+expects its host to write a configuration string into its memory gets one
+(`examples/linux`: the kernel's command line).
 
 ### `udonName`
 

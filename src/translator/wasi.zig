@@ -1,4 +1,4 @@
-//! WASI preview 1, linked in as WebAssembly.
+//! Host interfaces, linked in as WebAssembly.
 //!
 //! A module built for `wasm32-wasi` imports its system interface from
 //! `wasi_snapshot_preview1`. Udon has no such interface, so the translator
@@ -11,6 +11,11 @@
 //! What the Udon VM can offer is small: a log to write to, two clocks, a
 //! random source. Everything else answers the way a system without files
 //! does.
+//!
+//! The same is done for the imports of a module with a host of its own
+//! that cannot be rebuilt: `__udon_meta.imports` names, for each, one of a
+//! few things a host function typically is — a console, a clock, a panic,
+//! a constant answer (`docs/spec_host_import_conversion.md` §8).
 
 const std = @import("std");
 const wasm = @import("wasm");
@@ -40,8 +45,10 @@ const Dep = enum(u32) {
     string_head,
     string_tail,
     string_length,
+    string_trim_end,
     log,
     log_warning,
+    log_error,
     uptime,
     utc_now,
     ticks,
@@ -63,9 +70,11 @@ const deps = std.enums.EnumArray(Dep, DepInfo).init(.{
     .string_index_of = .{ .name = "SystemString.__IndexOf__SystemChar__SystemInt32", .params = &.{ .i32, .i32 }, .results = &.{.i32} },
     .string_head = .{ .name = "SystemString.__Substring__SystemInt32_SystemInt32__SystemString", .params = &.{ .i32, .i32, .i32 }, .results = &.{.i32} },
     .string_tail = .{ .name = "SystemString.__Substring__SystemInt32__SystemString", .params = &.{ .i32, .i32 }, .results = &.{.i32} },
+    .string_trim_end = .{ .name = "SystemString.__TrimEnd__SystemString", .params = &.{.i32}, .results = &.{.i32} },
     .string_length = .{ .name = "SystemString.__get_Length__SystemInt32", .params = &.{.i32}, .results = &.{.i32} },
     .log = .{ .name = "UnityEngineDebug.__Log__SystemObject__SystemVoid", .params = &.{.i32} },
     .log_warning = .{ .name = "UnityEngineDebug.__LogWarning__SystemObject__SystemVoid", .params = &.{.i32} },
+    .log_error = .{ .name = "UnityEngineDebug.__LogError__SystemObject__SystemVoid", .params = &.{.i32} },
     .uptime = .{ .name = "UnityEngineTime.__get_realtimeSinceStartupAsDouble__SystemDouble", .params = &.{}, .results = &.{.f64} },
     .utc_now = .{ .name = "SystemDateTime.__get_UtcNow__SystemDateTime", .params = &.{}, .results = &.{.i32} },
     .ticks = .{ .name = "SystemDateTime.__get_Ticks__SystemInt64", .params = &.{.i32}, .results = &.{.i64} },
@@ -132,19 +141,21 @@ const i32x4 = [_]ValType{ .i32, .i32, .i32, .i32 };
 
 /// Log every complete line of the text in local `s` — a (fd, …) function's
 /// pending output — and leave the rest in `s`. `nl` is a scratch local.
-fn flushLines(comptime fd: u32, comptime s: u32, comptime nl: u32) I {
-    return loopIn(&.{
+/// With `terminal`, the text was written for a terminal and its lines end
+/// in "\r\n": white space at the end of a line is dropped.
+fn flushLines(comptime fd: u32, comptime s: u32, comptime nl: u32, comptime terminal: bool) I {
+    const line = [_]I{ get(s), c32(0), get(nl), call(.string_head) } ++ (if (terminal) [_]I{call(.string_trim_end)} else [_]I{}) ++ [_]I{set(nl + 1)};
+    return loopIn(&([_]I{
         // nl = s.IndexOf('\n'); done when there is none
-        get(s),             c32('\n'), call(.string_index_of), .{ .local_tee = nl },
-        c32(0),             .i32_lt_s, .{ .br_if = 1 },
+        get(s), c32('\n'), call(.string_index_of), .{ .local_tee = nl },
+        c32(0), .i32_lt_s, .{ .br_if = 1 },
         // log(s.Substring(0, nl))
-               get(s),
-        c32(0),             get(nl),   call(.string_head),     set(nl + 1),
-        get(fd),            c32(1),    .i32_eq,                ifElse(.empty, &.{ get(nl + 1), call(.log) }, &.{ get(nl + 1), call(.log_warning) }),
+    } ++ line ++ [_]I{
+        get(fd),            c32(1),  .i32_eq,      ifElse(.empty, &.{ get(nl + 1), call(.log) }, &.{ get(nl + 1), call(.log_warning) }),
         // s = s.Substring(nl + 1)
-        get(s),             get(nl),   c32(1),                 .i32_add,
-        call(.string_tail), set(s),    .{ .br = 0 },
-    });
+        get(s),             get(nl), c32(1),       .i32_add,
+        call(.string_tail), set(s),  .{ .br = 0 },
+    }));
 }
 
 /// fd_write(fd, iovs, iovs_len, nwritten) — stdout and stderr go to the
@@ -173,7 +184,7 @@ const fd_write: Shim = .{
             c32(1),               .i32_sub,               set(2),
             .{ .br = 0 },
         }),
-        flushLines(0, 5, 6),                                                        get(0),                                                             c32(1),   .i32_eq,
+        flushLines(0, 5, 6, false),                                                 get(0),                                                             c32(1),   .i32_eq,
         ifElse(.empty, &.{ get(5), call(.set_out) }, &.{ get(5), call(.set_err) }), get(3),                                                             get(4),   .{ .i32_store = at(0) },
         c32(errno.success),
     },
@@ -266,6 +277,65 @@ const fd_seek: Shim = .{
     .body = &.{ get(3), .{ .i64_const = 0 }, .{ .i64_store = at(0) }, c32(errno.spipe) },
 };
 
+// ----------------------------------------------------------------------
+//  Host functions a module can be given through `__udon_meta.imports`
+// ----------------------------------------------------------------------
+
+/// Whatever stdout and stderr still hold goes to the log.
+const flush_output = [_]I{
+    call(.get_out), call(.string_length), ifElse(.empty, &.{ call(.get_out), call(.log) }, null),
+    call(.get_err), call(.string_length), ifElse(.empty, &.{ call(.get_err), call(.log_warning) }, null),
+};
+
+/// write(pointer, length) [→ length] — console output: text for the log,
+/// a line at a time, in the same buffer as WASI's stdout. A console driver
+/// ends its lines for a terminal ("\r\n"); the log gets them without.
+fn hostWrite(comptime returns: bool) Shim {
+    return .{
+        .params = &i32x2,
+        .results = if (returns) &.{.i32} else &.{},
+        // 2 "this is stdout", 3 text, 4 newline index, 5 line
+        .locals = &.{.{ .count = 4, .ty = .i32 }},
+        .body = &([_]I{
+            c32(1),                    set(2),
+            call(.get_out),            get(0),
+            get(1),                    call(.string_from),
+            call(.string_concat),      set(3),
+            flushLines(2, 3, 4, true), get(3),
+            call(.set_out),
+        } ++ (if (returns) [_]I{get(1)} else [_]I{})),
+    };
+}
+const host_write = [_]Shim{ hostWrite(true), hostWrite(false) };
+
+/// clock() → nanoseconds since the application started.
+const host_clock = [_]Shim{.{
+    .params = &.{},
+    .results = &.{.i64},
+    .body = &.{ call(.uptime), .{ .f64_const = 1e9 }, .f64_mul, .i64_trunc_sat_f64_s },
+}};
+
+/// panic(message) — a NUL-terminated string for the error log, and the end
+/// of the event.
+const host_panic = [_]Shim{.{
+    .params = &i32x1,
+    .results = &.{},
+    // 1 length
+    .locals = &.{.{ .count = 1, .ty = .i32 }},
+    .body = &(flush_output ++ [_]I{
+        loopIn(&.{
+            get(0), get(1), .i32_add, .{ .i32_load8_u = at(0) }, .i32_eqz,     .{ .br_if = 1 },
+            get(1), c32(1), .i32_add, set(1),                    .{ .br = 0 },
+        }),
+        get(0),
+        get(1),
+        call(.string_from),
+        call(.log_error),
+        call(.halt),
+        .unreachable_,
+    }),
+}};
+
 const Known = struct { name: []const u8, shim: ?*const Shim = null, result: i32 = errno.nosys };
 
 /// Every function of the interface. One without a shim returns `result`
@@ -339,52 +409,107 @@ pub fn support(name: []const u8) Support {
 
 pub const LinkError = error{ OutOfMemory, WasiSignatureMismatch, WasiUnknownImport };
 
-pub const Linked = struct {
-    module: Module,
-    /// Name of an import the interface does not have, or whose type is not
-    /// the interface's, when `link` fails.
-    offender: []const u8 = "",
+const Binding = wasm.udon_meta.ImportBinding;
+const Field = wasm.udon_meta.Field;
+
+/// What becomes of a function import.
+const How = union(enum) {
+    /// It stays an import: an Udon extern, or something for the lowering
+    /// to reject.
+    keep,
+    shim: *const Shim,
+    /// A function that returns this whatever its arguments.
+    constant: i64,
+    /// A function that reports having been called and ends the event.
+    halt,
 };
 
-/// True if the module imports anything from WASI.
-pub fn used(mod: Module) bool {
-    for (mod.imports) |imp| if (imp.desc == .func and std.mem.eql(u8, imp.module, module_name)) return true;
-    return false;
+/// Whether a binding's pattern — `module.name`, or a prefix of it ending
+/// in `*` — names the import.
+pub fn matches(pattern: []const u8, imp: wasm.module.Import) bool {
+    const open = pattern.len != 0 and pattern[pattern.len - 1] == '*';
+    // Compare against "module.name" without building it.
+    var rest = if (open) pattern[0 .. pattern.len - 1] else pattern;
+    for ([_][]const u8{ imp.module, ".", imp.name }) |part| {
+        const n = @min(rest.len, part.len);
+        if (!std.mem.eql(u8, rest[0..n], part[0..n])) return false;
+        if (n < part.len) return open;
+        rest = rest[n..];
+    }
+    return rest.len == 0;
 }
 
-/// Replace the module's WASI imports by functions defined in it. With
-/// `strict`, an import the interface does not have is an error; otherwise
-/// it becomes a function returning `nosys`.
-pub fn link(arena: std.mem.Allocator, mod: Module, strict: bool, offender: *[]const u8) LinkError!Module {
+fn how(imp: wasm.module.Import, ty: FuncType, bindings: []const Binding, strict: bool, offender: *[]const u8) LinkError!How {
+    offender.* = imp.name;
+    if (std.mem.eql(u8, imp.module, module_name)) {
+        const known = find(imp.name) orelse return if (strict) error.WasiUnknownImport else .{ .constant = errno.nosys };
+        const s = known.shim orelse return .{ .constant = known.result };
+        if (!sameTypes(ty.params, s.params) or !sameTypes(ty.results, s.results)) return error.WasiSignatureMismatch;
+        return .{ .shim = s };
+    }
+    const b = for (bindings) |b| {
+        if (matches(b.pattern, imp)) break b;
+    } else return .keep;
+    const variants: []const Shim = switch (b.as orelse return .{ .constant = b.returns }) {
+        .halt => return .halt,
+        .write => &host_write,
+        .clock => &host_clock,
+        .panic => &host_panic,
+    };
+    for (variants) |*s| if (sameTypes(ty.params, s.params) and sameTypes(ty.results, s.results)) return .{ .shim = s };
+    return error.WasiSignatureMismatch;
+}
+
+/// Replace the module's WASI imports, and the imports `bindings` names, by
+/// functions defined in it; the Udon variables those keep their state in
+/// are appended to `fields_out`. With `strict`, a WASI import the
+/// interface does not have is an error; otherwise it becomes a function
+/// returning `nosys`. On an error `offender` names the import.
+pub fn link(arena: std.mem.Allocator, mod: Module, bindings: []const Binding, strict: bool, fields_out: *std.ArrayList(Field), offender: *[]const u8) LinkError!Module {
     var old_func_imports: u32 = 0;
     for (mod.imports) |imp| old_func_imports += @intFromBool(imp.desc == .func);
 
-    // Which shims and which of their dependencies are needed.
+    // What each import becomes, and which dependencies that needs.
+    const hows = try arena.alloc(How, old_func_imports);
     var needed = std.EnumSet(Dep).initEmpty();
     var shim_count: u32 = 0;
-    for (mod.imports) |imp| {
-        if (imp.desc != .func or !std.mem.eql(u8, imp.module, module_name)) continue;
-        shim_count += 1;
-        const known = find(imp.name) orelse {
-            if (strict) {
-                offender.* = imp.name;
-                return error.WasiUnknownImport;
+    {
+        var k: u32 = 0;
+        for (mod.imports) |imp| {
+            if (imp.desc != .func) continue;
+            hows[k] = try how(imp, mod.types_[imp.desc.func], bindings, strict, offender);
+            switch (hows[k]) {
+                .keep, .constant => {},
+                .shim => |s| collect(s.body, &needed),
+                .halt => {
+                    collect(&flush_output, &needed);
+                    needed.insert(.log_error);
+                    needed.insert(.halt);
+                },
             }
-            continue;
-        };
-        if (known.shim) |s| collect(s.body, &needed);
+            shim_count += @intFromBool(hows[k] != .keep);
+            k += 1;
+        }
     }
+    if (shim_count == 0) return mod;
 
-    // New index space: [kept imports][dependencies][shims][old functions].
+    // New index space:
+    // [kept imports][dependencies][names of halting imports][shims][old functions].
     var types: std.ArrayList(FuncType) = .empty;
     try types.appendSlice(arena, mod.types_);
     var imports: std.ArrayList(wasm.module.Import) = .empty;
     const remap = try arena.alloc(u32, old_func_imports + mod.funcs.len);
     var kept: u32 = 0;
-    for (mod.imports) |imp| {
-        const is_wasi = imp.desc == .func and std.mem.eql(u8, imp.module, module_name);
-        if (!is_wasi) try imports.append(arena, imp);
-        if (imp.desc == .func and !is_wasi) kept += 1;
+    {
+        var k: u32 = 0;
+        for (mod.imports) |imp| {
+            const replaced = imp.desc == .func and hows[k] != .keep;
+            if (!replaced) try imports.append(arena, imp);
+            if (imp.desc == .func) {
+                kept += @intFromBool(!replaced);
+                k += 1;
+            }
+        }
     }
     var dep_index = std.EnumArray(Dep, u32).initUndefined();
     var next = kept;
@@ -395,6 +520,33 @@ pub fn link(arena: std.mem.Allocator, mod: Module, strict: bool, offender: *[]co
         dep_index.set(d, next);
         next += 1;
     }
+    // Only the buffers the linked functions actually use.
+    if (needed.contains(.get_out) or needed.contains(.set_out)) try fields_out.append(arena, fields[0]);
+    if (needed.contains(.get_err) or needed.contains(.set_err)) try fields_out.append(arena, fields[1]);
+    // The message of a halting import is the default value of an Udon
+    // variable: a string constant the function can get a handle to.
+    const first_name = next;
+    {
+        const getter = try typeIndex(arena, &types, &.{}, &.{.i32});
+        var k: u32 = 0;
+        for (mod.imports) |imp| {
+            if (imp.desc != .func) continue;
+            defer k += 1;
+            if (hows[k] != .halt) continue;
+            const n = next - first_name;
+            const import_name = try std.fmt.allocPrint(arena, "wasdon.import{d}", .{n});
+            const field_name = try std.fmt.allocPrint(arena, "__import{d}", .{n});
+            try imports.append(arena, .{ .module = "env", .name = import_name, .desc = .{ .func = getter } });
+            try fields_out.append(arena, .{
+                .key = field_name,
+                .source = .{ .kind = .import, .name = import_name },
+                .udon_name = field_name,
+                .type_name = "SystemString",
+                .default = .{ .string = try std.fmt.allocPrint(arena, "{s}.{s} was called: this host does not have it, and the event ends here", .{ imp.module, imp.name }) },
+            });
+            next += 1;
+        }
+    }
     const first_shim = next;
     const first_old = first_shim + shim_count;
 
@@ -404,40 +556,39 @@ pub fn link(arena: std.mem.Allocator, mod: Module, strict: bool, offender: *[]co
         var old: u32 = 0;
         var kept_seen: u32 = 0;
         var shim_seen: u32 = 0;
+        var halt_seen: u32 = 0;
         for (mod.imports) |imp| {
             if (imp.desc != .func) continue;
-            if (!std.mem.eql(u8, imp.module, module_name)) {
+            defer old += 1;
+            if (hows[old] == .keep) {
                 remap[old] = kept_seen;
                 kept_seen += 1;
-                old += 1;
                 continue;
             }
             remap[old] = first_shim + shim_seen;
             shim_seen += 1;
-            old += 1;
 
             const ty = mod.types_[imp.desc.func];
-            const known = find(imp.name);
-            const shim = if (known) |k| k.shim else null;
-            if (shim) |s| {
-                if (!sameTypes(ty.params, s.params) or !sameTypes(ty.results, s.results)) {
-                    offender.* = imp.name;
-                    return error.WasiSignatureMismatch;
-                }
-                try funcs.append(arena, imp.desc.func);
-                try codes.append(arena, .{ .locals = s.locals, .body = try resolve(arena, s.body, &dep_index) });
-            } else {
-                // Any parameters, an errno result.
-                if (ty.results.len > 1 or (ty.results.len == 1 and ty.results[0] != .i32)) {
-                    offender.* = imp.name;
-                    return error.WasiSignatureMismatch;
-                }
-                const result: i32 = if (known) |k| k.result else errno.nosys;
-                const body = try arena.alloc(I, ty.results.len);
-                for (body) |*ins| ins.* = .{ .i32_const = result };
-                try funcs.append(arena, imp.desc.func);
-                try codes.append(arena, .{ .locals = &.{}, .body = body });
-            }
+            try funcs.append(arena, imp.desc.func);
+            try codes.append(arena, switch (hows[old]) {
+                .keep => unreachable,
+                .shim => |shim| .{ .locals = shim.locals, .body = try resolve(arena, shim.body, &dep_index) },
+                .constant => |value| body: {
+                    // Any parameters; one integer result at most.
+                    if (ty.results.len > 1 or (ty.results.len == 1 and ty.results[0] != .i32 and ty.results[0] != .i64)) {
+                        offender.* = imp.name;
+                        return error.WasiSignatureMismatch;
+                    }
+                    const body = try arena.alloc(I, ty.results.len);
+                    for (body, ty.results) |*ins, r| ins.* = if (r == .i64) .{ .i64_const = value } else .{ .i32_const = @truncate(value) };
+                    break :body .{ .locals = &.{}, .body = body };
+                },
+                .halt => body: {
+                    const tail = [_]I{ .{ .call = first_name + halt_seen }, call(.log_error), call(.halt), .unreachable_ };
+                    halt_seen += 1;
+                    break :body .{ .locals = &.{}, .body = try resolve(arena, &(flush_output ++ tail), &dep_index) };
+                },
+            });
         }
         for (mod.funcs, 0..) |_, k| remap[old_func_imports + k] = first_old + @as(u32, @intCast(k));
     }
@@ -508,7 +659,9 @@ fn collect(body: []const I, needed: *std.EnumSet(Dep)) void {
 fn resolve(arena: std.mem.Allocator, body: []const I, dep_index: *const std.EnumArray(Dep, u32)) error{OutOfMemory}![]const I {
     const out = try arena.dupe(I, body);
     for (out) |*ins| switch (ins.*) {
-        .call => |f| ins.* = .{ .call = dep_index.get(@enumFromInt(f - dep_base)) },
+        .call => |f| if (f >= dep_base) {
+            ins.* = .{ .call = dep_index.get(@enumFromInt(f - dep_base)) };
+        },
         .block => |b| ins.* = .{ .block = .{ .bt = b.bt, .body = try resolve(arena, b.body, dep_index) } },
         .loop => |b| ins.* = .{ .loop = .{ .bt = b.bt, .body = try resolve(arena, b.body, dep_index) } },
         .if_ => |b| ins.* = .{ .if_ = .{
