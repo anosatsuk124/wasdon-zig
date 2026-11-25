@@ -120,7 +120,9 @@ calls fail with an error the program can handle; they do not stop the
 translation.
 
 Measured examples: `examples/wasi-hello` (Zig `std`),
-`examples/bench/wasi-rs` (Rust `std`) — `docs/benchmarks.md`.
+`examples/bench/wasi-rs` (Rust `std`), and `examples/rhai-bench` — the Rhai
+scripting engine, 3 360 functions, interpreting a script and printing its
+results — `docs/benchmarks.md`.
 
 ## 6. Producer notes
 

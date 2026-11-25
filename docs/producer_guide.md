@@ -251,6 +251,14 @@ source code, from the examples' optimization log (`docs/benchmarks.md`):
 - **Speed over size for hot code.** `-O ReleaseFast` / `opt-level = 3`
   unrolls and inlines, which removes loop-control externs; the code grows.
   The benchmark is built that way, the other examples for size.
+- **A `switch` / `match` is cheap at any size.** With five or more cases
+  it compiles to `br_table`, which is a bounds test and an indexed jump —
+  two or three externs whichever case is taken
+  (`docs/spec_call_return_conversion.md` §5). A chain of `if`/`else if`
+  costs one extern per test passed.
+- **Interpreters work, at interpreter cost.** `examples/rhai-bench` runs a
+  whole scripting engine; it spends about 590 times the externs of the same
+  workloads compiled ahead of time. Step such a thing over many frames.
 - **Recursion is affordable, loops are cheaper** (§8).
 
 ## 9b. WASI programs
