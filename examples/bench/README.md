@@ -35,8 +35,8 @@ instruction on the Udon VM, so that is the number to compare.
 | all three | 272 599 | 159 283 | 181 174 | 1.7× / 1.5× fewer |
 | instructions of any kind | 1 438 788 | 913 692 | 951 694 | |
 
-The WASI program — the whole thing, `println!` included — runs 185 933
-externs (976 631 instructions): still under UdonSharp's 272 599 for the
+The WASI program — the whole thing, `println!` included — runs 185 936
+externs (976 643 instructions): still under UdonSharp's 272 599 for the
 bare workloads.
 
 Where the differences come from:

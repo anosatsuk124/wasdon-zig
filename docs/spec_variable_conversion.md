@@ -35,6 +35,7 @@ itself reserves for event parameters or with names the producer chooses in
 | indirect-call argument *k*, return address | `__ia{k}_{type}`, `__ind_RA` | §4 |
 | function table and its image | `__table`, `__table_b64`, `__table_bytes` | §4 |
 | recursion stack: column *k*, depth | `__frame{k}`, `__frame_depth` | §6 |
+| `br_table` jump table *k*; all tables' image | `__jump{k}`; `__jumps_b64`, `__jumps_bytes` | §5 |
 | Boolean constants | `__true`, `__false` | §5 |
 | WASI output not yet ended by a newline | `__wasi_stdout`, `__wasi_stderr` | `spec_wasi_preview_1.md` §2 |
 | initialization state | `__inited`, `__init_RA` | §7 |

@@ -44,6 +44,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const with_rust = b.option(bool, "rust", "Also build and test the Rust examples (needs cargo and the wasm32v1-none target)") orelse false;
+    const with_rhai = b.option(bool, "rhai", "Also build and run the Rhai interpreter benchmark (needs cargo, the wasm32-wasip1 target and the rhai crate)") orelse false;
 
     // ---- library modules ----
     const node_list = b.path("docs/udon_nodes.txt");
@@ -111,6 +112,7 @@ pub fn build(b: *std.Build) void {
     });
     const options = b.addOptions();
     options.addOption(bool, "with_rust", with_rust);
+    options.addOption(bool, "with_rhai", with_rhai);
     fixtures.addOptions("build_options", options);
     // The UdonSharp side of the benchmark is Udon Assembly already.
     fixtures.addAnonymousImport("bench-usharp.uasm", .{ .root_source_file = b.path("examples/bench/usharp/UdonBench.uasm") });
@@ -158,6 +160,18 @@ pub fn build(b: *std.Build) void {
             fixtures.addAnonymousImport(b.fmt("{s}.wasm", .{ex.name}), .{ .root_source_file = bin });
             examples_step.dependOn(&b.addInstallFileWithDir(bin, .{ .custom = "wasm" }, b.fmt("{s}.wasm", .{ex.name})).step);
         }
+    }
+
+    if (with_rhai) {
+        // A whole scripting engine: 3 360 functions, a megabyte of
+        // WebAssembly. Not part of `-Drust` because of what it downloads
+        // and how long it runs.
+        const cargo = b.addSystemCommand(&.{ "cargo", "build", "--release", "--quiet", "--target", "wasm32-wasip1", "-p", "rhai-bench" });
+        const copy = b.addWriteFiles();
+        copy.step.dependOn(&cargo.step);
+        const bin = copy.addCopyFile(b.path("target/wasm32-wasip1/release/rhai_bench.wasm"), "rhai_bench.wasm");
+        fixtures.addAnonymousImport("rhai-bench-rs.wasm", .{ .root_source_file = bin });
+        examples_step.dependOn(&b.addInstallFileWithDir(bin, .{ .custom = "wasm" }, "rhai-bench-rs.wasm").step);
     }
 
     // ---- tests ----

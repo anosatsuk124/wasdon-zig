@@ -729,11 +729,13 @@ test "following a pointer through its own local: p = p.next; p.next" {
         .{ .i32_const = 308 }, .{ .i32_const = 777 }, .{ .i32_store = m0 },
         .{ .i32_const = 100 }, .{ .local_set = 0 },
         // p = p.next — the load is still pending when p is assigned.
-        .{ .local_get = 0 },   .{ .i32_load = m8 },   .{ .local_set = 0 },
+          .{ .local_get = 0 },
+        .{ .i32_load = m8 },   .{ .local_set = 0 },
         // q = p.next must use the new p.
-        .{ .local_get = 0 },   .{ .i32_load = m8 },   .{ .global_set = 2 },
-        .{ .local_get = 0 },   .{ .i32_load = m8 },   .{ .local_tee = 0 },
-        .{ .i32_load = m8 },   .{ .global_set = 3 },
+          .{ .local_get = 0 },
+        .{ .i32_load = m8 },   .{ .global_set = 2 },  .{ .local_get = 0 },
+        .{ .i32_load = m8 },   .{ .local_tee = 0 },   .{ .i32_load = m8 },
+        .{ .global_set = 3 },
     };
     var p = try runBody(a, &body, &.{.{ .count = 1, .ty = .i32 }});
     defer p.deinit();
@@ -851,17 +853,18 @@ test "passive data segments: memory.init copies, data.drop empties" {
     const m0 = wasm.instruction.MemArg{ .@"align" = 0, .offset = 0 };
     const body = [_]I{
         // memory[100..104] = segment 1 [2..6]
-        .{ .i32_const = 100 }, .{ .i32_const = 2 }, .{ .i32_const = 4 }, .{ .memory_init = 1 },
-        .{ .i32_const = 100 }, .{ .i32_load = m0 }, .{ .global_set = 2 },
+        .{ .i32_const = 100 }, .{ .i32_const = 2 },   .{ .i32_const = 4 },   .{ .memory_init = 1 },
+        .{ .i32_const = 100 }, .{ .i32_load = m0 },   .{ .global_set = 2 },
         // The active segment was placed at startup; segment 1 was not.
-        .{ .i32_const = 8 },   .{ .i32_load = m0 }, .{ .global_set = 3 },
+         .{ .i32_const = 8 },
+        .{ .i32_load = m0 },   .{ .global_set = 3 },
         // After data.drop a zero-length init still succeeds…
-        .{ .data_drop = 1 },
-        .{ .i32_const = 200 }, .{ .i32_const = 0 }, .{ .i32_const = 0 }, .{ .memory_init = 1 },
-        .{ .i64_const = 1 },   .{ .global_set = 0 },
+         .{ .data_drop = 1 },   .{ .i32_const = 200 },
+        .{ .i32_const = 0 },   .{ .i32_const = 0 },   .{ .memory_init = 1 }, .{ .i64_const = 1 },
+        .{ .global_set = 0 },
         // …and any other traps.
-        .{ .i32_const = 200 }, .{ .i32_const = 0 }, .{ .i32_const = 1 }, .{ .memory_init = 1 },
-        .{ .i64_const = 2 },   .{ .global_set = 0 },
+         .{ .i32_const = 200 }, .{ .i32_const = 0 },   .{ .i32_const = 1 },
+        .{ .memory_init = 1 }, .{ .i64_const = 2 },   .{ .global_set = 0 },
     };
     var mod = try simpleModule(a, &.{ .i64, .i64, .i32, .i32 }, &.{}, &body);
     const offset = try a.dupe(I, &.{.{ .i32_const = 8 }});
@@ -1003,30 +1006,148 @@ test "br_if that carries a value: the value is ready on both paths" {
         //   local.get 0  i32.load offset=4  i32.add
         // end
         const inner = [_]I{
-            .{ .i32_const = 96 },  .{ .local_set = 0 },
-            .{ .i32_const = 100 }, .{ .i32_const = 7 },  .{ .i32_store = .{ .@"align" = 2, .offset = 0 } },
-            .{ .local_get = 0 },   .{ .i32_load = m4 },
-            .{ .global_get = 2 },  .{ .br_if = 0 },
-            .{ .i32_const = 1000 }, .i32_add,
-            .{ .local_get = 0 },   .{ .i32_load = m4 }, .i32_add,
+            .{ .i32_const = 96 },                              .{ .local_set = 0 },
+            .{ .i32_const = 100 },                             .{ .i32_const = 7 },
+            .{ .i32_store = .{ .@"align" = 2, .offset = 0 } }, .{ .local_get = 0 },
+            .{ .i32_load = m4 },                               .{ .global_get = 2 },
+            .{ .br_if = 0 },                                   .{ .i32_const = 1000 },
+            .i32_add,                                          .{ .local_get = 0 },
+            .{ .i32_load = m4 },                               .i32_add,
         };
         // The same with a comparison as the carried value.
         const inner2 = [_]I{
             .{ .global_get = 2 }, .{ .i32_const = 5 }, .i32_lt_s,
-            .{ .global_get = 2 }, .{ .br_if = 0 },
-            .{ .i32_const = 40 }, .i32_add,
+            .{ .global_get = 2 }, .{ .br_if = 0 },     .{ .i32_const = 40 },
+            .i32_add,
         };
         const body = [_]I{
-            .{ .i32_const = take }, .{ .global_set = 2 },
-            .{ .block = .{ .bt = i32_block, .body = &inner } },
-            .{ .global_set = 3 },
-            .{ .block = .{ .bt = i32_block, .body = &inner2 } },
-            .i64_extend_i32_s,     .{ .global_set = 0 },
+            .{ .i32_const = take },                              .{ .global_set = 2 },
+            .{ .block = .{ .bt = i32_block, .body = &inner } },  .{ .global_set = 3 },
+            .{ .block = .{ .bt = i32_block, .body = &inner2 } }, .i64_extend_i32_s,
+            .{ .global_set = 0 },
         };
         var p = try runBody(a, &body, &.{.{ .count = 1, .ty = .i32 }});
         defer p.deinit();
         try testing.expectEqual(Value{ .int32 = if (take != 0) 7 else 1014 }, p.global("__G__g3"));
         try testing.expectEqual(Value{ .int64 = if (take != 0) 1 else 41 }, p.global("__G__g0"));
+    }
+}
+
+test "br_table through a jump table: every case, the default, out of range" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Each case carries 1000 to a different block, which adds its own
+    // number; case 5 leaves all of them.
+    const labels = [_]u32{ 0, 1, 2, 3, 4, 5, 1, 3 };
+    const expected = [_]i32{ 1001, 1002, 1003, 1004, 1005, 1000, 1002, 1004 };
+    const indices = [_]i32{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 100, -1, std.math.minInt(i32), std.math.maxInt(i32) };
+    for (indices) |index| {
+        const body = [_]I{
+            .{ .i32_const = index },
+            .{ .local_set = 0 },
+            block(.i32, &.{
+                block(.i32, &.{
+                    block(.i32, &.{
+                        block(.i32, &.{
+                            block(.i32, &.{
+                                block(.i32, &.{
+                                    .{ .i32_const = 1000 },
+                                    .{ .local_get = 0 },
+                                    .{ .br_table = .{ .labels = &labels, .default = 2 } },
+                                }),
+                                .{ .i32_const = 1 },
+                                .i32_add,
+                                .{ .br = 4 },
+                            }),
+                            .{ .i32_const = 2 },
+                            .i32_add,
+                            .{ .br = 3 },
+                        }),
+                        .{ .i32_const = 3 },
+                        .i32_add,
+                        .{ .br = 2 },
+                    }),
+                    .{ .i32_const = 4 },
+                    .i32_add,
+                    .{ .br = 1 },
+                }),
+                .{ .i32_const = 5 },
+                .i32_add,
+            }),
+            .{ .global_set = 2 },
+        };
+        var p = try runBody(a, &body, &.{.{ .count = 1, .ty = .i32 }});
+        defer p.deinit();
+        const want = if (index >= 0 and index < expected.len) expected[@intCast(index)] else 1003;
+        try testing.expectEqual(Value{ .int32 = want }, p.global("__G__g2"));
+        // The dispatch is an indexed jump, not a chain of comparisons.
+        try testing.expect(p.vm.stats.externs <= 8);
+    }
+}
+
+test "br_table through a jump table: cases that return, a loop as a case" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Depth 3 is the function. `by_default` picks which of the two tables
+    // has the return as its default.
+    for ([_]bool{ false, true }) |by_default| {
+        const labels: []const u32 = if (by_default) &.{ 0, 1, 2, 0, 1, 2 } else &.{ 0, 1, 3, 0, 1, 2, 3 };
+        const default: u32 = if (by_default) 3 else 0;
+        for ([_]i32{ 0, 1, 2, 3, 4, 5, 6, 7, -5 }) |index| {
+            const body = [_]I{
+                .{ .i32_const = index },
+                .{ .local_set = 0 },
+                .{ .i32_const = 7 },
+                .{ .global_set = 2 },
+                loop(&.{
+                    // Counts the passes: case 2 comes back here once.
+                    .{ .global_get = 3 },
+                    .{ .i32_const = 1 },
+                    .i32_add,
+                    .{ .global_set = 3 },
+                    block(null, &.{
+                        block(null, &.{
+                            .{ .local_get = 0 },
+                            .{ .local_get = 0 },
+                            .{ .i32_const = 1 },
+                            .i32_sub,
+                            // Second pass of the loop: index - 1.
+                            .{ .global_get = 3 },
+                            .{ .i32_const = 1 },
+                            .i32_eq,
+                            .select,
+                            .{ .br_table = .{ .labels = labels, .default = default } },
+                        }),
+                        .{ .i32_const = 1 },
+                        .{ .global_set = 2 },
+                        .return_,
+                    }),
+                    .{ .i32_const = 2 },
+                    .{ .global_set = 2 },
+                }),
+            };
+            var p = try runBody(a, &body, &.{.{ .count = 1, .ty = .i32 }});
+            defer p.deinit();
+            // Reference: what the same table does, followed twice at most.
+            var x = index;
+            var passes: i32 = 0;
+            const result: i32 = while (true) {
+                passes += 1;
+                const i = if (passes == 1) x else x - 1;
+                const d = if (i >= 0 and i < labels.len) labels[@intCast(i)] else default;
+                switch (d) {
+                    0 => break 1,
+                    1 => break 2,
+                    2 => x = i,
+                    else => break 7,
+                }
+                if (passes > 20) return error.TestUnexpectedResult;
+            };
+            try testing.expectEqual(Value{ .int32 = result }, p.global("__G__g2"));
+            try testing.expectEqual(Value{ .int32 = passes }, p.global("__G__g3"));
+        }
     }
 }
 
@@ -1263,7 +1384,10 @@ test "recursion: a local read before the call but used after it survives" {
         .{ .local_get = 0 }, .i32_eqz,
         .{ .if_ = .{ .bt = i32_block, .then_body = &.{.{ .i32_const = 0 }}, .else_body = &.{
             .{ .local_get = 0 },
-            .{ .local_get = 0 }, .{ .i32_const = 1 }, .i32_sub, .{ .call = 1 },
+            .{ .local_get = 0 },
+            .{ .i32_const = 1 },
+            .i32_sub,
+            .{ .call = 1 },
             .i32_add,
         } } },
     };

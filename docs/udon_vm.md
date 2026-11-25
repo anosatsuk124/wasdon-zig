@@ -167,6 +167,30 @@ wasdon-zig run program.uasm --events "_start,_interact*3,_update*60" --profile
 
 `_update` advances the emulated clock by one frame before each run.
 
+### Finding a miscompilation
+
+A large program that faults millions of instructions in gives little to go
+on. Three facilities narrow it down:
+
+- **The jump trail.** On a fault the CLI prints the addresses of the last
+  64 jumps taken (`Vm.trailSlice`), which shows the path into the faulting
+  function — including through indirect calls.
+- **Switching optimizations off.** `wasdon-zig translate in.wasm --without
+  derived,pending_loads` disables the named lowering optimizations
+  (`translate.Disable`: `liveness`, `stack_return`, `bool_locals`,
+  `pending_loads`, `memory_copies`, `byte_operators`, `derived`, `masks`,
+  `jump_tables`). The smallest set that makes the fault disappear names the
+  code to read.
+- **The store digest.** The emulator keeps a running digest of every write
+  to a byte array (`Vm.stores`: count and hash). `run --stop-at-store N`
+  stops at the N-th write and prints the digest, so two translations of
+  the same module can be bisected to the first write on which they
+  disagree; the trail at that point gives the function.
+
+The three bugs found this way while bringing up the Rhai interpreter
+(`examples/rhai-bench`) each have a small executed test in
+`src/translator/tests.zig`.
+
 ## 6. The checker (`src/udon/check.zig`)
 
 `check` validates a parsed program against `docs/udon_specs.md` and the node

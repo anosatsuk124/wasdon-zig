@@ -134,7 +134,9 @@ note of which local and offset it is. A later access to the same field —
 the store of `p.x += v` after its load, say — finds the note and reuses the
 slot. The same cache holds `local ^ 0x80000000`, the operand of an unsigned
 comparison (`docs/spec_numeric_conversion.md` §3). A note is dropped when
-its local is assigned, and all of them at every label (other paths lead
+its local is assigned — *after* the assigned value has been produced, since
+that value may be a pending load through the local itself (`p = p.next`
+computes `p + 8` from the old `p`) — and all of them at every label (other paths lead
 there) and after every call (the callee uses the same slots, and an extern
 may run another event of the behaviour).
 

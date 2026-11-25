@@ -166,7 +166,7 @@ function performs an indirect call.
 | `br` | move carried values to the target's join slots, `JUMP` |
 | `br_if` (no values) | `PUSH !cond; JUMP_IF_FALSE target` — or, with only `cond` at hand, `PUSH cond; JUMP_IF_FALSE skip; JUMP target; skip:` |
 | `br_if` (values / return) | `PUSH cond; JUMP_IF_FALSE skip`, copy values, `JUMP target` |
-| `br_table` | one equality test per non-default case |
+| `br_table` | fewer than five non-default cases: one equality test per case; otherwise an indexed jump (below) |
 | `return` | results to return registers, then return (§4) |
 | `unreachable` | `JUMP` to the trap routine (logs an error, ends the event) |
 
@@ -206,6 +206,34 @@ unsigned byte load (`if (flags[i])`, `while (*p)`) becomes one
 `BitConverter.ToBoolean(memory, address)` rather than a load, a conversion
 and a comparison (`docs/spec_linear_memory.md` §3).
 
+**`br_table` is an indexed jump.** A chain of equality tests costs
+`i + 1` externs for case `i`, which is what makes a compiled `match` or a
+bytecode interpreter's dispatch slow. With five or more non-default cases
+the lowering is instead
+
+```
+<carried values → every target's join slots>
+in = index <u n                  # one extern if index is known ≥ 0, else two
+PUSH in; JUMP_IF_FALSE default
+target = __jump{k}[index]        # SystemUInt32Array.Get
+JUMP_INDIRECT target
+```
+
+two or three externs whichever case is taken. `__jump{k}` is a `uint[]` of
+code addresses, one per label of the table. The addresses of all tables are
+written into one Base64 string (`__jumps_b64`) when the program is
+assembled; the init routine decodes it once and cuts each table out with
+one constructor and one `Buffer.BlockCopy`. A case that leaves the function
+points at a return sequence emitted after the jump. A constant index is
+resolved at translation time and becomes a plain `br`.
+
+**Carried values are made ready before the paths part.** The code between
+the test of a `br_if` (or the dispatch of a `br_table`) and the jump runs
+only when the branch is taken, but the translation-time operand stack is
+one object for both paths. Whatever a carried operand still needs — a
+pending load emitted, a condition turned into a number — is therefore done
+before the test, where both paths execute it.
+
 After emission, `Asm.optimize` threads jumps to jumps, removes jumps to the
 next instruction, and drops instructions no jump or fall-through can reach.
 
@@ -241,7 +269,10 @@ way.
   backward pass over the structured body, iterated to a fixed point for
   loops, recording the live set at every call instruction);
 - the temporaries of operands still on the stack below the call's
-  arguments;
+  arguments, and the locals such operands still refer to — `local.get`
+  pushes a reference, not a copy, so a local read before the call and
+  consumed after it is in use across the call even though no instruction
+  after the call names it;
 - `__{fn}_RA__`, if the function returns through it — only recursive
   functions in the function table do; the others use `stack` mode (§4) and
   have no such slot.
@@ -311,4 +342,5 @@ must not reach a function that is active in the outer one.
 - `call_indirect` does not check signatures.
 - Element segments must have constant offsets; passive and declarative
   element segments are ignored.
-- `br_table` is a linear chain of comparisons.
+- `br_table` with fewer than five non-default cases is a linear chain of
+  comparisons.

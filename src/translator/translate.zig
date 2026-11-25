@@ -84,6 +84,8 @@ pub const Disable = struct {
     derived: bool = false,
     /// No mask merging and no non-negativity carried through locals.
     masks: bool = false,
+    /// Lower every `br_table` as a chain of comparisons.
+    jump_tables: bool = false,
 };
 
 pub const Stats = Asm.Stats;
@@ -213,6 +215,8 @@ pub const Translator = struct {
     /// Recursion frames: column *k* holds the *k*-th saved slot of every
     /// active frame, indexed by `frame_depth`.
     frame_columns: std.ArrayList(Sym) = .empty,
+    /// `br_table`s lowered as an indexed jump: the array and its targets.
+    jump_tables: std.ArrayList(struct { sym: Sym, labels: []const Label }) = .empty,
     frame_depth: ?Sym = null,
     return_slot: ?Sym = null,
     /// Passive data segments that some `memory.init` reads, as `byte[]`
@@ -928,6 +932,13 @@ pub const Translator = struct {
         return self.table_sym.?;
     }
 
+    /// A `uint[]` holding the addresses of `labels`, filled at startup.
+    pub fn jumpTable(self: *Translator, labels: []const Label) Error!Sym {
+        const sym = try self.a.declare(.{ .name = try self.name("__jump{d}", .{self.jump_tables.items.len}), .type_name = "SystemUInt32Array" });
+        try self.jump_tables.append(self.arena(), .{ .sym = sym, .labels = labels });
+        return sym;
+    }
+
     /// A fresh constant holding the address of `target`.
     pub fn newRac(self: *Translator, target: Label) Error!Sym {
         self.rac_count += 1;
@@ -1168,6 +1179,22 @@ pub const Translator = struct {
             try a.call(from_b64, &.{ src, raw });
             try a.call("SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array", &.{ try self.constI32(@intCast(labels.len)), tbl });
             try a.call(block_copy, &.{ raw, c0, tbl, c0, try self.constI32(@intCast(labels.len * 4)) });
+        }
+
+        if (self.jump_tables.items.len != 0) {
+            // One string holds every table's addresses; each table is cut
+            // out of the decoded bytes.
+            var all: std.ArrayList(Label) = .empty;
+            for (self.jump_tables.items) |jt| try all.appendSlice(self.arena(), jt.labels);
+            const src = try a.declare(.{ .name = "__jumps_b64", .type_name = "SystemString", .init = .{ .address_table = all.items } });
+            const raw = try a.declare(.{ .name = "__jumps_bytes", .type_name = "SystemByteArray" });
+            try a.call(from_b64, &.{ src, raw });
+            var at: usize = 0;
+            for (self.jump_tables.items) |jt| {
+                try a.call("SystemUInt32Array.__ctor__SystemInt32__SystemUInt32Array", &.{ try self.constI32(@intCast(jt.labels.len)), jt.sym });
+                try a.call(block_copy, &.{ raw, try self.constI32(@intCast(at * 4)), jt.sym, c0, try self.constI32(@intCast(jt.labels.len * 4)) });
+                at += jt.labels.len;
+            }
         }
 
         try self.emitGlobalInits();

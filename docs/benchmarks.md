@@ -408,6 +408,75 @@ existed then: `wasm-bench` 77567 → 8122 executed externs (9.6×),
 (3.5×), `udon-orbit-rs` 6891 → 1628 (4.2×); heap 3042 → 711, 1363 → 388,
 2072 → 670, 620 → 64.
 
+### Step 10 — an interpreter; `br_table` as an indexed jump
+
+`examples/rhai-bench` is the Rhai scripting engine (Rust `std`, WASI)
+interpreting the benchmark's three workloads from source: 1 105 170 bytes
+of WebAssembly, 3 360 functions. It is built and measured with `-Drhai`.
+
+Getting it to run at all took three fixes to the lowering (a local read
+before a re-entrant call and consumed after it was not saved; code emitted
+on the taken path of a value-carrying `br_if` changed the operand stack for
+both paths; `p = p.next` left a stale `p + offset` in the derived-value
+cache). None of them changes the numbers of the other examples.
+
+Its extern profile then showed 12.6 million `Int32 ==`: `br_table` was a
+chain of equality tests, `i + 1` externs for case `i`, and an interpreter
+is made of `match`es. With five or more cases it is now a bounds test and
+a `uint[]` of code addresses indexed by the operand
+(`docs/spec_call_return_conversion.md` §5) — two or three externs for any
+case.
+
+| Example | executed externs before | after | static externs before | after | heap before | after |
+|---|---:|---:|---:|---:|---:|---:|
+| `rhai-bench-rs` | 115361081 | 109765017 | 212914 | 211912 | 56183 | 56412 |
+| `wasm-bench` | 8122 | 8037 | 1829 | 1820 | 711 | 716 |
+| `wasm-bench-rs` | 8251 | 8211 | 398 | 398 | 388 | 395 |
+| `wasm-bench-alloc-rs` | 118466 | 118426 | 1659 | 1659 | 670 | 677 |
+| `wasi-hello` | 15437 | 15438 | 6286 | 6240 | 1923 | 1968 |
+| `bench-wasi-rs` | 185933 | 185936 | 11404 | 11374 | 2480 | 2485 |
+
+The two WASI programs gain one to three externs: their tables are set up
+at startup (two externs each) and the formatting code that owns them runs
+only a few times. The other examples have no `br_table` with five cases
+and are unchanged. Each table costs one heap slot and, at most, two
+constants.
+
+What the interpreter spends its 110 million externs on, after the change
+(`zig build stats -Drhai -- --profile rhai-bench-rs`): 29.0 M `Int32 +`
+(addresses and the shadow stack pointer), 10.5 M `ToInt32` loads, 9.1 M
+`BlockCopy` (stores and copies), 12.7 M frame saves and restores, 5.6 M
+`Int32Array.Set` (the first half of a non-constant store).
+
+For scale: the same workloads compiled ahead of time (`bench-wasi-rs`)
+run 185 936 externs — interpretation costs about 590×. And translated with
+every switchable optimization off (`translate --without liveness,
+stack_return,bool_locals,pending_loads,memory_copies,byte_operators,
+derived,masks,jump_tables`) the interpreter runs 146 642 543 externs and
+787 262 061 instructions: on this program the optimizations of steps 1–10
+that can be switched off are worth a quarter of the externs.
+
+All examples after step 10 (`zig build stats -Drust -Drhai`):
+
+| Example | heap | instr | externs | executed instr | executed externs |
+|---|---:|---:|---:|---:|---:|
+| `wasm-bench` | 716 | 10093 | 1820 | 44235 | 8037 |
+| `udon-orbit` | 68 | 188 | 40 | 8123 | 1926 |
+| `pi` | 102 | 621 | 120 | 316040 | 65314 |
+| `mandelbrot` | 205 | 974 | 190 | 4149134 | 858461 |
+| `image-codec` | 287 | 3097 | 603 | 1757824 | 374798 |
+| `ragdoll` | 301 | 2733 | 546 | 10243870 | 2355817 |
+| `blockfall` | 358 | 3154 | 574 | 595429 | 122632 |
+| `wasi-hello` | 1968 | 33918 | 6240 | 79534 | 15438 |
+| `bench-usharp` (UdonSharp) | 86 | 332 | 57 | 1438788 | 272599 |
+| `bench-zig` | 113 | 1751 | 338 | 913692 | 159283 |
+| `bench-rs` | 113 | 1755 | 341 | 951694 | 181174 |
+| `bench-wasi-rs` | 2485 | 59337 | 11374 | 976643 | 185936 |
+| `wasm-bench-rs` | 395 | 2726 | 398 | 41934 | 8211 |
+| `wasm-bench-alloc-rs` | 677 | 9443 | 1659 | 617900 | 118426 |
+| `udon-orbit-rs` | 64 | 167 | 36 | 6928 | 1628 |
+| `rhai-bench-rs` | 56412 | 1180797 | 211912 | 624933773 | 109765017 |
+
 ### An experiment not adopted: every example at `ReleaseFast`
 
 Building the Zig examples for speed instead of size, measured after step 2:
@@ -420,6 +489,7 @@ says when the trade is worth making.
 
 ```sh
 zig build stats -Drust                       # the tables above (Markdown)
+zig build stats -Drust -Drhai                # … with the Rhai interpreter
 zig build stats -Drust -- --profile wasm-bench   # plus an extern profile
 zig build stats -- --emit zig-out            # also write each .uasm
 ```

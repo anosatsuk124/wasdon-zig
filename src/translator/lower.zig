@@ -852,8 +852,17 @@ const Lowerer = struct {
         self.a.bind(skip);
     }
 
+    /// A `br_table` with fewer cases than this is a chain of comparisons:
+    /// case `i` costs `i + 1` externs that way, an indexed jump two or
+    /// three whichever case it is.
+    const jump_table_min = 5;
+
     fn lowerBrTable(self: *Lowerer, bt: wasm.instruction.BrTable) Error!void {
         var index = try self.pop();
+        if (index.kind == .konst) {
+            const i: u32 = @truncate(index.bits);
+            return self.lowerBr(if (i < bt.labels.len) bt.labels[i] else bt.default);
+        }
         const default = try self.frameAt(bt.default);
         const arity = if (default.kind == .loop) 0 else default.types.len;
         const x = try self.operand(&index);
@@ -872,9 +881,15 @@ const Lowerer = struct {
             }
             if (default.kind != .func and default.kind != .loop) try self.copyResults(default);
         }
+        var cases: usize = 0;
+        for (bt.labels) |d| cases += @intFromBool(d != bt.default);
+        if (cases >= jump_table_min and !self.t.options.disable.jump_tables) {
+            try self.jumpThroughTable(bt, &index, x);
+            return self.release(index);
+        }
         const b = try self.newTemp(try self.poolFor("SystemBoolean"));
         for (bt.labels, 0..) |d, i| {
-            // Consecutive duplicates of the default need no test of their own.
+            // Cases that go where the default goes need no test of their own.
             if (d == bt.default) continue;
             const next = try self.a.newLabel();
             try self.a.call("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean", &.{ x, try self.t.constI32(@intCast(i)), b });
@@ -885,6 +900,48 @@ const Lowerer = struct {
         try self.jumpToFrame(default);
         try self.freeTemp(try self.poolFor("SystemBoolean"), b);
         try self.release(index);
+    }
+
+    /// `br_table` as `if (index <u n) goto table[index]; else default`.
+    /// The carried values are already where every target expects them.
+    fn jumpThroughTable(self: *Lowerer, bt: wasm.instruction.BrTable, index: *Entry, x: Sym) Error!void {
+        const default = try self.frameAt(bt.default);
+        const labels = try self.t.arena().alloc(Label, bt.labels.len);
+        // A case that leaves the function jumps to a return sequence
+        // emitted below.
+        var ret: ?Label = null;
+        for (labels, bt.labels) |*l, d| {
+            const c = try self.frameAt(d);
+            if (c.kind == .func) {
+                if (ret == null) ret = try self.a.newLabel();
+                l.* = ret.?;
+            } else {
+                c.targeted = true;
+                l.* = c.label;
+            }
+        }
+        const out = try self.a.newLabel();
+        try self.push(if (index.kind == .local) index.* else try self.alias(index));
+        try self.pushI32(@intCast(bt.labels.len));
+        try self.compare(.i32, .lt, true);
+        var in_range = try self.pop();
+        try self.branchIf(&in_range, false, out);
+        try self.release(in_range);
+
+        const pool = try self.poolFor("SystemUInt32");
+        const target = try self.newTemp(pool);
+        try self.a.call("SystemUInt32Array.__Get__SystemInt32__SystemUInt32", &.{ try self.t.jumpTable(labels), x, target });
+        try self.a.jumpIndirect(target);
+        try self.freeTemp(pool, target);
+
+        if (ret) |l| {
+            self.a.bind(l);
+            if (default.kind == .func) self.a.bind(out);
+            try self.copyReturn();
+            if (default.kind == .func) return;
+        }
+        self.a.bind(out);
+        try self.jumpToFrame(default);
     }
 
     fn jumpToFrame(self: *Lowerer, c: *Ctrl) Error!void {

@@ -416,7 +416,20 @@ const rust_examples = if (build_options.with_rust) [_]Example{
     .{ .name = "bench-wasi-rs", .wasm = @embedFile("bench-wasi-rs.wasm"), .scenario = "_start", .expected_log = wasi_bench_log, .verify = wasiBenchVerify },
 } else [_]Example{};
 
-pub const examples = zig_examples ++ bench_examples ++ rust_examples;
+/// The Rhai scripting engine interpreting the three workloads of the
+/// benchmark from source. The clock of the emulator does not advance, so
+/// the timings it prints are zero.
+const rhai_examples = if (build_options.with_rhai) [_]Example{.{
+    .name = "rhai-bench-rs",
+    .wasm = @embedFile("rhai-bench-rs.wasm"),
+    .scenario = "_start",
+    .expected_log = "fib(20) = 6765        (0 ns)\n" ++
+        "mandel  = 1345        (0 ns)\n" ++
+        "str.len = 192        (0 ns)\n" ++
+        "total   = 0 ns\n",
+}} else [_]Example{};
+
+pub const examples = zig_examples ++ bench_examples ++ rust_examples ++ rhai_examples;
 
 pub fn find(name: []const u8) ?Example {
     for (examples) |e| if (std.mem.eql(u8, e.name, name)) return e;
