@@ -256,9 +256,10 @@ source code, from the examples' optimization log (`docs/benchmarks.md`):
   two or three externs whichever case is taken
   (`docs/spec_call_return_conversion.md` §5). A chain of `if`/`else if`
   costs one extern per test passed.
-- **Interpreters work, at interpreter cost.** `examples/rhai-bench` runs a
-  whole scripting engine; it spends about 590 times the externs of the same
-  workloads compiled ahead of time. Step such a thing over many frames.
+- **Interpreters work, at interpreter cost.** `examples/rhai-bench` and
+  `examples/mruby-bench` run whole scripting engines; they spend about 590
+  and 130 times the externs of the same workloads compiled ahead of time.
+  Step such a thing over many frames.
 - **Recursion is affordable, loops are cheaper** (§8).
 
 ## 9b. WASI programs
@@ -280,6 +281,11 @@ wasdon_zig run app.uasm --events _start
   is thousands — so use this for code that has to stay portable, and the
   direct style of §4 for code that only targets Udon.
 - Options without touching the program: `--meta app.udon_meta.json`.
+- **C:** `zig cc -target wasm32-wasi` is a complete toolchain (compiler and
+  wasi-libc). `setjmp` / `longjmp` exist in wasi-libc only on top of the
+  WebAssembly exception-handling proposal, which is not translated; a
+  program that uses them only for error exits can be built with a shim
+  header (`examples/mruby-bench/shim/setjmp.h`).
 
 ---
 

@@ -44,6 +44,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const with_rust = b.option(bool, "rust", "Also build and test the Rust examples (needs cargo and the wasm32v1-none target)") orelse false;
+    const with_mruby = b.option(bool, "mruby", "Also build and run the mruby interpreter benchmark (needs make, ruby with rake, a host C compiler and git)") orelse false;
     const with_rhai = b.option(bool, "rhai", "Also build and run the Rhai interpreter benchmark (needs cargo, the wasm32-wasip1 target and the rhai crate)") orelse false;
 
     // ---- library modules ----
@@ -113,6 +114,7 @@ pub fn build(b: *std.Build) void {
     const options = b.addOptions();
     options.addOption(bool, "with_rust", with_rust);
     options.addOption(bool, "with_rhai", with_rhai);
+    options.addOption(bool, "with_mruby", with_mruby);
     fixtures.addOptions("build_options", options);
     // The UdonSharp side of the benchmark is Udon Assembly already.
     fixtures.addAnonymousImport("bench-usharp.uasm", .{ .root_source_file = b.path("examples/bench/usharp/UdonBench.uasm") });
@@ -172,6 +174,16 @@ pub fn build(b: *std.Build) void {
         const bin = copy.addCopyFile(b.path("target/wasm32-wasip1/release/rhai_bench.wasm"), "rhai_bench.wasm");
         fixtures.addAnonymousImport("rhai-bench-rs.wasm", .{ .root_source_file = bin });
         examples_step.dependOn(&b.addInstallFileWithDir(bin, .{ .custom = "wasm" }, "rhai-bench-rs.wasm").step);
+    }
+
+    if (with_mruby) {
+        // mruby's own build system (rake), with `zig cc` as the compiler.
+        const make = b.addSystemCommand(&.{ "make", "--quiet", "-C", "examples/mruby-bench" });
+        const copy = b.addWriteFiles();
+        copy.step.dependOn(&make.step);
+        const bin = copy.addCopyFile(b.path("examples/mruby-bench/build/mruby_bench.wasm"), "mruby_bench.wasm");
+        fixtures.addAnonymousImport("mruby-bench.wasm", .{ .root_source_file = bin });
+        examples_step.dependOn(&b.addInstallFileWithDir(bin, .{ .custom = "wasm" }, "mruby-bench.wasm").step);
     }
 
     // ---- tests ----

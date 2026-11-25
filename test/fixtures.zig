@@ -30,6 +30,9 @@ pub const Example = struct {
     setup: ?*const fn (*Vm) anyerror!void = null,
     /// Inspect the emulated scene after the last event.
     verify: ?*const fn (*Vm) anyerror!void = null,
+    /// Built only on request (`-Drust`, `-Drhai`, `-Dmruby`): it needs a
+    /// toolchain not every build has, so it is not among the Unity assets.
+    optional: bool = false,
 };
 
 const bench_scenario = "_start,_interact*16,_update*10";
@@ -399,21 +402,24 @@ const rust_examples = if (build_options.with_rust) [_]Example{
         .wasm = @embedFile("wasm-bench-rs.wasm"),
         .scenario = bench_scenario,
         .expected_log = @embedFile("expected/wasm-bench-rs.log"),
+        .optional = true,
     },
     .{
         .name = "wasm-bench-alloc-rs",
         .wasm = @embedFile("wasm-bench-alloc-rs.wasm"),
         .scenario = bench_scenario,
         .expected_log = @embedFile("expected/wasm-bench-alloc-rs.log"),
+        .optional = true,
     },
     .{
         .name = "udon-orbit-rs",
         .wasm = @embedFile("udon-orbit-rs.wasm"),
         .scenario = orbit_scenario,
         .expected_log = "udon-orbit-rs: _start\nudon-orbit-rs: cloned\nudon-orbit-rs: cloned\n",
+        .optional = true,
     },
-    .{ .name = "bench-rs", .wasm = @embedFile("bench-rs.wasm"), .scenario = usharp_scenario, .verify = benchVerify },
-    .{ .name = "bench-wasi-rs", .wasm = @embedFile("bench-wasi-rs.wasm"), .scenario = "_start", .expected_log = wasi_bench_log, .verify = wasiBenchVerify },
+    .{ .name = "bench-rs", .wasm = @embedFile("bench-rs.wasm"), .scenario = usharp_scenario, .verify = benchVerify, .optional = true },
+    .{ .name = "bench-wasi-rs", .wasm = @embedFile("bench-wasi-rs.wasm"), .scenario = "_start", .expected_log = wasi_bench_log, .verify = wasiBenchVerify, .optional = true },
 } else [_]Example{};
 
 /// The Rhai scripting engine interpreting the three workloads of the
@@ -427,9 +433,21 @@ const rhai_examples = if (build_options.with_rhai) [_]Example{.{
         "mandel  = 1345        (0 ns)\n" ++
         "str.len = 192        (0 ns)\n" ++
         "total   = 0 ns\n",
+    .optional = true,
 }} else [_]Example{};
 
-pub const examples = zig_examples ++ bench_examples ++ rust_examples ++ rhai_examples;
+/// mruby, built from C with `zig cc`, running the same workloads from
+/// Ruby bytecode. Ruby's integer division rounds down where Rhai's
+/// truncates, which is the one iteration of difference in `mandel`.
+const mruby_examples = if (build_options.with_mruby) [_]Example{.{
+    .name = "mruby-bench",
+    .wasm = @embedFile("mruby-bench.wasm"),
+    .scenario = "_start",
+    .expected_log = "fib(20) = 6765\nmandel  = 1346\nstr.len = 192\ntotal   = 0 ns\n",
+    .optional = true,
+}} else [_]Example{};
+
+pub const examples = zig_examples ++ bench_examples ++ rust_examples ++ rhai_examples ++ mruby_examples;
 
 pub fn find(name: []const u8) ?Example {
     for (examples) |e| if (std.mem.eql(u8, e.name, name)) return e;
@@ -465,10 +483,9 @@ pub const Result = struct {
     }
 };
 
-/// The Zig examples ship as Unity assets (`unity/Wasdon/Examples/`); the
-/// Rust ones need a toolchain not every build has.
+/// The Zig examples ship as Unity assets (`unity/Wasdon/Examples/`).
 pub fn hasUnityAsset(ex: Example) bool {
-    return ex.uasm == null and !std.mem.endsWith(u8, ex.name, "-rs");
+    return ex.uasm == null and !ex.optional;
 }
 
 /// Translate an example, check the output against the Udon Assembly rules,

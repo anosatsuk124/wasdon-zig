@@ -68,9 +68,10 @@ zig build unity                # regenerate unity/Wasdon/Examples from the examp
 ```
 
 Add `-Drust` to include the Rust examples (needs `cargo` and the
-`wasm32v1-none` and `wasm32-wasip1` targets), and `-Drhai` for the Rhai
+`wasm32v1-none` and `wasm32-wasip1` targets), `-Drhai` for the Rhai
 scripting engine (`examples/rhai-bench`: a megabyte of WebAssembly, most of
-a minute to translate, check and run).
+a minute to translate, check and run), and `-Dmruby` for mruby
+(`examples/mruby-bench`: needs `make`, `git` and Ruby with `rake`).
 
 ```sh
 wasdon_zig inspect app.wasm

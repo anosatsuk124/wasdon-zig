@@ -13,7 +13,7 @@ Read the `docs/` specs before designing or changing any translation logic; the W
 - Zig is pinned via `mise` (`mise.toml`); `build.zig.zon` requires `minimum_zig_version = "0.16.0"`.
 - Build the CLI: `zig build` → `zig-out/bin/wasdon_zig`
 - Run the CLI: `zig build run -- <args>` (`inspect`, `translate`, `check`, `run`)
-- Run all tests: `zig build test` (add `-Drust` to include the Rust examples; needs `cargo` + the `wasm32v1-none` and `wasm32-wasip1` targets. `-Drhai` adds `examples/rhai-bench`, a whole scripting engine: run it after any change to `lower.zig` — it is the test that finds miscompilations)
+- Run all tests: `zig build test` (add `-Drust` to include the Rust examples; needs `cargo` + the `wasm32v1-none` and `wasm32-wasip1` targets. `-Drhai` adds `examples/rhai-bench` and `-Dmruby` adds `examples/mruby-bench`, whole interpreters in Rust and C: run them after any change to `lower.zig` — they are the tests that find miscompilations)
 - Build the example modules: `zig build examples`
 - Size / executed-instruction table for every example: `zig build stats` (`-- --profile <example>` for an extern profile)
 - Regenerate the examples' Unity assets: `zig build unity` — required after any change to the translator's output; `zig build test` fails while `unity/Wasdon/Examples/*.uasm.txt` is stale

@@ -14,6 +14,7 @@ test`; `zig build stats` prints what each costs (`docs/benchmarks.md`).
 | [`bench`](bench/) | The same three workloads in UdonSharp, Zig and Rust, measured against each other. |
 | [`wasi-hello`](wasi-hello/), [`bench/wasi-rs`](bench/wasi-rs/) | Ordinary programs with a `main`, built for WASI: Zig's and Rust's `std`, nothing Udon-specific in the source. |
 | [`rhai-bench`](rhai-bench/) | A whole scripting engine (Rhai, Rust `std`) interpreting the benchmark's workloads: the translator's largest test, built with `-Drhai`. |
+| [`mruby-bench`](mruby-bench/) | Ruby: mruby, 60 000 lines of C built with `zig cc`, running the same workloads from bytecode. Built with `-Dmruby`. |
 | [`udon-orbit`](udon-orbit/), [`udon-orbit-rs`](udon-orbit-rs/) | The basics, in Zig and Rust: Inspector fields, object handles, instantiating a prefab. |
 | [`wasm-bench`](wasm-bench/), [`wasm-bench-rs`](wasm-bench-rs/), [`wasm-bench-alloc-rs`](wasm-bench-alloc-rs/) | A self-checking tour of the WebAssembly instruction set; the last one with a heap allocator. |
 | [`linux`](linux/) | What happens when the input is the Linux kernel built for WebAssembly. |

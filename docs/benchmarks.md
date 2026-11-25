@@ -456,7 +456,20 @@ derived,masks,jump_tables`) the interpreter runs 146 642 543 externs and
 787 262 061 instructions: on this program the optimizations of steps 1–10
 that can be switched off are worth a quarter of the externs.
 
-All examples after step 10 (`zig build stats -Drust -Drhai`):
+**mruby** (`examples/mruby-bench`, `-Dmruby`) is the same experiment in C:
+mruby 3.3.0 built with `zig cc` for `wasm32-wasi`, running the workloads
+from Ruby bytecode. It translated, passed the checker and printed the
+right results at the first attempt — after the three fixes above. Its
+bytecode dispatch is one `switch` with a case per opcode, so it shows what
+the indexed jump is worth:
+
+| `mruby-bench` | executed instr | executed externs |
+|---|---:|---:|
+| every switchable optimization off | 184702800 | 38110485 |
+| all on, `br_table` as a chain of comparisons | 164739717 | 33069048 |
+| all on (step 10) | 107882591 | 23789796 |
+
+All examples after step 10 (`zig build stats -Drust -Drhai -Dmruby`):
 
 | Example | heap | instr | externs | executed instr | executed externs |
 |---|---:|---:|---:|---:|---:|
@@ -476,6 +489,7 @@ All examples after step 10 (`zig build stats -Drust -Drhai`):
 | `wasm-bench-alloc-rs` | 677 | 9443 | 1659 | 617900 | 118426 |
 | `udon-orbit-rs` | 64 | 167 | 36 | 6928 | 1628 |
 | `rhai-bench-rs` | 56412 | 1180797 | 211912 | 624933773 | 109765017 |
+| `mruby-bench` | 16707 | 498255 | 99721 | 107882591 | 23789796 |
 
 ### An experiment not adopted: every example at `ReleaseFast`
 
@@ -489,7 +503,7 @@ says when the trade is worth making.
 
 ```sh
 zig build stats -Drust                       # the tables above (Markdown)
-zig build stats -Drust -Drhai                # … with the Rhai interpreter
+zig build stats -Drust -Drhai -Dmruby        # … with the Rhai and mruby interpreters
 zig build stats -Drust -- --profile wasm-bench   # plus an extern profile
 zig build stats -- --emit zig-out            # also write each .uasm
 ```
