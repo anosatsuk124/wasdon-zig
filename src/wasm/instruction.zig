@@ -310,6 +310,66 @@ comptime {
     }
 }
 
+// ----------------------------------------------------------------------
+//  Walking a body
+// ----------------------------------------------------------------------
+//
+// A body is a tree: `block`, `loop` and `if` hold bodies of their own. The
+// helpers below visit the instructions that are not blocks, at every depth.
+
+/// Call `visit` for every instruction of `body`.
+pub fn forEach(body: []const Instruction, ctx: anytype, comptime visit: fn (@TypeOf(ctx), Instruction) void) void {
+    for (body) |ins| switch (ins) {
+        .block, .loop => |b| forEach(b.body, ctx, visit),
+        .if_ => |b| {
+            forEach(b.then_body, ctx, visit);
+            if (b.else_body) |e| forEach(e, ctx, visit);
+        },
+        else => visit(ctx, ins),
+    };
+}
+
+/// True if `found` holds for some instruction of `body`.
+pub fn any(body: []const Instruction, ctx: anytype, comptime found: fn (@TypeOf(ctx), Instruction) bool) bool {
+    for (body) |ins| switch (ins) {
+        .block, .loop => |b| if (any(b.body, ctx, found)) return true,
+        .if_ => |b| if (any(b.then_body, ctx, found) or (b.else_body != null and any(b.else_body.?, ctx, found))) return true,
+        else => if (found(ctx, ins)) return true,
+    };
+    return false;
+}
+
+/// A copy of `body` in which every instruction has been replaced by what
+/// `replace` appended for it.
+pub fn rewrite(
+    arena: std.mem.Allocator,
+    body: []const Instruction,
+    ctx: anytype,
+    comptime replace: fn (@TypeOf(ctx), Instruction, *std.ArrayList(Instruction), std.mem.Allocator) error{OutOfMemory}!void,
+) error{OutOfMemory}![]const Instruction {
+    var out: std.ArrayList(Instruction) = try .initCapacity(arena, body.len);
+    for (body) |ins| switch (ins) {
+        .block => |b| try out.append(arena, .{ .block = .{ .bt = b.bt, .body = try rewrite(arena, b.body, ctx, replace) } }),
+        .loop => |b| try out.append(arena, .{ .loop = .{ .bt = b.bt, .body = try rewrite(arena, b.body, ctx, replace) } }),
+        .if_ => |b| try out.append(arena, .{ .if_ = .{
+            .bt = b.bt,
+            .then_body = try rewrite(arena, b.then_body, ctx, replace),
+            .else_body = if (b.else_body) |e| try rewrite(arena, e, ctx, replace) else null,
+        } }),
+        else => try replace(ctx, ins, &out, arena),
+    };
+    return out.items;
+}
+
+/// A copy of `body` in which every `call f` is `call target(ctx, f)`.
+pub fn mapCalls(arena: std.mem.Allocator, body: []const Instruction, ctx: anytype, comptime target: fn (@TypeOf(ctx), u32) u32) error{OutOfMemory}![]const Instruction {
+    return rewrite(arena, body, ctx, struct {
+        fn replace(c: @TypeOf(ctx), ins: Instruction, out: *std.ArrayList(Instruction), a: std.mem.Allocator) error{OutOfMemory}!void {
+            try out.append(a, if (ins == .call) .{ .call = target(c, ins.call) } else ins);
+        }
+    }.replace);
+}
+
 fn readMemArg(r: *Reader) errors.ParseError!MemArg {
     const a = try leb128.readULEB128(u32, r);
     const o = try leb128.readULEB128(u32, r);

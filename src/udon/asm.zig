@@ -115,11 +115,10 @@ pub const Asm = struct {
     }
 
     /// A new label bound here and written to the output as `.export name`.
-    pub fn exportHere(self: *Asm, name: []const u8) !Label {
+    pub fn exportHere(self: *Asm, name: []const u8) !void {
         const l = try self.newLabel();
         self.labels.items[l].export_name = name;
         self.bind(l);
-        return l;
     }
 
     pub fn push(self: *Asm, sym: Sym) !void {
@@ -303,36 +302,6 @@ pub const Asm = struct {
         };
     }
 
-    /// Replace every operand `s` of `PUSH` / `JUMP_INDIRECT` with `map[s]`,
-    /// then delete the variables no longer referenced by code or kept alive
-    /// by `keep`. Used to overlay the frames of functions that are never
-    /// active at the same time.
-    pub fn remapVars(self: *Asm, map: []const Sym, keep: []const bool) !void {
-        const n = self.vars.items.len;
-        const used = try self.gpa.alloc(bool, n);
-        defer self.gpa.free(used);
-        @memcpy(used, keep);
-        for (self.code.items) |*ins| if (ins.op == .push or ins.op == .jump_indirect) {
-            ins.arg = map[ins.arg];
-            used[ins.arg] = true;
-        };
-        const new_sym = try self.gpa.alloc(Sym, n);
-        defer self.gpa.free(new_sym);
-        var out: u32 = 0;
-        for (self.vars.items, 0..) |v, i| {
-            new_sym[i] = out;
-            if (!used[i]) continue;
-            self.vars.items[out] = v;
-            out += 1;
-        }
-        self.vars.shrinkRetainingCapacity(out);
-        for (self.code.items) |*ins| if (ins.op == .push or ins.op == .jump_indirect) {
-            ins.arg = new_sym[ins.arg];
-        };
-        self.var_names.clearRetainingCapacity();
-        for (self.vars.items, 0..) |v, i| try self.var_names.put(self.gpa, v.name, @intCast(i));
-    }
-
     // ---- rendering ----
 
     fn labelAddress(self: *const Asm, addrs: []const u32, l: Label) u32 {
@@ -452,7 +421,7 @@ test "hello world renders and passes the checker" {
     var a: Asm = .init(testing.allocator);
     defer a.deinit();
     const msg = try a.declare(.{ .name = "message", .type_name = "SystemString", .init = .{ .string = "hi \"there\"" } });
-    _ = try a.exportHere("_start");
+    try a.exportHere("_start");
     try a.call("UnityEngineDebug.__Log__SystemObject__SystemVoid", &.{msg});
     try a.jump(halt);
 
@@ -489,7 +458,7 @@ test "labels resolve to addresses; return-address constants follow layout" {
     const func = try a.newLabel();
     const rac = try a.declare(.{ .name = "rac", .type_name = "SystemUInt32", .init = .{ .address = ret } });
     const ra = try a.declare(.{ .name = "ra", .type_name = "SystemUInt32", .init = .{ .uint32 = 0 } });
-    _ = try a.exportHere("go");
+    try a.exportHere("go");
     try a.copy(rac, ra); // 0, 8, 16
     try a.jump(func); // 20
     a.bind(ret); // 28
@@ -527,7 +496,7 @@ test "optimize threads jumps and drops dead code" {
     const l1 = try a.newLabel();
     const l2 = try a.newLabel();
     const l3 = try a.newLabel();
-    _ = try a.exportHere("go");
+    try a.exportHere("go");
     try a.jump(l1);
     try a.copy(x, x); // unreachable
     a.bind(l1);
@@ -549,8 +518,8 @@ test "optimize threads jumps and drops dead code" {
 test "two exported labels at one position are separated by a NOP" {
     var a: Asm = .init(testing.allocator);
     defer a.deinit();
-    _ = try a.exportHere("First");
-    _ = try a.exportHere("Second");
+    try a.exportHere("First");
+    try a.exportHere("Second");
     try a.jump(halt);
     const out = try renderOwned(&a);
     defer testing.allocator.free(out);

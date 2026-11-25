@@ -190,17 +190,19 @@ const fd_write: Shim = .{
     },
 };
 
+/// Whatever stdout and stderr still hold goes to the log.
+const flush_output = [_]I{
+    call(.get_out), call(.string_length), ifElse(.empty, &.{ call(.get_out), call(.log) }, null),
+    call(.get_err), call(.string_length), ifElse(.empty, &.{ call(.get_err), call(.log_warning) }, null),
+};
+
 /// proc_exit(code) — show what is left of an unfinished line, then end the
 /// event. Nothing of the program runs afterwards unless Udon delivers
 /// another event.
 const proc_exit: Shim = .{
     .params = &i32x1,
     .results = &.{},
-    .body = &.{
-        call(.get_out), call(.string_length), ifElse(.empty, &.{ call(.get_out), call(.log) }, null),
-        call(.get_err), call(.string_length), ifElse(.empty, &.{ call(.get_err), call(.log_warning) }, null),
-        call(.halt),    .unreachable_,
-    },
+    .body = &(flush_output ++ [_]I{ call(.halt), .unreachable_ }),
 };
 
 /// fd_read(fd, iovs, iovs_len, nread) — standard input is always at its
@@ -280,12 +282,6 @@ const fd_seek: Shim = .{
 // ----------------------------------------------------------------------
 //  Host functions a module can be given through `__udon_meta.imports`
 // ----------------------------------------------------------------------
-
-/// Whatever stdout and stderr still hold goes to the log.
-const flush_output = [_]I{
-    call(.get_out), call(.string_length), ifElse(.empty, &.{ call(.get_out), call(.log) }, null),
-    call(.get_err), call(.string_length), ifElse(.empty, &.{ call(.get_err), call(.log_warning) }, null),
-};
 
 /// write(pointer, length) [→ length] — console output: text for the log,
 /// a line at a time, in the same buffer as WASI's stdout. A console driver
@@ -642,53 +638,32 @@ fn typeIndex(arena: std.mem.Allocator, types: *std.ArrayList(FuncType), params: 
     return @intCast(types.items.len - 1);
 }
 
+/// The dependencies a shim body calls.
 fn collect(body: []const I, needed: *std.EnumSet(Dep)) void {
-    for (body) |ins| switch (ins) {
-        .call => |f| if (f >= dep_base) needed.insert(@enumFromInt(f - dep_base)),
-        .block, .loop => |b| collect(b.body, needed),
-        .if_ => |b| {
-            collect(b.then_body, needed);
-            if (b.else_body) |e| collect(e, needed);
-        },
-        else => {},
-    };
+    wasm.instruction.forEach(body, needed, struct {
+        fn visit(deps_called: *std.EnumSet(Dep), ins: I) void {
+            if (ins == .call and ins.call >= dep_base) deps_called.insert(@enumFromInt(ins.call - dep_base));
+        }
+    }.visit);
 }
 
 /// A copy of a shim body with its dependency calls pointing at the
 /// imports the module now has.
 fn resolve(arena: std.mem.Allocator, body: []const I, dep_index: *const std.EnumArray(Dep, u32)) error{OutOfMemory}![]const I {
-    const out = try arena.dupe(I, body);
-    for (out) |*ins| switch (ins.*) {
-        .call => |f| if (f >= dep_base) {
-            ins.* = .{ .call = dep_index.get(@enumFromInt(f - dep_base)) };
-        },
-        .block => |b| ins.* = .{ .block = .{ .bt = b.bt, .body = try resolve(arena, b.body, dep_index) } },
-        .loop => |b| ins.* = .{ .loop = .{ .bt = b.bt, .body = try resolve(arena, b.body, dep_index) } },
-        .if_ => |b| ins.* = .{ .if_ = .{
-            .bt = b.bt,
-            .then_body = try resolve(arena, b.then_body, dep_index),
-            .else_body = if (b.else_body) |e| try resolve(arena, e, dep_index) else null,
-        } },
-        else => {},
-    };
-    return out;
+    return wasm.instruction.mapCalls(arena, body, dep_index, struct {
+        fn target(index: *const std.EnumArray(Dep, u32), f: u32) u32 {
+            return if (f >= dep_base) index.get(@enumFromInt(f - dep_base)) else f;
+        }
+    }.target);
 }
 
 /// A copy of a function body with its calls renumbered.
 fn renumber(arena: std.mem.Allocator, body: []const I, remap: []const u32) error{OutOfMemory}![]const I {
-    const out = try arena.dupe(I, body);
-    for (out) |*ins| switch (ins.*) {
-        .call => |f| ins.* = .{ .call = if (f < remap.len) remap[f] else f },
-        .block => |b| ins.* = .{ .block = .{ .bt = b.bt, .body = try renumber(arena, b.body, remap) } },
-        .loop => |b| ins.* = .{ .loop = .{ .bt = b.bt, .body = try renumber(arena, b.body, remap) } },
-        .if_ => |b| ins.* = .{ .if_ = .{
-            .bt = b.bt,
-            .then_body = try renumber(arena, b.then_body, remap),
-            .else_body = if (b.else_body) |e| try renumber(arena, e, remap) else null,
-        } },
-        else => {},
-    };
-    return out;
+    return wasm.instruction.mapCalls(arena, body, remap, struct {
+        fn target(map: []const u32, f: u32) u32 {
+            return if (f < map.len) map[f] else f;
+        }
+    }.target);
 }
 
 test "support classifies the interface" {

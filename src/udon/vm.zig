@@ -21,9 +21,7 @@ pub const Program = program.Program;
 pub const Value = value.Value;
 pub const Array = value.Array;
 pub const Object = value.Object;
-pub const Vec = value.Vec;
 pub const VecKind = value.VecKind;
-pub const ElemKind = value.ElemKind;
 
 pub const Error = error{
     /// The program did something the real VM would halt on. `Vm.fault`
@@ -46,13 +44,9 @@ pub const Stats = struct {
     instrs: u64 = 0,
     /// `EXTERN` instructions executed (also counted in `instrs`).
     externs: u64 = 0,
-    /// Executed count per opcode number (`Opcode` value as index).
-    ops: [10]u64 = @splat(0),
 
     pub fn sub(a: Stats, b: Stats) Stats {
-        var r: Stats = .{ .instrs = a.instrs - b.instrs, .externs = a.externs - b.externs };
-        for (&r.ops, a.ops, b.ops) |*o, x, y| o.* = x - y;
-        return r;
+        return .{ .instrs = a.instrs - b.instrs, .externs = a.externs - b.externs };
     }
 };
 
@@ -72,8 +66,6 @@ pub const Options = struct {
     /// Fault when heap indices are left on the stack after a consuming
     /// instruction. The real VM tolerates it; translated code never does it.
     strict_stack: bool = true,
-    /// Record calls that reach the generic object model in `Vm.calls`.
-    record_calls: bool = true,
     /// Fault at the n-th write into a large byte array (see `Vm.stores`).
     stop_at_store: u64 = std.math.maxInt(u64),
 };
@@ -98,7 +90,6 @@ pub fn VecOf(comptime k: VecKind) type {
 }
 pub const Vector2 = VecOf(.vector2);
 pub const Vector3 = VecOf(.vector3);
-pub const Vector4 = VecOf(.vector4);
 pub const Quaternion = VecOf(.quaternion);
 pub const Color = VecOf(.color);
 pub const Color32 = struct { c: [4]u8 };
@@ -207,15 +198,7 @@ pub const Vm = struct {
         @memset(self.cells, .{ .op = .invalid });
         for (prog.code) |ins| {
             var cell: Cell = .{ .op = switch (ins.op) {
-                .nop => .nop,
-                .push => .push,
-                .pop => .pop,
-                .jump_if_false => .jump_if_false,
-                .jump => .jump,
-                .extern_ => .extern_,
-                .annotation => .annotation,
-                .jump_indirect => .jump_indirect,
-                .copy => .copy,
+                inline else => |op| @field(Cell.Op, @tagName(op)),
             } };
             switch (ins.param) {
                 .none => {},
@@ -561,24 +544,20 @@ pub const Vm = struct {
             if (self.stats.instrs > self.options.max_steps) return error.StepLimit;
             switch (c.op) {
                 .nop => {
-                    self.stats.ops[0] += 1;
                     pc += 4;
                 },
                 .push => {
-                    self.stats.ops[1] += 1;
                     if (self.sp == self.stack.len) return self.raise("stack overflow", .{});
                     self.stack[self.sp] = c.param;
                     self.sp += 1;
                     pc += 8;
                 },
                 .pop => {
-                    self.stats.ops[2] += 1;
                     if (self.sp == base_sp) return self.raise("POP on an empty stack", .{});
                     self.sp -= 1;
                     pc += 4;
                 },
                 .jump_if_false => {
-                    self.stats.ops[4] += 1;
                     if (self.sp == base_sp) return self.raise("JUMP_IF_FALSE on an empty stack", .{});
                     self.sp -= 1;
                     const cond = heap[self.stack[self.sp]];
@@ -589,14 +568,12 @@ pub const Vm = struct {
                     pc = if (cond.boolean) pc + 8 else c.param;
                 },
                 .jump => {
-                    self.stats.ops[5] += 1;
                     if (self.sp == base_sp + 1) base_sp += 1;
                     pc = c.param;
                     self.trail[self.trail_at % trail_len] = pc;
                     self.trail_at += 1;
                 },
                 .extern_ => {
-                    self.stats.ops[6] += 1;
                     self.stats.externs += 1;
                     const r = &self.resolved[c.param];
                     r.count += 1;
@@ -636,11 +613,9 @@ pub const Vm = struct {
                     pc += 8;
                 },
                 .annotation => {
-                    self.stats.ops[7] += 1;
                     pc += 8;
                 },
                 .jump_indirect => {
-                    self.stats.ops[8] += 1;
                     const t = heap[c.param];
                     if (t != .uint32) return self.raise("Cannot retrieve heap variable of type '{s}' as type 'UInt32' (JUMP_INDIRECT on {s})", .{
                         t.typeName(), self.slotName(c.param),
@@ -650,7 +625,6 @@ pub const Vm = struct {
                     self.trail_at += 1;
                 },
                 .copy => {
-                    self.stats.ops[9] += 1;
                     // With one operand pushed, the source is a parked
                     // return address.
                     if (self.sp == base_sp + 1 and base_sp > frame_sp) base_sp -= 1;

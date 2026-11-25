@@ -47,14 +47,13 @@ var byte_operators_off = false;
 /// Local indices at and above this value name per-function scratch locals
 /// used by the instruction-sequence expansions in `snippets`.
 const scratch_base: u32 = 0xFFFF_FF00;
-const scratch_types = [_]ValType{ .i32, .i32, .i64, .i64, .i64, .f32, .f64 };
+const scratch_types = [_]ValType{ .i32, .i32, .i64, .i64, .i64, .f64 };
 const tmp_i0 = scratch_base + 0;
 const tmp_i1 = scratch_base + 1;
 const tmp_l0 = scratch_base + 2;
 const tmp_l1 = scratch_base + 3;
 const tmp_l2 = scratch_base + 4;
-const tmp_f0 = scratch_base + 5;
-const tmp_d0 = scratch_base + 6;
+const tmp_d0 = scratch_base + 5;
 
 const Entry = struct {
     ty: ValType,
@@ -297,17 +296,12 @@ const Lowerer = struct {
     }
 
     fn markAllReads(body: []const Instruction, assigned: []const bool, needs: []bool) void {
-        for (body) |ins| switch (ins) {
-            .local_get => |i| if (i < assigned.len and !assigned[i]) {
-                needs[i] = true;
-            },
-            .block, .loop => |b| markAllReads(b.body, assigned, needs),
-            .if_ => |b| {
-                markAllReads(b.then_body, assigned, needs);
-                if (b.else_body) |e| markAllReads(e, assigned, needs);
-            },
-            else => {},
-        };
+        const Sets = struct { assigned: []const bool, needs: []bool };
+        wasm.instruction.forEach(body, Sets{ .assigned = assigned, .needs = needs }, struct {
+            fn visit(s: Sets, ins: Instruction) void {
+                if (ins == .local_get and ins.local_get < s.assigned.len and !s.assigned[ins.local_get]) s.needs[ins.local_get] = true;
+            }
+        }.visit);
     }
 
     // ------------------------------------------------------------------
@@ -328,12 +322,10 @@ const Lowerer = struct {
         const p = &self.pools.items[pool];
         if (p.free.pop()) |s| return s;
         self.temp_count += 1;
-        const t = p.type_name;
-        const init: udon.asm_.Init = if (std.mem.eql(u8, t, "SystemInt32")) .{ .int32 = 0 } else if (std.mem.eql(u8, t, "SystemSingle")) .{ .single = 0 } else if (std.mem.eql(u8, t, "SystemUInt32")) .{ .uint32 = 0 } else .null_;
         return self.a.declare(.{
             .name = try self.t.name("__{s}_T{d}__", .{ self.f.name, self.temp_count }),
-            .type_name = t,
-            .init = init,
+            .type_name = p.type_name,
+            .init = tr.zeroOf(p.type_name),
         });
     }
 
@@ -412,15 +404,11 @@ const Lowerer = struct {
             },
             .cond => {
                 const b = try self.condBool(e, true);
-                const pool = try self.valPool(.i32);
-                const d = try self.newTemp(pool);
-                try self.a.push(b);
-                const def = self.a.here();
-                try self.a.push(d);
-                try self.a.call("SystemConvert.__ToInt32__SystemBoolean__SystemInt32", &.{});
+                var number = try self.compute(.i32, try self.valPool(.i32), "SystemConvert.__ToInt32__SystemBoolean__SystemInt32", &.{b});
+                number.nonneg = true;
                 try self.release(e.*);
-                e.* = .{ .ty = .i32, .kind = .temp, .sym = d, .owned = true, .pool = pool, .nonneg = true, .def = def, .def_end = self.a.here() };
-                return d;
+                e.* = number;
+                return number.sym;
             },
         }
     }
@@ -475,7 +463,7 @@ const Lowerer = struct {
         if (want) {
             try self.a.call("SystemConvert.__ToBoolean__SystemInt32__SystemBoolean", &.{ x, d });
         } else {
-            try self.a.call("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean", &.{ x, try self.t.constI32(0), d });
+            try self.a.call(cmpSig(.i32, .eq), &.{ x, try self.t.constI32(0), d });
         }
         e.* = .{ .ty = .i32, .kind = .cond, .sym = d, .owned = true, .pool = pool, .negated = !want };
         return d;
@@ -516,13 +504,11 @@ const Lowerer = struct {
     }
 
     fn resultCond(self: *Lowerer, sig: []const u8, flip: ?[]const u8, ins: []const Sym) Error!void {
-        const pool = try self.poolFor("SystemBoolean");
-        const d = try self.newTemp(pool);
-        for (ins) |s| try self.a.push(s);
-        const def = self.a.here();
-        try self.a.push(d);
-        try self.a.call(sig, &.{});
-        try self.push(.{ .ty = .i32, .kind = .cond, .sym = d, .owned = true, .pool = pool, .flip = flip, .nonneg = true, .def = def, .def_end = self.a.here() });
+        var e = try self.compute(.i32, try self.poolFor("SystemBoolean"), sig, ins);
+        e.kind = .cond;
+        e.flip = flip;
+        e.nonneg = true;
+        try self.push(e);
     }
 
     /// Put the entry's value in `dst` and release the entry. When the value
@@ -803,8 +789,7 @@ const Lowerer = struct {
             }
             try self.truncate(self.ctrl.items[frame].height);
             self.bindJoin(else_label);
-            const else_falls = try self.lowerBody(else_body);
-            falls = else_falls;
+            falls = try self.lowerBody(else_body);
         }
         return self.endFrame(falls);
     }
@@ -892,7 +877,7 @@ const Lowerer = struct {
             // Cases that go where the default goes need no test of their own.
             if (d == bt.default) continue;
             const next = try self.a.newLabel();
-            try self.a.call("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean", &.{ x, try self.t.constI32(@intCast(i)), b });
+            try self.a.call(cmpSig(.i32, .eq), &.{ x, try self.t.constI32(@intCast(i)), b });
             try self.a.jumpIfFalse(b, next);
             try self.jumpToFrame(try self.frameAt(d));
             self.a.bind(next);
@@ -1218,7 +1203,7 @@ const Lowerer = struct {
             }
             break :blk t;
         };
-        return table[typeIndex(ty)][@intFromEnum(op)];
+        return table[tr.typeIndex(ty)][@intFromEnum(op)];
     }
 
     fn cmpSig(ty: ValType, op: Cmp) []const u8 {
@@ -1231,16 +1216,7 @@ const Lowerer = struct {
             }
             break :blk t;
         };
-        return table[typeIndex(ty)][@intFromEnum(op)];
-    }
-
-    fn typeIndex(ty: ValType) usize {
-        return switch (ty) {
-            .i32 => 0,
-            .i64 => 1,
-            .f32 => 2,
-            .f64 => 3,
-        };
+        return table[tr.typeIndex(ty)][@intFromEnum(op)];
     }
 
     fn isInt(ty: ValType) bool {
@@ -1317,8 +1293,6 @@ const Lowerer = struct {
             if (a_ident) return self.push(b);
         }
         if (ty == .i32 and bothBytes(a, b)) {
-            // C# computes these on `int`s, so the result is the i32
-            // result; a shift count is masked to five bits as in WASM.
             if (byteBinSig(op)) |sig| return self.result(.i32, sig, &try self.byteOperands(&a, &b));
         }
         // 64-bit shifts take an Int32 count.
@@ -1430,20 +1404,11 @@ const Lowerer = struct {
     }
 
     fn foldCmp(ty: ValType, op: Cmp, a_bits: u64, b_bits: u64, unsigned: bool) bool {
-        if (unsigned) {
-            const a = if (ty == .i32) a_bits & 0xFFFF_FFFF else a_bits;
-            const b = if (ty == .i32) b_bits & 0xFFFF_FFFF else b_bits;
-            return switch (op) {
-                .eq => a == b,
-                .ne => a != b,
-                .lt => a < b,
-                .le => a <= b,
-                .gt => a > b,
-                .ge => a >= b,
-            };
-        }
-        const a = signed(ty, a_bits);
-        const b = signed(ty, b_bits);
+        const mask: u64 = if (ty == .i32) 0xFFFF_FFFF else std.math.maxInt(u64);
+        return if (unsigned) holds(op, a_bits & mask, b_bits & mask) else holds(op, signed(ty, a_bits), signed(ty, b_bits));
+    }
+
+    fn holds(op: Cmp, a: anytype, b: @TypeOf(a)) bool {
         return switch (op) {
             .eq => a == b,
             .ne => a != b,
@@ -1730,7 +1695,7 @@ const Lowerer = struct {
     //  Linear memory
     // ------------------------------------------------------------------
 
-    const block_copy = "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid";
+    const block_copy = tr.block_copy;
 
     const Memory = struct { sym: Sym, pages: Sym };
 
@@ -1889,10 +1854,9 @@ const Lowerer = struct {
     }
 
     fn memoryGrow(self: *Lowerer) Error!void {
-        const mem = try self.memory();
+        _ = try self.memory();
         // The routine replaces the memory array and its size.
         try self.flushShared(null, self.stack.items.len - 1);
-        _ = mem;
         try self.callRoutine(try self.t.growRoutine(), 1);
         try self.push(.{ .ty = .i32, .kind = .shared, .sym = try self.t.retSym(0, .i32) });
     }
@@ -1927,9 +1891,6 @@ const Lowerer = struct {
     //  Calls
     // ------------------------------------------------------------------
 
-    /// Slots of this function that hold live values across a call: its
-    /// parameters and locals, the temporaries of operands still on the
-    /// stack below the arguments, and its return address.
     /// What a call that may re-enter this function has to preserve: the
     /// locals still read afterwards, the operands waiting below the call's
     /// arguments, and the return address. Block result slots and scratch
@@ -2132,24 +2093,18 @@ const Lowerer = struct {
         const w = ty.params.len;
         const force_instance = std.mem.eql(u8, imp.module, "udon.instance");
         const force_static = std.mem.eql(u8, imp.module, "udon.static") or sig.isKnownStatic();
-        var has_this = false;
-        var marshal = false;
-        const shapes = [_]struct { inst: bool, marshal: bool }{
+        const Shape = struct { inst: bool, marshal: bool };
+        const shapes = [_]Shape{
             .{ .inst = false, .marshal = true },  .{ .inst = true, .marshal = true },
             .{ .inst = false, .marshal = false }, .{ .inst = true, .marshal = false },
         };
-        const matched = for (shapes) |s| {
+        const shape: Shape = for (shapes) |s| {
             if (s.inst and force_static) continue;
             if (!s.inst and force_instance) continue;
             if (s.marshal and n_str == 0) continue;
             const expect = args.len + @intFromBool(s.inst) + (if (s.marshal) n_str else 0);
-            if (w == expect or (sig.isGeneric() and w > expect)) {
-                has_this = s.inst;
-                marshal = s.marshal;
-                break true;
-            }
-        } else false;
-        if (!matched) return self.t.fail(error.Invalid, "import '{s}': {d} WASM parameters do not fit the signature's {d} arguments", .{ imp.name, w, args.len });
+            if (w == expect or (sig.isGeneric() and w > expect)) break s;
+        } else return self.t.fail(error.Invalid, "import '{s}': {d} WASM parameters do not fit the signature's {d} arguments", .{ imp.name, w, args.len });
         if (self.stack.items.len < w) return self.t.fail(error.Invalid, "operand stack underflow in function {s}", .{self.f.name});
 
         const a = self.t.arena();
@@ -2162,7 +2117,7 @@ const Lowerer = struct {
         var write_backs: std.ArrayList(WriteBack) = .empty;
 
         var cur: usize = 0;
-        if (has_this) {
+        if (shape.inst) {
             try ops.append(a, try self.operand(&in[0]));
             cur = 1;
         }
@@ -2187,7 +2142,7 @@ const Lowerer = struct {
                 try write_backs.append(a, .{ .addr = addr, .tmp = tmp, .ty = vt });
                 try ops.append(a, tmp);
                 cur += 1;
-            } else if (marshal and std.mem.eql(u8, arg.type_name, "SystemString")) {
+            } else if (shape.marshal and std.mem.eql(u8, arg.type_name, "SystemString")) {
                 const mem = try self.memory();
                 const pool = try self.poolFor("SystemString");
                 const s = try self.newTemp(pool);
@@ -2215,7 +2170,7 @@ const Lowerer = struct {
             try self.a.call(name, ops.items);
         } else if (ty.results.len == 0) {
             // Udon always wants the result slot, even if WASM discards it.
-            const pool = try self.poolFor(self.handleType(ret));
+            const pool = try self.poolFor(handleType(ret));
             const d = try self.newTemp(pool);
             try ops.append(a, d);
             try self.a.call(name, ops.items);
@@ -2250,7 +2205,7 @@ const Lowerer = struct {
             } else {
                 // Any other type is an opaque handle carried in an i32.
                 if (want != .i32) return self.t.fail(error.Invalid, "import '{s}' returns {s}; declare its WASM result as i32 (an opaque handle)", .{ imp.name, ret });
-                try self.resultIn(.i32, try self.poolFor(self.handleType(ret)), name, ops.items);
+                try self.resultIn(.i32, try self.poolFor(handleType(ret)), name, ops.items);
             }
         }
         for (temps.items) |tmp| try self.freeTemp(tmp.pool, tmp.sym);
@@ -2263,8 +2218,7 @@ const Lowerer = struct {
     }
 
     /// Declared type for a slot that receives a value of Udon type `t`.
-    fn handleType(self: *Lowerer, t: []const u8) []const u8 {
-        _ = self;
+    fn handleType(t: []const u8) []const u8 {
         return if (nodes.isType(t)) t else "SystemObject";
     }
 

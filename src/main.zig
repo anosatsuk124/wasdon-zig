@@ -15,10 +15,8 @@ const usage =
     \\      more. --meta reads __udon_meta from a JSON file instead of from the
     \\      module; --strict rejects imports that are not Udon externs; --stats
     \\      prints the size of the result, including the heap size it needs.
-    \\      --without <a,b,…> leaves optimizations out (liveness, stack_return,
-    \\      bool_locals, pending_loads, memory_copies, byte_operators, derived,
-    \\      masks, jump_tables, unroll), to see whether one of them is behind a
-    \\      wrong result.
+    \\      --without <a,b,…> leaves optimizations out, to see whether one of
+    \\      them is behind a wrong result; an unknown name lists them.
     \\  wasdon-zig inspect <input.wasm> [--meta <file.json>]
     \\      Report the module's size, its imports, and everything in it the
     \\      translator does not support — all of it, where `translate` stops
@@ -70,6 +68,14 @@ pub fn main(init: std.process.Init) !u8 {
     if (std.mem.eql(u8, cmd, "check")) return runCheck(&cli, rest);
     return cli.fail("unknown subcommand '{s}'\n\n{s}", .{ cmd, usage });
 }
+
+/// The switches of `translate --without`, as the fields of `Disable` name
+/// them.
+const optimization_names = names: {
+    var list: []const u8 = "";
+    for (@typeInfo(wasdon_zig.translator.Disable).@"struct".fields, 0..) |f, i| list = list ++ (if (i == 0) "" else ", ") ++ f.name;
+    break :names list;
+};
 
 fn runInspect(cli: *Cli, args: []const []const u8) !u8 {
     var input: ?[]const u8 = null;
@@ -133,7 +139,7 @@ fn runTranslate(cli: *Cli, args: []const []const u8) !u8 {
                         known = true;
                     }
                 }
-                if (!known) return cli.fail("unknown optimization '{s}' (liveness, stack_return, bool_locals, pending_loads, memory_copies, byte_operators, derived, masks, jump_tables, unroll)", .{name});
+                if (!known) return cli.fail("unknown optimization '{s}' (" ++ optimization_names ++ ")", .{name});
             }
         } else if (std.mem.eql(u8, a, "--strict")) {
             options.strict = true;

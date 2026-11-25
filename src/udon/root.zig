@@ -17,7 +17,6 @@ pub const vm = @import("vm.zig");
 pub const externs = @import("externs.zig");
 pub const check = @import("check.zig");
 
-pub const Asm = asm_.Asm;
 
 test {
     std.testing.refAllDecls(@This());

@@ -90,19 +90,17 @@ fn operator(op: Rmw, wide: bool) ?I {
     };
 }
 
+fn has(body: []const I) bool {
+    return wasm.instruction.any(body, {}, struct {
+        fn found(_: void, ins: I) bool {
+            return ins == .atomic;
+        }
+    }.found);
+}
+
 /// True if any function of the module uses the threads proposal.
 pub fn used(mod: Module) bool {
     for (mod.codes) |code| if (has(code.body)) return true;
-    return false;
-}
-
-fn has(body: []const I) bool {
-    for (body) |ins| switch (ins) {
-        .atomic => return true,
-        .block, .loop => |b| if (has(b.body)) return true,
-        .if_ => |b| if (has(b.then_body) or (b.else_body != null and has(b.else_body.?))) return true,
-        else => {},
-    };
     return false;
 }
 
@@ -117,27 +115,15 @@ pub fn singleThread(arena: std.mem.Allocator, mod: Module) error{OutOfMemory}!Mo
         const locals = try arena.alloc(wasm.module.LocalGroup, code.locals.len + Scratch.groups.len);
         @memcpy(locals[0..code.locals.len], code.locals);
         @memcpy(locals[code.locals.len..], &Scratch.groups);
-        code.* = .{ .locals = locals, .body = try rewrite(arena, code.body, .at(first)) };
+        code.* = .{ .locals = locals, .body = try wasm.instruction.rewrite(arena, code.body, Scratch.at(first), replace) };
     }
     var out = mod;
     out.codes = codes;
     return out;
 }
 
-fn rewrite(arena: std.mem.Allocator, body: []const I, s: Scratch) error{OutOfMemory}![]const I {
-    var out: std.ArrayList(I) = try .initCapacity(arena, body.len);
-    for (body) |ins| switch (ins) {
-        .atomic => |a| try expand(arena, &out, a, s),
-        .block => |b| try out.append(arena, .{ .block = .{ .bt = b.bt, .body = try rewrite(arena, b.body, s) } }),
-        .loop => |b| try out.append(arena, .{ .loop = .{ .bt = b.bt, .body = try rewrite(arena, b.body, s) } }),
-        .if_ => |b| try out.append(arena, .{ .if_ = .{
-            .bt = b.bt,
-            .then_body = try rewrite(arena, b.then_body, s),
-            .else_body = if (b.else_body) |e| try rewrite(arena, e, s) else null,
-        } }),
-        else => try out.append(arena, ins),
-    };
-    return out.items;
+fn replace(s: Scratch, ins: I, out: *std.ArrayList(I), arena: std.mem.Allocator) error{OutOfMemory}!void {
+    if (ins == .atomic) try expand(arena, out, ins.atomic, s) else try out.append(arena, ins);
 }
 
 fn expand(arena: std.mem.Allocator, out: *std.ArrayList(I), a: wasm.instruction.Atomic, s: Scratch) error{OutOfMemory}!void {

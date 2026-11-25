@@ -94,6 +94,7 @@ pub fn unroll(arena: std.mem.Allocator, mod: Module, options: Options) error{Out
     return out;
 }
 
+/// Instructions of a body, those of nested blocks included.
 fn count(body: []const I) u32 {
     var n: u32 = @intCast(body.len);
     for (body) |ins| switch (ins) {
@@ -105,35 +106,22 @@ fn count(body: []const I) u32 {
 }
 
 fn calls(body: []const I, f: u32) bool {
-    for (body) |ins| switch (ins) {
-        .call => |callee| if (callee == f) return true,
-        .block, .loop => |b| if (calls(b.body, f)) return true,
-        .if_ => |b| if (calls(b.then_body, f) or (b.else_body != null and calls(b.else_body.?, f))) return true,
-        else => {},
-    };
-    return false;
+    return wasm.instruction.any(body, f, struct {
+        fn found(callee: u32, ins: I) bool {
+            return ins == .call and ins.call == callee;
+        }
+    }.found);
 }
+
+const Retarget = struct { self: u32, self_target: u32, entry: []const u32 };
 
 /// A copy of `body` in which calls of `self` go to `self_target` and calls
 /// of any other unrolled function to its first copy.
 fn retarget(arena: std.mem.Allocator, body: []const I, self: u32, self_target: u32, entry: []const u32) error{OutOfMemory}![]const I {
-    const out = try arena.dupe(I, body);
-    for (out) |*ins| switch (ins.*) {
-        .call => |callee| {
-            if (callee == self) {
-                ins.* = .{ .call = self_target };
-            } else if (callee < entry.len and entry[callee] != none) {
-                ins.* = .{ .call = entry[callee] };
-            }
-        },
-        .block => |b| ins.* = .{ .block = .{ .bt = b.bt, .body = try retarget(arena, b.body, self, self_target, entry) } },
-        .loop => |b| ins.* = .{ .loop = .{ .bt = b.bt, .body = try retarget(arena, b.body, self, self_target, entry) } },
-        .if_ => |b| ins.* = .{ .if_ = .{
-            .bt = b.bt,
-            .then_body = try retarget(arena, b.then_body, self, self_target, entry),
-            .else_body = if (b.else_body) |e| try retarget(arena, e, self, self_target, entry) else null,
-        } },
-        else => {},
-    };
-    return out;
+    return wasm.instruction.mapCalls(arena, body, Retarget{ .self = self, .self_target = self_target, .entry = entry }, struct {
+        fn target(r: Retarget, callee: u32) u32 {
+            if (callee == r.self) return r.self_target;
+            return if (callee < r.entry.len and r.entry[callee] != none) r.entry[callee] else callee;
+        }
+    }.target);
 }

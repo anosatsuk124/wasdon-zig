@@ -49,10 +49,6 @@ pub const Report = struct {
     pub fn ok(self: *const Report) bool {
         return self.errors.len == 0;
     }
-
-    pub fn write(self: *const Report, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        for (self.errors) |e| try w.print("line {d}: {s}\n", .{ e.line, e.message });
-    }
 };
 
 /// Value types whose slots the translator keeps at one type for life. A

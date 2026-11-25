@@ -68,12 +68,13 @@ fn raw(comptime argc: u8, comptime f: Fn) Impl {
 // ----------------------------------------------------------------------
 
 const NumType = struct { name: []const u8, T: type };
+/// The types with operators of their own. Those of the small integer
+/// types widen to Int32 in C#; the ones translated code uses (`SystemByte`)
+/// are listed where they are implemented.
 const num_types = [_]NumType{
     .{ .name = "SystemInt32", .T = i32 },  .{ .name = "SystemUInt32", .T = u32 },
     .{ .name = "SystemInt64", .T = i64 },  .{ .name = "SystemUInt64", .T = u64 },
     .{ .name = "SystemSingle", .T = f32 }, .{ .name = "SystemDouble", .T = f64 },
-    .{ .name = "SystemByte", .T = u8 },    .{ .name = "SystemSByte", .T = i8 },
-    .{ .name = "SystemInt16", .T = i16 },  .{ .name = "SystemUInt16", .T = u16 },
 };
 
 fn isInt(comptime T: type) bool {
@@ -149,10 +150,6 @@ fn Num(comptime T: type) type {
             return vm.fmt("{d}", .{a});
         }
         fn hash(a: T) i32 {
-            if (!int) {
-                const U = std.meta.Int(.unsigned, @bitSizeOf(T));
-                return foldHash(@as(U, @bitCast(a)));
-            }
             return foldHash(@as(std.meta.Int(.unsigned, @bitSizeOf(T)), @bitCast(a)));
         }
         fn foldHash(u: anytype) i32 {
@@ -189,9 +186,6 @@ fn numericEntries() []const KV {
         const n = nt.name;
         const N = Num(nt.T);
         const p = std.fmt.comptimePrint;
-        // Operators on the small integer types widen to Int32 in C#; Udon
-        // exposes them with an Int32 result, which the examples never use.
-        if (@bitSizeOf(nt.T) < 32) continue;
         out = out ++ &[_]KV{
             .{ p("{s}.__op_Addition__{s}_{s}__{s}", .{ n, n, n, n }), wrap(N.add) },
             .{ p("{s}.__op_Subtraction__{s}_{s}__{s}", .{ n, n, n, n }), wrap(N.sub) },
@@ -952,7 +946,7 @@ const unity = struct {
         try tr.put(a, "gameObject", .{ .object = clone });
         try tr.put(a, "transform", .{ .object = tr });
         try clone.put(a, "transform", .{ .object = tr });
-        if (vm.options.record_calls) try vm.calls.append(a, .{
+        try vm.calls.append(a, .{
             .sig = "VRCInstantiate.__Instantiate__UnityEngineGameObject__UnityEngineGameObject",
             .args = try a.dupe(Value, &.{.{ .object = original }}),
         });
@@ -1340,11 +1334,9 @@ pub fn dynamicCall(vm: *Vm, r: *const vm_mod.Resolved, args: []const u32) Error!
     if (std.mem.startsWith(u8, sig.type_name, "System") and vm.heapObject(in) == null)
         return vm.raise("extern not implemented by the emulator: {s}", .{r.text});
 
-    if (vm.options.record_calls) {
-        const copy = try a.alloc(Value, in.len);
-        for (copy, in) |*c, i| c.* = vm.heap[i];
-        try vm.calls.append(a, .{ .sig = r.text, .args = copy });
-    }
+    const copy = try a.alloc(Value, in.len);
+    for (copy, in) |*c, i| c.* = vm.heap[i];
+    try vm.calls.append(a, .{ .sig = r.text, .args = copy });
 
     // An instance member of nothing.
     if (has_this and vm.heap[in[0]] == .null_ and Value.defaultFor(sig.type_name) == .null_)

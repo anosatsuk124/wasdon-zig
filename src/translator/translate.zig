@@ -117,6 +117,27 @@ pub fn udonType(vt: ValType) []const u8 {
     };
 }
 
+/// Position of a value type in tables indexed by type.
+pub fn typeIndex(vt: ValType) usize {
+    return switch (vt) {
+        .i32 => 0,
+        .i64 => 1,
+        .f32 => 2,
+        .f64 => 3,
+    };
+}
+
+/// The initial value of a slot of this Udon type: zero where Udon Assembly
+/// can write one, otherwise null, which reads as the type's default.
+pub fn zeroOf(type_name: []const u8) udon.asm_.Init {
+    if (std.mem.eql(u8, type_name, "SystemInt32")) return .{ .int32 = 0 };
+    if (std.mem.eql(u8, type_name, "SystemUInt32")) return .{ .uint32 = 0 };
+    if (std.mem.eql(u8, type_name, "SystemSingle")) return .{ .single = 0 };
+    return .null_;
+}
+
+pub const block_copy = "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid";
+
 pub const RetMode = enum {
     /// `JUMP_INDIRECT` through the function's return-address slot.
     indirect,
@@ -535,10 +556,6 @@ pub const Translator = struct {
         };
     }
 
-    pub fn funcType(self: *const Translator, type_index: u32) FuncType {
-        return self.mod.types_[type_index];
-    }
-
     /// Whether calls from `caller` to `callee` must save `caller`'s frame.
     pub fn mayReenter(self: *const Translator, caller: u32, callee: u32) bool {
         if (self.meta) |m| if (m.options.recursion == .disabled) return false;
@@ -824,8 +841,7 @@ pub const Translator = struct {
             },
         }
         const sym = try self.a.declare(v);
-        // `gop` may be stale after `poolOffset` grows other tables; re-put.
-        try self.consts.put(self.arena(), .{ .ty = ty, .bits = bits }, sym);
+        gop.value_ptr.* = sym;
         if (pooled) try self.pooled.append(self.arena(), .{ .sym = sym, .ty = ty, .offset = try self.poolOffset(byteSize(ty), bits) });
         return sym;
     }
@@ -852,15 +868,13 @@ pub const Translator = struct {
 
     /// The decoded constant pool (`byte[]`).
     pub fn poolSym(self: *Translator) Error!Sym {
-        if (self.pool_sym == null) self.pool_sym = try self.a.declare(.{ .name = "__kpool", .type_name = "SystemByteArray" });
-        return self.pool_sym.?;
+        return self.once(&self.pool_sym, .{ .name = "__kpool", .type_name = "SystemByteArray" });
     }
 
     // ------------------------------------------------------------------
     //  Shared slots
     // ------------------------------------------------------------------
 
-    /// Register a function leaves its `index`-th result in.
     pub const derived_slots = 8;
 
     /// A `SystemByte` constant. Udon Assembly has no byte literals, so it
@@ -879,6 +893,7 @@ pub const Translator = struct {
         return s;
     }
 
+    /// Register a function leaves its `index`-th result in.
     pub fn retSym(self: *Translator, index: u32, ty: ValType) Error!Sym {
         const gop = try self.rets.getOrPut(self.arena(), .{ index, ty });
         if (!gop.found_existing) gop.value_ptr.* = try self.a.declare(.{
@@ -910,17 +925,15 @@ pub const Translator = struct {
     }
 
     pub fn emptySegment(self: *Translator) Error!Sym {
-        if (self.empty_segment == null) self.empty_segment = try self.a.declare(.{ .name = "__seg_dropped", .type_name = "SystemByteArray" });
-        return self.empty_segment.?;
+        return self.once(&self.empty_segment, .{ .name = "__seg_dropped", .type_name = "SystemByteArray" });
     }
 
     /// Where a `.stack` function pops its return address to jump to it.
     pub fn returnSlot(self: *Translator) Error!Sym {
-        if (self.return_slot == null) self.return_slot = try self.a.declare(.{ .name = "__return_to", .type_name = "SystemUInt32", .init = .{ .uint32 = 0 } });
-        return self.return_slot.?;
+        return self.once(&self.return_slot, .{ .name = "__return_to", .type_name = "SystemUInt32", .init = .{ .uint32 = 0 } });
     }
 
-    /// Call a function that returns through `mode`, from translator-emitted
+    /// Call a function, however it returns (`f.ret`), from translator-emitted
     /// code: leave the return address where the callee expects it, jump,
     /// and bind the point it comes back to.
     pub fn emitCall(self: *Translator, f: *const Func) Error!void {
@@ -941,13 +954,11 @@ pub const Translator = struct {
     }
 
     pub fn indRa(self: *Translator) Error!Sym {
-        if (self.ind_ra == null) self.ind_ra = try self.a.declare(.{ .name = "__ind_RA", .type_name = "SystemUInt32", .init = .{ .uint32 = 0 } });
-        return self.ind_ra.?;
+        return self.once(&self.ind_ra, .{ .name = "__ind_RA", .type_name = "SystemUInt32", .init = .{ .uint32 = 0 } });
     }
 
     pub fn tableSym(self: *Translator) Error!Sym {
-        if (self.table_sym == null) self.table_sym = try self.a.declare(.{ .name = "__table", .type_name = "SystemUInt32Array" });
-        return self.table_sym.?;
+        return self.once(&self.table_sym, .{ .name = "__table", .type_name = "SystemUInt32Array" });
     }
 
     /// A `uint[]` holding the addresses of `labels`, filled at startup.
@@ -968,7 +979,7 @@ pub const Translator = struct {
     }
 
     pub fn storeArray(self: *Translator, ty: ValType) Error!Sym {
-        const slot = &self.store_arrays[storeIndex(ty)];
+        const slot = &self.store_arrays[typeIndex(ty)];
         if (slot.* == null) slot.* = try self.a.declare(.{
             .name = try self.name("__st_{t}", .{ty}),
             .type_name = switch (ty) {
@@ -981,18 +992,8 @@ pub const Translator = struct {
         return slot.*.?;
     }
 
-    fn storeIndex(ty: ValType) usize {
-        return switch (ty) {
-            .i32 => 0,
-            .i64 => 1,
-            .f32 => 2,
-            .f64 => 3,
-        };
-    }
-
     pub fn utf8Sym(self: *Translator) Error!Sym {
-        if (self.utf8 == null) self.utf8 = try self.a.declare(.{ .name = "__utf8", .type_name = "SystemObject" });
-        return self.utf8.?;
+        return self.once(&self.utf8, .{ .name = "__utf8", .type_name = "SystemObject" });
     }
 
     /// Column `k` of the recursion stack (`docs/spec_call_return_conversion.md` §6).
@@ -1005,8 +1006,7 @@ pub const Translator = struct {
     }
 
     pub fn frameDepth(self: *Translator) Error!Sym {
-        if (self.frame_depth == null) self.frame_depth = try self.a.declare(.{ .name = "__frame_depth", .type_name = "SystemInt32", .init = .{ .int32 = 0 } });
-        return self.frame_depth.?;
+        return self.once(&self.frame_depth, .{ .name = "__frame_depth", .type_name = "SystemInt32", .init = .{ .int32 = 0 } });
     }
 
     /// A `SystemBoolean` constant. Udon Assembly has no Boolean literals:
@@ -1023,10 +1023,15 @@ pub const Translator = struct {
         return self.trap_label.?;
     }
 
+    /// The slot kept in `slot`, declared the first time it is asked for.
+    fn once(self: *Translator, slot: *?Sym, v: udon.asm_.Var) Error!Sym {
+        if (slot.* == null) slot.* = try self.a.declare(v);
+        return slot.*.?;
+    }
+
     fn rtVar(self: *Translator, type_name: []const u8) Error!Sym {
         self.rt_count += 1;
-        const initial: udon.asm_.Init = if (std.mem.eql(u8, type_name, "SystemInt32")) .{ .int32 = 0 } else if (std.mem.eql(u8, type_name, "SystemUInt32")) .{ .uint32 = 0 } else .null_;
-        return self.a.declare(.{ .name = try self.name("__rt_{d}", .{self.rt_count}), .type_name = type_name, .init = initial });
+        return self.a.declare(.{ .name = try self.name("__rt_{d}", .{self.rt_count}), .type_name = type_name, .init = zeroOf(type_name) });
     }
 
     fn newRoutine(self: *Translator) Error!Routine {
@@ -1084,7 +1089,7 @@ pub const Translator = struct {
 
         for (self.events.items) |ev| {
             const f = &self.funcs[ev.func];
-            _ = try self.a.exportHere(ev.label);
+            try self.a.exportHere(ev.label);
             const stub: Stub = .{ .label = try self.a.newLabel(), .body = try self.a.newLabel() };
             try stubs.append(a, stub);
             try self.a.jumpIfFalse(inited, stub.label);
@@ -1128,7 +1133,6 @@ pub const Translator = struct {
         try a.call("SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean", &.{ c0, c0, inited });
 
         const from_b64 = "SystemConvert.__FromBase64String__SystemString__SystemByteArray";
-        const block_copy = "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid";
 
         if (self.mem) |mem| {
             try a.call("SystemByteArray.__ctor__SystemInt32__SystemByteArray", &.{ try self.constI32(@intCast(self.initial_pages << 16)), mem });
@@ -1259,10 +1263,7 @@ pub const Translator = struct {
     }
 
     fn emitGlobalInits(self: *Translator) Error!void {
-        var n_imp: u32 = 0;
-        for (self.mod.imports) |imp| if (imp.desc == .global) {
-            n_imp += 1;
-        };
+        const n_imp = self.globals.len - self.mod.globals.len;
         for (self.mod.globals, 0..) |g, def| {
             const dst = self.globals[n_imp + def];
             if (g.init.len != 1) return self.fail(error.Unsupported, "global {d} has a non-constant initializer", .{def});
@@ -1295,7 +1296,6 @@ pub const Translator = struct {
         const add = "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32";
         const sub = "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32";
         const shl = "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32";
-        const block_copy = "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid";
         const c0 = try self.constI32(0);
 
         // memory.grow(delta) → previous size in pages, or -1.

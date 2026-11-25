@@ -146,242 +146,129 @@ pub const UdonMeta = struct {
     _json_root: std.json.Value = .null,
 };
 
-// ---------------- JSON helpers ----------------
+// ---------------- JSON ----------------
 
-fn getU32FromValue(v: std.json.Value) errors.ParseError!u32 {
-    return switch (v) {
-        .integer => |i| {
-            if (i < 0 or i > std.math.maxInt(u32)) return error.MalformedMeta;
-            return @intCast(i);
-        },
-        else => error.MalformedMeta,
-    };
-}
+const ParseError = errors.ParseError;
 
-fn getBoolFromValue(v: std.json.Value) errors.ParseError!bool {
-    return switch (v) {
-        .bool => |b| b,
-        else => error.MalformedMeta,
-    };
-}
+/// One JSON object of the metadata, read member by member. A member of the
+/// wrong JSON type is `MalformedMeta`; an absent one is null.
+const Obj = struct {
+    map: std.json.ObjectMap,
 
-fn getStringFromValue(v: std.json.Value) errors.ParseError![]const u8 {
-    return switch (v) {
-        .string => |s| s,
-        else => error.MalformedMeta,
-    };
-}
-
-fn getObjectFromValue(v: std.json.Value) errors.ParseError!std.json.ObjectMap {
-    return switch (v) {
-        .object => |o| o,
-        else => error.MalformedMeta,
-    };
-}
-
-fn getOptionalField(obj: std.json.ObjectMap, key: []const u8) ?std.json.Value {
-    return obj.get(key);
-}
-
-fn enumFromStringOrError(comptime E: type, s: []const u8, comptime err: errors.ParseError) errors.ParseError!E {
-    return std.meta.stringToEnum(E, s) orelse return err;
-}
-
-fn parseUnknownPolicy(s: []const u8) errors.ParseError!UnknownPolicy {
-    if (std.mem.eql(u8, s, "ignore")) return .ignore;
-    if (std.mem.eql(u8, s, "warn")) return .warn;
-    if (std.mem.eql(u8, s, "error")) return .error_;
-    return error.InvalidUnknownPolicy;
-}
-
-fn parseRecursionMode(s: []const u8) errors.ParseError!RecursionMode {
-    if (std.mem.eql(u8, s, "disabled")) return .disabled;
-    if (std.mem.eql(u8, s, "stack")) return .stack;
-    return error.MalformedMeta;
-}
-
-fn parseSource(obj: std.json.ObjectMap) errors.ParseError!Source {
-    const kind_v = obj.get("kind") orelse return error.MalformedMeta;
-    const kind_s = try getStringFromValue(kind_v);
-    const kind = try enumFromStringOrError(SourceKind, kind_s, error.InvalidSourceKind);
-    var src: Source = .{ .kind = kind };
-    if (obj.get("name")) |nv| src.name = try getStringFromValue(nv);
-    if (obj.get("module")) |mv| src.module = try getStringFromValue(mv);
-    if (obj.get("setter")) |sv| src.setter = try getStringFromValue(sv);
-    return src;
-}
-
-fn parseSync(obj: std.json.ObjectMap) errors.ParseError!FieldSync {
-    var s: FieldSync = .{};
-    if (obj.get("enabled")) |e| s.enabled = try getBoolFromValue(e);
-    if (obj.get("mode")) |m| {
-        const ms = try getStringFromValue(m);
-        if (std.mem.eql(u8, ms, "none")) {
-            s.mode = .none;
-        } else if (std.mem.eql(u8, ms, "linear")) {
-            s.mode = .linear;
-        } else if (std.mem.eql(u8, ms, "smooth")) {
-            s.mode = .smooth;
-        } else {
-            return error.InvalidFieldSyncMode;
-        }
+    fn of(v: std.json.Value) ParseError!Obj {
+        return if (v == .object) .{ .map = v.object } else error.MalformedMeta;
     }
-    if (s.enabled and s.mode == null) return error.MissingSyncMode;
-    return s;
+
+    fn get(o: Obj, comptime T: type, key: []const u8) ParseError!?T {
+        const v = o.map.get(key) orelse return null;
+        return switch (T) {
+            Obj => try of(v),
+            bool => if (v == .bool) v.bool else error.MalformedMeta,
+            []const u8 => if (v == .string) v.string else error.MalformedMeta,
+            i64 => if (v == .integer) v.integer else error.MalformedMeta,
+            u32 => if (v == .integer) std.math.cast(u32, v.integer) orelse error.MalformedMeta else error.MalformedMeta,
+            else => @compileError("no JSON reading for " ++ @typeName(T)),
+        };
+    }
+
+    /// A string member naming a value of enum `E`. `error` is spelled
+    /// `error_` in the enums, being a keyword.
+    fn tag(o: Obj, comptime E: type, key: []const u8, comptime unknown: ParseError) ParseError!?E {
+        const name = try o.get([]const u8, key) orelse return null;
+        if (@hasField(E, "error_") and std.mem.eql(u8, name, "error")) return .error_;
+        return std.meta.stringToEnum(E, name) orelse unknown;
+    }
+
+    /// The members of the object member `key`, each parsed by `each`.
+    fn list(o: Obj, comptime T: type, allocator: std.mem.Allocator, key: []const u8, comptime each: fn ([]const u8, Obj) ParseError!T) ParseError![]const T {
+        const members = try o.get(Obj, key) orelse return &.{};
+        const out = try allocator.alloc(T, members.map.count());
+        for (out, members.map.keys(), members.map.values()) |*item, name, v| item.* = try each(name, try of(v));
+        return out;
+    }
+};
+
+fn parseSource(obj: Obj) ParseError!Source {
+    const o = try obj.get(Obj, "source") orelse return error.MalformedMeta;
+    return .{
+        .kind = try o.tag(SourceKind, "kind", error.InvalidSourceKind) orelse return error.MalformedMeta,
+        .name = try o.get([]const u8, "name"),
+        .module = try o.get([]const u8, "module"),
+        .setter = try o.get([]const u8, "setter"),
+    };
 }
 
-fn parseField(allocator: std.mem.Allocator, key: []const u8, v: std.json.Value) errors.ParseError!Field {
-    _ = allocator;
-    const obj = try getObjectFromValue(v);
-    const source_v = obj.get("source") orelse return error.MalformedMeta;
-    const source_obj = try getObjectFromValue(source_v);
-    const source = try parseSource(source_obj);
-
-    var f: Field = .{ .key = key, .source = source };
-    if (obj.get("udonName")) |uv| f.udon_name = try getStringFromValue(uv);
-    if (obj.get("type")) |tv| {
-        f.type_name = udonTypeName(try getStringFromValue(tv));
+fn parseField(key: []const u8, o: Obj) ParseError!Field {
+    var f: Field = .{ .key = key, .source = try parseSource(o) };
+    f.udon_name = try o.get([]const u8, "udonName");
+    if (try o.get([]const u8, "type")) |t| f.type_name = udonTypeName(t);
+    f.is_export = try o.get(bool, "export") orelse false;
+    if (try o.get(Obj, "sync")) |sync| {
+        f.sync = .{ .enabled = try sync.get(bool, "enabled") orelse false, .mode = try sync.tag(FieldSyncMode, "mode", error.InvalidFieldSyncMode) };
+        if (f.sync.enabled and f.sync.mode == null) return error.MissingSyncMode;
     }
-    if (obj.get("export")) |ev| f.is_export = try getBoolFromValue(ev);
-    if (obj.get("sync")) |sv| {
-        const sobj = try getObjectFromValue(sv);
-        f.sync = try parseSync(sobj);
-    }
-    if (obj.get("default")) |dv| f.default = dv;
-    if (obj.get("comment")) |cv| f.comment = try getStringFromValue(cv);
+    f.default = o.map.get("default");
+    f.comment = try o.get([]const u8, "comment");
     return f;
 }
 
-fn parseFunction(allocator: std.mem.Allocator, key: []const u8, v: std.json.Value) errors.ParseError!Function {
-    _ = allocator;
-    const obj = try getObjectFromValue(v);
-    const source_v = obj.get("source") orelse return error.MalformedMeta;
-    const source_obj = try getObjectFromValue(source_v);
-    const source = try parseSource(source_obj);
-
-    var fn_: Function = .{ .key = key, .source = source };
-    if (obj.get("label")) |lv| fn_.label = try getStringFromValue(lv);
-    if (obj.get("export")) |ev| fn_.is_export = try getBoolFromValue(ev);
-    if (obj.get("event")) |ev| {
-        const es = try getStringFromValue(ev);
-        fn_.event = try enumFromStringOrError(EventKind, es, error.InvalidEventKind);
-    }
-    if (obj.get("comment")) |cv| fn_.comment = try getStringFromValue(cv);
-    return fn_;
+fn parseFunction(key: []const u8, o: Obj) ParseError!Function {
+    var f: Function = .{ .key = key, .source = try parseSource(o) };
+    f.label = try o.get([]const u8, "label");
+    f.is_export = try o.get(bool, "export") orelse false;
+    f.event = try o.tag(EventKind, "event", error.InvalidEventKind);
+    f.comment = try o.get([]const u8, "comment");
+    return f;
 }
 
-fn parseBehaviour(obj: std.json.ObjectMap) errors.ParseError!Behaviour {
-    var b: Behaviour = .{};
-    if (obj.get("syncMode")) |sv| {
-        const ss = try getStringFromValue(sv);
-        b.sync_mode = try enumFromStringOrError(SyncMode, ss, error.InvalidBehaviourSyncMode);
-    }
-    if (obj.get("comment")) |cv| b.comment = try getStringFromValue(cv);
-    return b;
+fn parseImport(pattern: []const u8, o: Obj) ParseError!ImportBinding {
+    const as = try o.tag(HostFunction, "as", error.MalformedMeta);
+    const returns = try o.get(i64, "returns");
+    // Exactly one of the two.
+    if ((as != null) == (returns != null)) return error.MalformedMeta;
+    return .{ .pattern = pattern, .as = as, .returns = returns orelse 0 };
 }
 
-fn parseMemoryOptions(obj: std.json.ObjectMap) errors.ParseError!MemoryOptions {
-    var m: MemoryOptions = .{};
-    if (obj.get("initialPages")) |iv| m.initial_pages = try getU32FromValue(iv);
-    if (obj.get("maxPages")) |mv| m.max_pages = try getU32FromValue(mv);
-    if (obj.get("udonName")) |uv| m.udon_name = try getStringFromValue(uv);
-    if (m.initial_pages) |ip| if (m.max_pages) |mp| if (ip > mp) return error.InvalidMemoryPageBounds;
-    return m;
+fn parseOptions(o: Obj) ParseError!Options {
+    var out: Options = .{};
+    out.strict = try o.get(bool, "strict") orelse false;
+    out.unknown_field_policy = try o.tag(UnknownPolicy, "unknownFieldPolicy", error.InvalidUnknownPolicy);
+    out.unknown_function_policy = try o.tag(UnknownPolicy, "unknownFunctionPolicy", error.InvalidUnknownPolicy);
+    if (try o.tag(RecursionMode, "recursion", error.MalformedMeta)) |mode| out.recursion = mode;
+    out.call_stack_size = try o.get(u32, "callStackSize");
+    out.recursion_unroll = try o.get(u32, "recursionUnroll");
+    if (try o.get(Obj, "memory")) |m| {
+        out.memory = .{
+            .initial_pages = try m.get(u32, "initialPages"),
+            .max_pages = try m.get(u32, "maxPages"),
+            .udon_name = try m.get([]const u8, "udonName"),
+        };
+        if (out.memory.initial_pages) |initial| if (out.memory.max_pages) |max| {
+            if (initial > max) return error.InvalidMemoryPageBounds;
+        };
+    }
+    return out;
 }
 
-fn parseOptions(obj: std.json.ObjectMap) errors.ParseError!Options {
-    var o: Options = .{};
-    if (obj.get("strict")) |sv| o.strict = try getBoolFromValue(sv);
-    if (obj.get("unknownFieldPolicy")) |pv| {
-        const ps = try getStringFromValue(pv);
-        o.unknown_field_policy = try parseUnknownPolicy(ps);
-    }
-    if (obj.get("unknownFunctionPolicy")) |pv| {
-        const ps = try getStringFromValue(pv);
-        o.unknown_function_policy = try parseUnknownPolicy(ps);
-    }
-    if (obj.get("memory")) |mv| {
-        const mobj = try getObjectFromValue(mv);
-        o.memory = try parseMemoryOptions(mobj);
-    }
-    if (obj.get("recursion")) |rv| {
-        const rs = try getStringFromValue(rv);
-        o.recursion = try parseRecursionMode(rs);
-    }
-    if (obj.get("callStackSize")) |cv| o.call_stack_size = try getU32FromValue(cv);
-    if (obj.get("recursionUnroll")) |uv| o.recursion_unroll = try getU32FromValue(uv);
-    return o;
-}
-
-pub fn parse(allocator: std.mem.Allocator, json_bytes: []const u8) errors.ParseError!UdonMeta {
+pub fn parse(allocator: std.mem.Allocator, json_bytes: []const u8) ParseError!UdonMeta {
     if (!std.unicode.utf8ValidateSlice(json_bytes)) return error.InvalidUtf8MetaPayload;
-
-    const root = std.json.parseFromSliceLeaky(
-        std.json.Value,
-        allocator,
-        json_bytes,
-        .{},
-    ) catch |e| switch (e) {
+    const root = std.json.parseFromSliceLeaky(std.json.Value, allocator, json_bytes, .{}) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.MalformedMeta,
     };
-
-    const obj = try getObjectFromValue(root);
-    const version_v = obj.get("version") orelse return error.MalformedMeta;
-    const version = try getU32FromValue(version_v);
+    const o = try Obj.of(root);
+    const version = try o.get(u32, "version") orelse return error.MalformedMeta;
     if (version != 1) return error.UnsupportedUdonMetaVersion;
 
     var meta: UdonMeta = .{ .version = version, ._json_root = root };
-
-    if (obj.get("behaviour")) |bv| {
-        const bobj = try getObjectFromValue(bv);
-        meta.behaviour = try parseBehaviour(bobj);
-    }
-
-    if (obj.get("fields")) |fv| {
-        const fobj = try getObjectFromValue(fv);
-        var list = try allocator.alloc(Field, fobj.count());
-        var i: usize = 0;
-        var it = fobj.iterator();
-        while (it.next()) |entry| : (i += 1) {
-            list[i] = try parseField(allocator, entry.key_ptr.*, entry.value_ptr.*);
-        }
-        meta.fields = list;
-    }
-
-    if (obj.get("functions")) |fv| {
-        const fobj = try getObjectFromValue(fv);
-        var list = try allocator.alloc(Function, fobj.count());
-        var i: usize = 0;
-        var it = fobj.iterator();
-        while (it.next()) |entry| : (i += 1) {
-            list[i] = try parseFunction(allocator, entry.key_ptr.*, entry.value_ptr.*);
-        }
-        meta.functions = list;
-    }
-
-    if (obj.get("imports")) |iv| {
-        const iobj = try getObjectFromValue(iv);
-        const list = try allocator.alloc(ImportBinding, iobj.count());
-        for (list, iobj.keys(), iobj.values()) |*b, pattern, v| {
-            const bobj = try getObjectFromValue(v);
-            b.* = .{ .pattern = pattern };
-            if (bobj.get("as")) |a| b.as = try enumFromStringOrError(HostFunction, try getStringFromValue(a), error.MalformedMeta);
-            if (bobj.get("returns")) |r| b.returns = switch (r) {
-                .integer => |x| x,
-                else => return error.MalformedMeta,
-            };
-            // Exactly one of the two.
-            if ((b.as != null) == (bobj.get("returns") != null)) return error.MalformedMeta;
-        }
-        meta.imports = list;
-    }
-
-    if (obj.get("options")) |ov| {
-        const oobj = try getObjectFromValue(ov);
-        meta.options = try parseOptions(oobj);
-    }
-
+    if (try o.get(Obj, "behaviour")) |b| meta.behaviour = .{
+        .sync_mode = try b.tag(SyncMode, "syncMode", error.InvalidBehaviourSyncMode),
+        .comment = try b.get([]const u8, "comment"),
+    };
+    meta.fields = try o.list(Field, allocator, "fields", parseField);
+    meta.functions = try o.list(Function, allocator, "functions", parseFunction);
+    meta.imports = try o.list(ImportBinding, allocator, "imports", parseImport);
+    if (try o.get(Obj, "options")) |options| meta.options = try parseOptions(options);
     return meta;
 }
 

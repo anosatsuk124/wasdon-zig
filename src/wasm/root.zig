@@ -22,7 +22,6 @@ pub const Module = module.Module;
 pub const parseModule = parser.parseModule;
 pub const UdonMeta = udon_meta.UdonMeta;
 pub const parseUdonMeta = udon_meta.parse;
-pub const findUdonMetaBytes = udon_meta.findMetaBytes;
 pub const parseUdonMetaFromModule = udon_meta.parseFromModule;
 
 pub const ParseError = errors.ParseError;

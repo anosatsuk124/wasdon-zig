@@ -177,7 +177,6 @@ pub fn parse(gpa: std.mem.Allocator, text: []const u8, diag: ?*Diagnostic) Parse
     const a = prog.arena.allocator();
 
     var vars: std.ArrayList(Var) = .empty;
-    var anon: std.ArrayList(Var) = .empty;
     var anon_index: std.StringHashMapUnmanaged(u32) = .empty;
     var code: std.ArrayList(Instr) = .empty;
     var labels: std.ArrayList(Label) = .empty;
@@ -318,12 +317,11 @@ pub fn parse(gpa: std.mem.Allocator, text: []const u8, diag: ?*Diagnostic) Parse
     for (str_refs.items) |r| {
         const gop = try anon_index.getOrPut(a, r.name);
         if (!gop.found_existing) {
-            gop.value_ptr.* = prog.named_count + @as(u32, @intCast(anon.items.len));
-            try anon.append(a, .{ .name = "", .type_name = "SystemString", .init = .{ .string = r.name }, .line = code.items[r.instr].line });
+            gop.value_ptr.* = @intCast(vars.items.len);
+            try vars.append(a, .{ .name = "", .type_name = "SystemString", .init = .{ .string = r.name }, .line = code.items[r.instr].line });
         }
         code.items[r.instr].param = .{ .heap = gop.value_ptr.* };
     }
-    try vars.appendSlice(a, anon.items);
 
     for (data_exports.items) |e| {
         if (prog.var_index.get(e.name)) |i| vars.items[i].is_export = true else try issues.append(a, .{

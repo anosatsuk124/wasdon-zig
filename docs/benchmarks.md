@@ -588,6 +588,49 @@ the numeric ones 2–5 % fewer — at 1.5–3.3× the code. The benchmark is
 built that way; the others stay small, and `docs/producer_guide.md` §9a
 says when the trade is worth making.
 
+## Source size
+
+Lines of Zig, counted with `wc -l`, at the baseline commit `7d44799` and
+now.
+
+| | baseline | now | |
+|---|---:|---:|---|
+| `src/translator/` | 9754 | 7512 | of which tests: 1931 now. The baseline's one 7899-line `translate.zig` held its 86 tests, which matched substrings of the output; the 47 now translate, check and execute |
+| `src/wasm/` | 3273 | 3467 | passive segments, atomics, the body walkers; the metadata reader went from 750 lines to 637 while gaining `imports` |
+| `src/udon/` | 722 | 4450 | the baseline had the assembly writer only; now also the reader, checker, emulator and its externs |
+
+The translator proper is 5581 lines against a baseline that — with its
+tests, whose share was not measured — was 9754, and it does what the
+baseline did not: WASI, threads for one thread, unrolled recursion,
+liveness, module inspection, and every optimization in the log above.
+
+### A pass for redundancy
+
+After the features were in, the code was read once more only for what
+could be removed without changing what it emits — by hand, and by a
+second reader with no stake in it, whose findings were each checked
+before being applied. 14 files changed, 315 lines added, 531 removed:
+
+- Declarations nothing used: two functions, two constants, three
+  re-exports, a statistics array that was written and never read, an
+  emulator option nothing set, a method of the checker's report.
+- Seven hand-written walks over nested instruction bodies (in the WASI
+  linker, the threads and unrolling passes, and the lowering) replaced by
+  four helpers in `wasm/instruction.zig`: `forEach`, `any`, `rewrite`,
+  `mapCalls`.
+- The `__udon_meta` reader: eleven helper functions and per-type parsers
+  with repeated unwrap-and-check code became one small typed reader.
+- Things defined twice or three times, now once: the index of a value
+  type, the zero initial value of a slot type, the `BlockCopy` signature,
+  "declare on first use" (seven copies), the comparison used to fold
+  constants (the same six-way switch for signed and unsigned).
+- Comments that had become false or sat on the wrong declaration.
+
+The check that nothing changed: the Unity assets were regenerated and are
+byte for byte what they were, the statistics table for all eighteen
+examples (Rhai, mruby and the Linux kernel included) is identical, and
+the 251 tests pass.
+
 ## How the numbers are produced
 
 ```sh
