@@ -49,7 +49,7 @@ open scene, wired up and ready to enter Play mode or build:
 The other examples have assets too, without scene objects of their own:
 `wasm-bench` and `wasi-hello` only log (put them on any UdonBehaviour and
 read the console); `bench-zig` runs a workload for each of the custom
-events `Fib`, `Mandel` and `Str`; `udon-orbit` needs an object to orbit and
+events `Fib`, `Mandel`, `Str`, `Tak` and `Ack`; `udon-orbit` needs an object to orbit and
 a prefab to clone (see the comments in `examples/udon-orbit/main.zig`).
 
 Notes:
