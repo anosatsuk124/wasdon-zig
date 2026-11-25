@@ -595,7 +595,7 @@ now.
 
 | | baseline | now | |
 |---|---:|---:|---|
-| `src/translator/` | 9754 | 7512 | of which tests: 1931 now. The baseline's one 7899-line `translate.zig` held its 86 tests, which matched substrings of the output; the 47 now translate, check and execute |
+| `src/translator/` | 9754 | 7512 | of which tests: 1931 now. The baseline's one 7899-line `translate.zig` held its 86 tests, which matched substrings of the output; the 36 in `tests.zig` now translate, check and execute, and 11 more test the analyses |
 | `src/wasm/` | 3273 | 3467 | passive segments, atomics, the body walkers; the metadata reader went from 750 lines to 637 while gaining `imports` |
 | `src/udon/` | 722 | 4450 | the baseline had the assembly writer only; now also the reader, checker, emulator and its externs |
 
@@ -609,17 +609,18 @@ liveness, module inspection, and every optimization in the log above.
 After the features were in, the code was read once more only for what
 could be removed without changing what it emits — by hand, and by a
 second reader with no stake in it, whose findings were each checked
-before being applied. 14 files changed, 315 lines added, 531 removed:
+before being applied. 15 source files changed, 315 lines added, 533 removed:
 
-- Declarations nothing used: two functions, two constants, three
+- Declarations nothing used: two functions, two constants, four
   re-exports, a statistics array that was written and never read, an
   emulator option nothing set, a method of the checker's report.
-- Seven hand-written walks over nested instruction bodies (in the WASI
+- Eight hand-written walks over nested instruction bodies (in the WASI
   linker, the threads and unrolling passes, and the lowering) replaced by
   four helpers in `wasm/instruction.zig`: `forEach`, `any`, `rewrite`,
   `mapCalls`.
-- The `__udon_meta` reader: eleven helper functions and per-type parsers
-  with repeated unwrap-and-check code became one small typed reader.
+- The `__udon_meta` reader: fifteen functions, most of them unwrapping
+  and checking one JSON type each, became one small typed reader and five
+  parsers.
 - Things defined twice or three times, now once: the index of a value
   type, the zero initial value of a slot type, the `BlockCopy` signature,
   "declare on first use" (seven copies), the comparison used to fold
