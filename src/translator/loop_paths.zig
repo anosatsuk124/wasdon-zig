@@ -32,7 +32,7 @@ const Graph = struct {
     ntests: u8 = 0,
     blocks: [max_states]Block = undefined,
     nblocks: u8 = 0,
-    folded: bool = false,
+    folded_tests: u8 = 0,
 
     fn state(self: *Graph, s: State) ?u8 {
         if (s.pc == self.len) return exit;
@@ -75,7 +75,7 @@ const Graph = struct {
                 } else {
                     const bit = @as(u8, 1) << @intCast(op.test_id);
                     if (op.kind == .test_branch and (s.yes | s.no) & bit != 0) {
-                        self.folded = true;
+                        self.folded_tests |= bit;
                         if (s.no & bit != 0) s.pc = op.target;
                     } else {
                         var otherwise = s;
@@ -98,13 +98,13 @@ const Graph = struct {
             }
             if (emitted > 8 * max_ins) return false;
         }
-        return self.folded;
+        return self.folded_tests != 0;
     }
 };
 
 /// Compile only loops whose complete control flow and heap writes are
 /// visible here. In particular a host call may re-enter the VM.
-pub fn optimize(a: *A, head: Label, dead: anytype) !bool {
+pub fn optimize(a: *A, head: Label, dead: anytype, backend: anytype) !bool {
     const start = a.labels.items[head].pos;
     const raw = a.code.items[start..];
     if (raw.len < 8 or raw.len > max_ins) return false;
@@ -186,6 +186,10 @@ pub fn optimize(a: *A, head: Label, dead: anytype) !bool {
     };
     a.code.shrinkRetainingCapacity(start);
     const done = try a.newLabel();
+    if (!backend.t.options.disable.loop_strip_mining) {
+        if (stripPlan(&g, a, saved, try backend.t.constI32(1))) |plan|
+            try emitStrips(&g, a, saved, plan, backend, done);
+    }
     try emit(&g, a, saved, done);
     a.bind(done);
     return true;
@@ -207,6 +211,114 @@ fn emit(g: *const Graph, a: *A, saved: []const Instr, done: Label) !void {
         }
         if (b.next != i + 1) try a.jump(if (b.next == exit) done else labels[b.next]);
     }
+}
+
+// Partition a counted loop at the next point where an equality can
+// change. If a cursor advances by at most one per iteration, a distance
+// of d guarantees d unequal tests before the next possible equality.
+const Bound = struct { cursor: Sym, limit: Sym, equal: bool, test_pc: usize };
+const Strip = struct { latch: Bound, bounds: [max_tests]Bound = undefined, len: usize = 0 };
+const i32_add = "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32";
+const i32_sub = "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32";
+const i32_eq = "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean";
+const i32_ne = "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean";
+const i32_ge = "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean";
+
+fn unitBound(g: *const Graph, a: *A, raw: []const Instr, pc: usize, one: Sym, latch: bool) ?Bound {
+    const op = g.ops[pc];
+    if (op.kind != .test_branch or op.end - op.start != 6) return null;
+    const sig = a.externs.items[raw[op.start + 3].arg];
+    const equal = std.mem.eql(u8, sig, i32_eq);
+    if (!equal and !std.mem.eql(u8, sig, i32_ne)) return null;
+    const t = g.tests[op.test_id];
+    for ([2]Test{ t, .{ .lhs = t.rhs, .rhs = t.lhs } }) |pair| {
+        var step: ?usize = null;
+        for (g.ops[0..g.len], 0..) |ins, i| {
+            if (ins.writes == pair.rhs) break;
+            if (ins.writes != pair.lhs) continue;
+            const expr = raw[ins.start..ins.end];
+            if (step != null or expr.len != 4 or expr[3].op != .extern_ or
+                !std.mem.eql(u8, a.externs.items[expr[3].arg], i32_add) or
+                !((expr[0].arg == pair.lhs and expr[1].arg == one) or (expr[1].arg == pair.lhs and expr[0].arg == one))) break;
+            step = i;
+        } else {
+            const at = step orelse continue;
+            if (latch) {
+                if (!equal or at >= pc) continue;
+                // Every path to the latch must pass through this update.
+                for (g.ops[0..at]) |ins| {
+                    if (ins.kind != .compute and ins.target > at) break;
+                } else return .{ .cursor = pair.lhs, .limit = pair.rhs, .equal = equal, .test_pc = pc };
+            } else if (at > pc) return .{ .cursor = pair.lhs, .limit = pair.rhs, .equal = equal, .test_pc = pc };
+        }
+    }
+    return null;
+}
+
+fn stripPlan(g: *const Graph, a: *A, raw: []const Instr, one: Sym) ?Strip {
+    const latch = g.len - 1;
+    if (g.ops[latch].target != 0) return null;
+    for (g.ops[0..latch]) |op| {
+        if (op.kind != .compute and (op.target == 0 or op.target > latch)) return null;
+    }
+    var plan: Strip = .{ .latch = unitBound(g, a, raw, latch, one, true) orelse return null };
+    for (0..latch) |pc| {
+        const op = g.ops[pc];
+        // Prioritize tests which survive a backedge. A one-off test on
+        // the primary iteration number should not shorten every strip.
+        if (op.kind != .test_branch or g.folded_tests & (@as(u8, 1) << @intCast(op.test_id)) == 0) continue;
+        const b = unitBound(g, a, raw, pc, one, false) orelse continue;
+        plan.bounds[plan.len] = b;
+        plan.len += 1;
+    }
+    return if (plan.len == 0) null else plan;
+}
+
+fn emitStrips(g: *const Graph, a: *A, raw: []const Instr, plan: Strip, backend: anytype, done: Label) !void {
+    const factor = 4;
+    const span = try backend.freshTemp("SystemInt32");
+    const stop = try backend.freshTemp("SystemInt32");
+    const flag = try backend.freshTemp("SystemBoolean");
+    const guard = try a.newLabel();
+    const scalar = try a.newLabel();
+    a.bind(guard);
+    try a.call(i32_sub, &.{ plan.latch.limit, plan.latch.cursor, span });
+    try a.call(i32_ge, &.{ span, try backend.t.constI32(factor), flag });
+    try a.jumpIfFalse(flag, scalar);
+    var taken: [max_ins]?bool = @splat(null);
+    for (plan.bounds[0..plan.len]) |b| {
+        try a.call(i32_sub, &.{ b.limit, b.cursor, stop });
+        try a.call("SystemMath.__Min__SystemInt32_SystemInt32__SystemInt32", &.{ span, stop, span });
+        taken[b.test_pc] = b.equal; // JUMP_IF_FALSE for equal operands tested as unequal
+    }
+    try a.call(i32_ge, &.{ span, try backend.t.constI32(factor), flag });
+    try a.jumpIfFalse(flag, scalar);
+    try a.call("SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32", &.{ span, try backend.t.constI32(-factor), span });
+    try a.call(i32_add, &.{ plan.latch.cursor, span, stop });
+    const header = try a.newLabel();
+    a.bind(header);
+    for (0..factor) |_| {
+        var labels: [max_ins]Label = undefined;
+        for (labels[0..g.len]) |*label| label.* = try a.newLabel();
+        for (g.ops[0 .. g.len - 1], 0..) |op, pc| {
+            a.bind(labels[pc]);
+            if (taken[pc]) |jump| {
+                if (jump) try a.jump(labels[op.target]);
+            } else if (op.kind == .compute) {
+                try a.code.appendSlice(a.gpa, raw[op.start..op.end]);
+            } else {
+                try a.code.appendSlice(a.gpa, raw[op.start .. op.end - 1]);
+                try a.code.append(a.gpa, .{ .op = raw[op.end - 1].op, .arg = labels[op.target] });
+            }
+        }
+        a.bind(labels[g.len - 1]);
+    }
+    try a.call(i32_eq, &.{ plan.latch.cursor, stop, flag });
+    try a.jumpIfFalse(flag, header);
+    try a.call(i32_eq, &.{ plan.latch.cursor, plan.latch.limit, flag });
+    try a.jumpIfFalse(flag, guard);
+    try a.jump(done);
+    a.bind(scalar);
 }
 
 fn numericOperator(signature: udon.nodes.Signature) bool {

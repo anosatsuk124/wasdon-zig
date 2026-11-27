@@ -72,6 +72,8 @@ pub const Disable = struct {
     induction: bool = false,
     /// Keep invariant integer arithmetic inside loops.
     loop_invariants: bool = false,
+    /// Keep per-iteration tests for unit-stride bounds.
+    loop_strip_mining: bool = false,
     /// Re-test predicates along every loop backedge.
     loop_paths: bool = false,
     /// Save every local around a re-entrant call, not just the live ones.

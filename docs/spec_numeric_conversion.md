@@ -208,3 +208,14 @@ loop in which both operands are invariant owns the result. Divisions,
 remainders and loads retain their execution order. A backedge skips the
 preheader, while entry from an enclosing block executes it. Sibling
 loops may share result slots, and nested loops use distinct slots.
+
+An equality on a unit-stride induction variable can also stay unequal
+for a bounded number of iterations. When the variable is tested before
+its one possible increment, a positive modular distance of `d` to an
+invariant limit guarantees at least `d` unequal tests. A counted loop
+can use the minimum of these distances and its remaining trip count to
+run groups of four iterations with the proven outcomes. The outer check
+runs again after that group range. A short or negative distance enters
+the original scalar control flow. This transformation requires a single
+backedge and an unconditional update of the primary induction variable.
+It makes no assumptions about the contents of linear memory.

@@ -1230,6 +1230,53 @@ test "a loop-carried comparison stays known until either operand changes" {
     try testing.expect(optimized.vm.stats.externs < original.vm.stats.externs);
 }
 
+test "strip-mined equality bounds retain partial steps, tails and i32 wraparound" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const first: i32 = 0x7fff_fffd;
+    for ([_]i32{ 1, 3, 4, 7, 65, 67 }) |count| {
+        for ([_]i32{ -1, 0, 2, 11, 93 }) |distance| {
+            const limit = first +% distance;
+            const body = [_]I{
+                .{ .i32_const = first }, .{ .local_set = 0 },
+                .{ .i32_const = first }, .{ .local_set = 1 },
+                loop(&.{
+                    .{ .local_get = 0 }, .{ .i32_const = limit }, .i32_ne,
+                    ifElse(null, &.{
+                        .{ .local_get = 1 },                                                                               .{ .i32_const = first +% 5 }, .i32_ne,
+                        ifElse(null, &.{ .{ .local_get = 0 }, .{ .i32_const = 1 }, .i32_add, .{ .local_set = 0 } }, null), .{ .local_get = 2 },          .{ .i32_const = 7 },
+                        .i32_add,                                                                                          .{ .local_set = 2 },
+                    }, &.{ .{ .local_get = 2 }, .{ .i32_const = 13 }, .i32_add, .{ .local_set = 2 } }),
+                    .{ .local_get = 1 }, .{ .i32_const = 1 },     .i32_add,
+                    .{ .local_set = 1 }, .{ .local_get = 1 },     .{ .i32_const = first +% count },
+                    .i32_ne,             .{ .br_if = 0 },
+                }),
+                .{ .local_get = 2 },     .{ .global_set = 0 },
+                .{ .local_get = 0 },     .{ .global_set = 1 },
+            };
+            const mod = try simpleModule(arena.allocator(), &.{ .i32, .i32 }, &.{.{ .count = 3, .ty = .i32 }}, &body);
+            var original = try loadWith(mod, null, .{ .loop_strip_mining = true });
+            defer original.deinit();
+            var optimized = try load(mod, null);
+            defer optimized.deinit();
+            var cursor = first;
+            var sum: i32 = 0;
+            for (0..@intCast(count)) |i| {
+                if (cursor != limit) {
+                    if (i != 5) cursor +%= 1;
+                    sum += 7;
+                } else sum += 13;
+            }
+            for ([_]*Program{ &original, &optimized }) |p| {
+                _ = try p.vm.runEvent("run");
+                try testing.expectEqual(Value{ .int32 = sum }, p.global("__G__g0"));
+                try testing.expectEqual(Value{ .int32 = cursor }, p.global("__G__g1"));
+            }
+            if (distance == 93 and count == 65) try testing.expect(optimized.vm.stats.externs < original.vm.stats.externs);
+        }
+    }
+}
+
 test "invariant arithmetic follows the lifetime of the outermost immutable operands" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

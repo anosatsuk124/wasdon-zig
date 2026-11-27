@@ -353,7 +353,7 @@ const Lowerer = struct {
         return self.freshTemp(p.type_name);
     }
 
-    fn freshTemp(self: *Lowerer, type_name: []const u8) Error!Sym {
+    pub fn freshTemp(self: *Lowerer, type_name: []const u8) Error!Sym {
         self.temp_count += 1;
         return self.a.declare(.{
             .name = try self.t.name("__{s}_T{d}__", .{ self.f.name, self.temp_count }),
@@ -859,7 +859,7 @@ const Lowerer = struct {
                     return false;
                 }
             };
-            if (try @import("loop_paths.zig").optimize(self.a, head, DeadBools{ .pools = self.pools.items })) self.forgetDerived();
+            if (try @import("loop_paths.zig").optimize(self.a, head, DeadBools{ .pools = self.pools.items }, self)) self.forgetDerived();
         }
         if (hoist) try self.emitInvariants(head, self.loops.pop().?);
         return falls;
