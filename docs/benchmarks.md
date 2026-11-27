@@ -7,12 +7,16 @@ table is the baseline it is measured against. Numbers are reproducible with
 columns) — see the "How the numbers are produced" section at the end.
 
 The Unity sort benchmark runs the same stable bottom-up merge sort in
-Rust, Zig and UdonSharp. It draws the result of each merge width for 48
-values, and measures a separate full sort of 511 values with a warm-up
+Rust, Zig and UdonSharp. It draws 48 positions from each merge pass and
+measures a separate full sort of 511 values by default with a warm-up
 and nine measured trials per implementation. Unity's real-time clock
 surrounds the `Sort` event. Array transfers, drawing and the reference
 comparison are outside that interval. These elapsed times measure
 the Udon SDK's execution on the local client.
+
+The scene's Sample Size accepts 2 through 65,536 values. Visualize uses
+the same input and validates the final pass before beginning the full
+sort trials. Pass timings exclude drawing and the delay between frames.
 
 Unity Editor 2022.3.22f1, Worlds SDK 3.10.6, macOS, Play Mode in batch
 mode. Each row is a separate run of the scene's 511-byte benchmark.

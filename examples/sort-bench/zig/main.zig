@@ -2,7 +2,7 @@
 //! reads it back outside the timed Sort event. Step advances one merge width.
 const udon = @import("udon");
 
-const capacity = 512;
+const capacity = 65_536;
 var front: [capacity]u8 = undefined;
 var back: [capacity]u8 = undefined;
 var count: usize = 0;

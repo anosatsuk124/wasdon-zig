@@ -17,9 +17,11 @@ namespace Wasdon
         public Text[] results;
         public Text status;
 
-        private const int SampleSize = 511;
+        [Tooltip("Values sorted by each implementation in both Visualize and Benchmark.")]
+        [Min(2)] public int sampleSize = 511;
+        [Tooltip("Minimum time between visible merge passes, in seconds.")]
+        [Min(0f)] public float passInterval = 0.55f;
         private const int Samples = 9;
-        private const float PassInterval = 0.55f;
 
         private byte[] preview;
         private byte[] input;
@@ -27,6 +29,8 @@ namespace Wasdon
         private byte[] buffer;
         private double[] times = new double[Lanes * Samples];
         private int trial;
+        private int count;
+        private double[] stepTimes = new double[Lanes];
         private int mergeWidth;
         private float nextPass;
         private bool animating;
@@ -52,24 +56,39 @@ namespace Wasdon
 
         public void Visualize()
         {
-            ResetBenchmark();
-            buffer = new byte[BarsPerLane];
-            for (int lane = 0; lane < Lanes; lane++) Load(sorters[lane], preview);
+            PrepareRun();
+            for (int lane = 0; lane < Lanes; lane++)
+            {
+                Load(sorters[lane], input);
+                Draw(lane, input);
+                stepTimes[lane] = 0;
+            }
             mergeWidth = 1;
-            nextPass = Time.unscaledTime + PassInterval;
-            status.text = "48 values  /  Merge runs of 1";
+            nextPass = Time.unscaledTime + passInterval;
+            status.text = count + " values  /  Merge runs of 1";
             animating = true;
         }
 
         public void Benchmark()
         {
+            PrepareRun();
+            BeginTrials();
+        }
+
+        private void PrepareRun()
+        {
             ResetBenchmark();
-            input = MakeInput(SampleSize);
+            count = Mathf.Clamp(sampleSize, 2, WasdonMergeSort.Capacity);
+            input = MakeInput(count);
             expected = ReferenceOrder(input);
-            buffer = new byte[SampleSize];
+            buffer = new byte[count];
+        }
+
+        private void BeginTrials()
+        {
             trial = 0;
             measuring = true;
-            status.text = "511 values  /  Warming up";
+            status.text = count + " values  /  Warming up";
         }
 
         private void Update()
@@ -80,19 +99,23 @@ namespace Wasdon
 
         private void AnimatePass()
         {
-            bool finished = mergeWidth * 2 >= BarsPerLane;
+            bool finished = mergeWidth * 2 >= count;
             for (int lane = 0; lane < Lanes; lane++)
             {
                 UdonBehaviour sorter = sorters[lane];
+                double start = Time.realtimeSinceStartupAsDouble;
                 sorter.SendCustomEvent("Step");
+                stepTimes[lane] += (Time.realtimeSinceStartupAsDouble - start) * 1000.0;
                 sorter.SendCustomEvent("Read");
                 Draw(lane, buffer);
-                results[lane].text = finished ? "Sorted" : "Run width " + (mergeWidth * 2);
+                results[lane].text = stepTimes[lane].ToString("F3") + " ms  /  steps";
+                if (finished && !Validate(lane)) return;
             }
-            status.text = "48 values  /  Merged runs of " + mergeWidth;
+            status.text = count + " values  /  Merged runs of " + mergeWidth;
             mergeWidth *= 2;
-            nextPass = Time.unscaledTime + PassInterval;
+            nextPass = Time.unscaledTime + passInterval;
             animating = !finished;
+            if (finished) BeginTrials();
         }
 
         private void MeasureTrial()
@@ -109,22 +132,15 @@ namespace Wasdon
             double milliseconds = (Time.realtimeSinceStartupAsDouble - start) * 1000.0;
 
             sorter.SendCustomEvent("Read");
-            for (int i = 0; i < SampleSize; i++)
-            {
-                if (buffer[i] == expected[i]) continue;
-                measuring = false;
-                results[lane].text = "Incorrect output";
-                status.text = "Benchmark stopped  /  Output validation failed";
-                return;
-            }
+            if (!Validate(lane)) return;
             if (round > 0)
             {
                 times[lane * Samples + round - 1] = milliseconds;
-                results[lane].text = "Sample " + round + " / " + Samples;
+                results[lane].text = milliseconds.ToString("F3") + " ms  /  " + round + " of " + Samples;
             }
 
             trial++;
-            if (trial == Lanes) status.text = "511 values  /  Measuring sort time";
+            if (trial == Lanes) status.text = count + " values  /  Measuring sort time";
             if (trial == Lanes * (Samples + 1)) ShowResults();
         }
 
@@ -155,7 +171,21 @@ namespace Wasdon
                 string ratio = fastest > 0 ? "  /  " + (medians[lane] / fastest).ToString("F2") + "x" : "";
                 results[lane].text = medians[lane].ToString("F3") + " ms" + ratio;
             }
-            status.text = "511 values  /  Median of 9  /  1.00x is fastest";
+            status.text = count + " values  /  Median of " + Samples + "  /  1.00x is fastest";
+        }
+
+        private bool Validate(int lane)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                if (buffer[i] == expected[i]) continue;
+                animating = false;
+                measuring = false;
+                results[lane].text = "Incorrect output";
+                status.text = "Benchmark stopped  /  Output validation failed";
+                return false;
+            }
+            return true;
         }
 
         private void Load(UdonBehaviour sorter, byte[] source)
@@ -195,7 +225,10 @@ namespace Wasdon
         {
             int first = lane * BarsPerLane;
             for (int i = 0; i < BarsPerLane; i++)
-                bars[first + i].localScale = new Vector3(1f, (values[i] + 1) / 256f, 1f);
+            {
+                int index = i * (values.Length - 1) / (BarsPerLane - 1);
+                bars[first + i].localScale = new Vector3(1f, (values[index] + 1) / 256f, 1f);
+            }
         }
     }
 }

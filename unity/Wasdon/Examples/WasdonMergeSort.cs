@@ -8,7 +8,7 @@ namespace Wasdon
     {
         public byte[] data;
 
-        private const int Capacity = 512;
+        public const int Capacity = 65536;
         private byte[] front = new byte[Capacity];
         private byte[] back = new byte[Capacity];
         private int count;

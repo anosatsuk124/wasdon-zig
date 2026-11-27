@@ -24,7 +24,7 @@ unsafe extern "C" {
     fn block_copy(src: ByteArray, src_at: usize, dst: ByteArray, dst_at: usize, count: usize);
 }
 
-const CAPACITY: usize = 512;
+const CAPACITY: usize = 65_536;
 static mut FRONT: [u8; CAPACITY] = [0; CAPACITY];
 static mut BACK: [u8; CAPACITY] = [0; CAPACITY];
 static mut COUNT: usize = 0;

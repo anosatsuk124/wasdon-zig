@@ -77,10 +77,15 @@ The generated program is large and is built locally.
 
 ### Sort Benchmark
 
-**Visualize** steps through the merge widths for the same 48 values in
-each implementation. **Benchmark** sorts the same 511 values in each
-implementation after a warm-up, checks each result against a reference
-and shows the median of nine runs and the ratio to the fastest median.
+Set **Sample Size** on the scene's `WasdonSortBenchmark` component
+(2–65,536, default 511). **Visualize** runs one merge pass per lane at
+each **Pass Interval** and plots 48 equally spaced positions from the
+actual output. Each lane displays the accumulated time spent in its
+`Step` events. It then starts the full benchmark. **Benchmark** starts
+the full-sort trials immediately. Each implementation sorts the same
+input after a warm-up. The panel checks every byte against a reference,
+displays each sample as it completes, and reports the median of nine
+runs and the ratio to the fastest median.
 Input preparation, array transfers, validation and UI updates are outside
 the measured event. The UdonSharp program is built from
 [`WasdonMergeSort.cs`](Examples/WasdonMergeSort.cs) by the Unity editor.
