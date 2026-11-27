@@ -76,6 +76,12 @@ C# computes them on `int`s; they are the i32 results, and they absorb the
 be literals, so each one used is converted from an `Int32` constant during
 initialization (`__c_u8_{value}`).
 
+An i32 local whose assignments all consume an `i32.load8_u` keeps its
+value in a `SystemByte` slot. Byte comparisons and `i32.store8` use that
+slot directly, including across basic blocks. An i32 consumer widens the
+byte on demand. Parameters and locals with mixed-width assignments retain
+their WASM representation.
+
 A pending load must still read memory as it was when the load instruction
 ran. It is emitted before anything that could change the answer:
 

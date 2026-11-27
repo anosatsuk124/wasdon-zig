@@ -172,6 +172,7 @@ pub const Func = struct {
     /// Per local: it only ever holds a condition and is declared
     /// `SystemBoolean` (`liveness.boolLocals`).
     bool_locals: []bool = &.{},
+    byte_locals: []bool = &.{},
     trampoline: Label = 0,
 };
 
@@ -523,11 +524,13 @@ pub const Translator = struct {
             }
             f.bool_locals = try @import("liveness.zig").boolLocals(a, f.ty.params.len, f.local_types, code.body);
             if (self.options.disable.bool_locals) @memset(f.bool_locals, false);
-            for (f.locals, f.local_types, f.bool_locals, 0..) |*s, ty, is_bool, li| {
+            f.byte_locals = try @import("liveness.zig").byteLocals(a, f.ty.params.len, f.local_types, code.body);
+            if (self.options.disable.byte_operators or self.options.disable.pending_loads) @memset(f.byte_locals, false);
+            for (f.locals, f.local_types, f.bool_locals, f.byte_locals, 0..) |*s, ty, is_bool, is_byte, li| {
                 s.* = try self.a.declare(.{
                     .name = try self.name("__{s}_{c}{d}__", .{ f.name, @as(u8, if (li < f.ty.params.len) 'P' else 'L'), li }),
-                    .type_name = if (is_bool) "SystemBoolean" else udonType(ty),
-                    .init = if (is_bool) .null_ else zeroInit(ty),
+                    .type_name = if (is_bool) "SystemBoolean" else if (is_byte) "SystemByte" else udonType(ty),
+                    .init = if (is_bool or is_byte) .null_ else zeroInit(ty),
                 });
             }
             f.entry = try self.a.newLabel();

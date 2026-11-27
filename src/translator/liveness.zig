@@ -166,6 +166,33 @@ fn isCondition(ins: Instruction) bool {
     };
 }
 
+/// The value held by these i32 locals fits in a SystemByte on every path.
+/// Only direct unsigned byte loads qualify. Parameters may arrive as any i32.
+pub fn byteLocals(arena: std.mem.Allocator, n_params: usize, types: []const wasm.types.ValType, body: []const Instruction) ![]bool {
+    const ok = try arena.alloc(bool, types.len);
+    const written = try arena.alloc(bool, types.len);
+    @memset(written, false);
+    for (types, 0..) |ty, i| ok[i] = i >= n_params and ty == .i32;
+    scanByteWrites(body, ok, written);
+    for (ok, written) |*flag, used| flag.* = flag.* and used;
+    return ok;
+}
+
+fn scanByteWrites(body: []const Instruction, ok: []bool, written: []bool) void {
+    for (body, 0..) |ins, i| switch (ins) {
+        .local_set, .local_tee => |l| if (l < ok.len) {
+            written[l] = true;
+            if (i == 0 or body[i - 1] != .i32_load8_u) ok[l] = false;
+        },
+        .block, .loop => |b| scanByteWrites(b.body, ok, written),
+        .if_ => |b| {
+            scanByteWrites(b.then_body, ok, written);
+            if (b.else_body) |e| scanByteWrites(e, ok, written);
+        },
+        else => {},
+    };
+}
+
 // ------------------------------- tests -------------------------------
 
 const testing = std.testing;

@@ -14,6 +14,16 @@ surrounds the `Sort` event. Array transfers, drawing and the reference
 comparison are outside that interval. These elapsed times measure
 the Udon SDK's execution on the local client.
 
+Unity Editor 2022.3.22f1, Worlds SDK 3.10.6, macOS, Play Mode in batch
+mode. Each row is a separate run of the scene's 511-byte benchmark.
+`EXTERN` counts are from `zig build stats -Drust` for the 11-byte fixture
+(`Load,Step,Read,Sort,Read`).
+
+| Translation | Rust median | Zig median | UdonSharp median | Fixture EXTERNs (Rust / Zig) |
+|---|---:|---:|---:|---:|
+| Before byte-local lowering | 8.218 ms | 7.824 ms | 5.223 ms | 949 / 924 |
+| Preserve byte locals through comparisons and stores | 7.657 ms | 7.609 ms | 6.359 ms | 814 / 789 |
+
 Column meanings:
 
 | Column | Meaning |

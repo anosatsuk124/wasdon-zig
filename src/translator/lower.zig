@@ -93,6 +93,8 @@ const Entry = struct {
         konst,
         /// A WASM local's own slot.
         local,
+        /// A local lowered to SystemByte. Widen only for i32 consumers.
+        byte_local,
         /// A slot other code may overwrite: globals, return registers,
         /// fields. Copied out before anything that can write it.
         shared,
@@ -120,7 +122,7 @@ const Entry = struct {
 
     /// An unsigned byte that is still in memory.
     fn isByte(e: Entry) bool {
-        return e.kind == .mem and e.load.?.byte and e.ty == .i32 and !byte_operators_off;
+        return e.kind == .byte_local or (e.kind == .mem and e.load.?.byte and e.ty == .i32 and !byte_operators_off);
     }
 
     /// A constant a `SystemByte` can hold.
@@ -249,7 +251,7 @@ const Lowerer = struct {
         scanInit(code.body, assigned, needs_init);
         for (needs_init, 0..) |need, i| {
             if (!need) continue;
-            const zero = if (self.f.bool_locals[i]) try self.t.constBool(false) else try self.t.constSym(self.f.local_types[i], 0);
+            const zero = if (self.f.bool_locals[i]) try self.t.constBool(false) else if (self.f.byte_locals[i]) try self.t.constByte(0) else try self.t.constSym(self.f.local_types[i], 0);
             try self.a.copy(zero, self.f.locals[i]);
         }
         self.live = try @import("liveness.zig").analyze(self.t.arena(), self.f.locals.len, code.body);
@@ -398,6 +400,11 @@ const Lowerer = struct {
         switch (e.kind) {
             .konst => return self.t.constSym(e.ty, e.bits),
             .local, .shared, .temp, .alias => return e.sym,
+            .byte_local => {
+                e.* = try self.compute(.i32, try self.valPool(.i32), loads.i32_load8_u.widen.?, &.{e.sym});
+                e.nonneg = true;
+                return e.sym;
+            },
             .mem => {
                 try self.loadNow(e);
                 return e.sym;
@@ -446,7 +453,7 @@ const Lowerer = struct {
             e.* = .{ .ty = .i32, .kind = .cond, .sym = d, .owned = true, .pool = pool, .negated = !e.negated };
             return d;
         }
-        if (e.isByte()) {
+        if (e.kind == .mem and e.isByte()) {
             // "Is this byte non-zero" is a single read.
             const mem = try self.memory();
             const sa = try self.loadAddress(e);
@@ -534,6 +541,10 @@ const Lowerer = struct {
     }
 
     fn materialize(self: *Lowerer, e: *Entry) Error!void {
+        if (e.kind == .byte_local) {
+            _ = try self.operand(e);
+            return;
+        }
         if (e.kind == .cond) {
             const pool = try self.poolFor("SystemBoolean");
             const d = try self.newTemp(pool);
@@ -555,7 +566,7 @@ const Lowerer = struct {
     fn flushLocal(self: *Lowerer, i: u32) Error!void {
         const slot = if (self.isBoolLocal(i)) try self.localSym(i) else null;
         for (self.stack.items) |*e| {
-            if (e.kind == .local and e.local == i) try self.materialize(e);
+            if ((e.kind == .local or e.kind == .byte_local) and e.local == i) try self.materialize(e);
             if (e.kind == .mem and e.base == .local and e.local == i) try self.loadNow(e);
             if (e.kind == .cond and !e.owned and e.sym == slot) try self.materialize(e);
         }
@@ -645,7 +656,7 @@ const Lowerer = struct {
     /// the other.
     fn flushForBlock(self: *Lowerer) Error!void {
         for (self.stack.items) |*e| switch (e.kind) {
-            .local, .shared => try self.materialize(e),
+            .local, .byte_local, .shared => try self.materialize(e),
             .cond => if (!e.owned) try self.materialize(e),
             .mem => try self.loadNow(e),
             .konst, .temp, .alias => {},
@@ -1017,9 +1028,26 @@ const Lowerer = struct {
                 // The slot is the condition itself; like a global, it is
                 // copied out before anything overwrites it.
                 try self.push(.{ .ty = .i32, .kind = .cond, .sym = try self.localSym(i), .nonneg = true });
+            } else if (i < self.f.byte_locals.len and self.f.byte_locals[i]) {
+                try self.push(.{ .ty = .i32, .kind = .byte_local, .sym = try self.localSym(i), .local = i, .nonneg = true });
             } else try self.push(.{ .ty = try self.localType(i), .kind = .local, .sym = try self.localSym(i), .local = i, .nonneg = self.localNonneg(i) }),
             .local_set, .local_tee => |i| {
                 if (self.isBoolLocal(i)) return self.setBoolLocal(i);
+                if (i < self.f.byte_locals.len and self.f.byte_locals[i]) {
+                    var v = try self.pop();
+                    try self.flushLocal(i);
+                    const dst = try self.localSym(i);
+                    if (v.kind == .mem) {
+                        try self.a.call(loads.byte_get, &.{ (try self.memory()).sym, try self.loadAddress(&v), dst });
+                    } else {
+                        // A load with a mutable address was materialized eagerly.
+                        const value = try self.operand(&v);
+                        try self.a.call("SystemConvert.__ToByte__SystemInt32__SystemByte", &.{ value, dst });
+                        try self.release(v);
+                    }
+                    if (ins == .local_tee) try self.push(.{ .ty = .i32, .kind = .byte_local, .sym = dst, .local = i, .nonneg = true });
+                    return true;
+                }
                 const v = try self.pop();
                 const nonneg = v.nonneg;
                 try self.flushLocal(i);
@@ -1280,7 +1308,7 @@ const Lowerer = struct {
             const b_ident = b.kind == .konst and switch (op) {
                 .add, .sub, .or_, .xor, .shl, .shr_s => b.bits == 0,
                 .mul, .div_s => signed(ty, b.bits) == 1,
-                .and_ => signed(ty, b.bits) == -1,
+                .and_ => signed(ty, b.bits) == -1 or (a.isByte() and b.bits & 255 == 255),
                 .rem_s => false,
             };
             if (b_ident) return self.push(a);
@@ -1792,6 +1820,7 @@ const Lowerer = struct {
     /// A pending unsigned-byte load as the `SystemByte` it reads, for a
     /// byte operator. Consumes the entry.
     fn byteOperand(self: *Lowerer, e: *Entry) Error!Sym {
+        if (e.kind == .byte_local) return e.sym;
         if (e.kind == .konst) return self.t.constByte(@intCast(e.bits));
         const mem = try self.memory();
         const sa = try self.loadAddress(e);
@@ -1822,7 +1851,9 @@ const Lowerer = struct {
         }
         const sa = try self.effectiveAddress(&addr, m.offset);
         const c0 = try self.t.constI32(0);
-        if (v.kind == .konst) {
+        if (v.kind == .byte_local and size == 1) {
+            try self.a.call("SystemByteArray.__Set__SystemInt32_SystemByte__SystemVoid", &.{ mem.sym, sa, v.sym });
+        } else if (v.kind == .konst) {
             const off = try self.t.poolOffset(size, if (size == 8) v.bits else v.bits & ((@as(u64, 1) << @intCast(@as(u32, size) * 8)) - 1));
             try self.a.call(block_copy, &.{ try self.t.poolSym(), try self.t.constI32(@intCast(off)), mem.sym, sa, n });
         } else {
@@ -1905,7 +1936,7 @@ const Lowerer = struct {
             // instruction stream read it before the call, the code will
             // read its slot after.
             const pending = for (self.stack.items[0..below]) |e| {
-                if (e.kind == .local and e.local == i) break true;
+                if ((e.kind == .local or e.kind == .byte_local) and e.local == i) break true;
             } else false;
             if (pending or self.t.options.disable.liveness or self.live.liveAfter(call, i)) try list.append(a, sym);
         }
