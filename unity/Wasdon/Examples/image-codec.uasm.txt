@@ -1,5 +1,5 @@
 .data_start
-    # wasdon-zig heap-size: 288
+    # wasdon-zig heap-size: 289
     __G__memory: %SystemByteArray, null
     __G__memory_size_pages: %SystemInt32, 17
     __G__g0: %SystemInt32, 1048576
@@ -212,11 +212,12 @@
     __c_i32_7: %SystemInt32, 7
     __c_i32_11: %SystemInt32, 11
     __f30_T1__: %SystemInt32, 0
-    __f30_T2__: %SystemInt64, null
+    __f30_T2__: %SystemInt32, 0
+    __f30_T3__: %SystemInt64, null
     __c_i64_a: %SystemInt64, null
-    __f30_T3__: %SystemInt32, 0
+    __f30_T4__: %SystemInt32, 0
     __c_i32_n2147483639: %SystemInt32, -2147483639
-    __f30_T4__: %SystemBoolean, null
+    __f30_T5__: %SystemBoolean, null
     ___start_T1__: %UnityEngineTexture2D, null
     ___start_T2__: %UnityEngineTextureFormat, null
     ___start_T3__: %SystemBoolean, null
@@ -3006,9 +3007,9 @@
         COPY
         PUSH, __f30_L2__
         PUSH, __c_i32_5
-        PUSH, __f30_T1__
+        PUSH, __f30_T2__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __f30_T1__
+        PUSH, __f30_T2__
         PUSH, __f30_L3__
         PUSH, __f30_T1__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
@@ -3017,42 +3018,42 @@
         PUSH, __f30_T1__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __f30_P1__
-        PUSH, __f30_T2__
+        PUSH, __f30_T3__
         EXTERN, "SystemConvert.__ToInt64__SystemInt32__SystemInt64"
-        PUSH, __f30_T2__
+        PUSH, __f30_T3__
         PUSH, __c_i64_ffffffff
-        PUSH, __f30_T2__
+        PUSH, __f30_T3__
         EXTERN, "SystemInt64.__op_LogicalAnd__SystemInt64_SystemInt64__SystemInt64"
-        PUSH, __f30_T2__
+        PUSH, __f30_T3__
         PUSH, __c_i64_a
-        PUSH, __f30_T2__
+        PUSH, __f30_T3__
         EXTERN, "SystemInt64.__op_Division__SystemInt64_SystemInt64__SystemInt64"
-        PUSH, __f30_T2__
+        PUSH, __f30_T3__
         PUSH, __c_i32_32
-        PUSH, __f30_T2__
+        PUSH, __f30_T3__
         EXTERN, "SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64"
-        PUSH, __f30_T2__
+        PUSH, __f30_T3__
         PUSH, __c_i32_32
-        PUSH, __f30_T2__
+        PUSH, __f30_T3__
         EXTERN, "SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64"
-        PUSH, __f30_T2__
+        PUSH, __f30_T3__
         PUSH, __f30_L4__
         EXTERN, "SystemConvert.__ToInt32__SystemInt64__SystemInt32"
         PUSH, __f30_L4__
         PUSH, __c_i32_10
-        PUSH, __f30_T3__
+        PUSH, __f30_T4__
         EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __f30_P1__
-        PUSH, __f30_T3__
-        PUSH, __f30_T3__
+        PUSH, __f30_T4__
+        PUSH, __f30_T4__
         EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __f30_T3__
+        PUSH, __f30_T4__
         PUSH, __c_i32_48
-        PUSH, __f30_T3__
+        PUSH, __f30_T4__
         EXTERN, "SystemInt32.__op_LogicalOr__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __st_i32
         PUSH, __c_i32_0
-        PUSH, __f30_T3__
+        PUSH, __f30_T4__
         EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
         PUSH, __st_i32
         PUSH, __c_i32_0
@@ -3070,9 +3071,9 @@
         EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __derived0
         PUSH, __c_i32_n2147483639
-        PUSH, __f30_T4__
+        PUSH, __f30_T5__
         EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __f30_T4__
+        PUSH, __f30_T5__
         PUSH, __f30_L5__
         EXTERN, "SystemConvert.__ToInt32__SystemBoolean__SystemInt32"
         PUSH, __f30_L4__
@@ -3080,10 +3081,10 @@
         COPY
         PUSH, __f30_L5__
         PUSH, __c_i32_0
-        PUSH, __f30_T4__
+        PUSH, __f30_T5__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __f30_T4__
-        JUMP_IF_FALSE, 0x000054A0
+        PUSH, __f30_T5__
+        JUMP_IF_FALSE, 0x000054C0
         PUSH, __c_i32_0
         PUSH, __f30_L3__
         PUSH, __f30_P1__
@@ -3106,9 +3107,9 @@
         EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __derived0
         PUSH, __derived1
-        PUSH, __f30_T4__
+        PUSH, __f30_T5__
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __f30_T4__
+        PUSH, __f30_T5__
         JUMP_IF_FALSE, 0x00005808
         PUSH, __f30_P1__
         PUSH, __f30_T1__
@@ -3122,9 +3123,9 @@
         COPY
         PUSH, __f30_P1__
         PUSH, __c_i32_0
-        PUSH, __f30_T4__
+        PUSH, __f30_T5__
         EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __f30_T4__
+        PUSH, __f30_T5__
         JUMP_IF_FALSE, 0x00005930
         PUSH, __f30_P0__
         PUSH, __f30_L5__
@@ -3136,18 +3137,18 @@
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __f30_L2__
         PUSH, __c_i32_5
-        PUSH, __f30_T3__
+        PUSH, __f30_T4__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __f30_T3__
+        PUSH, __f30_T4__
         PUSH, __f30_L3__
-        PUSH, __f30_T3__
+        PUSH, __f30_T4__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __f30_T3__
+        PUSH, __f30_T4__
         PUSH, __c_i32_11
-        PUSH, __f30_T3__
+        PUSH, __f30_T4__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __G__memory
-        PUSH, __f30_T3__
+        PUSH, __f30_T4__
         PUSH, __G__memory
         PUSH, __f30_T1__
         PUSH, __f30_P1__

@@ -1,5 +1,5 @@
 .data_start
-    # wasdon-zig heap-size: 205
+    # wasdon-zig heap-size: 206
     __G__memory: %SystemByteArray, null
     __G__memory_size_pages: %SystemInt32, 17
     __G__g0: %SystemInt32, 1048576
@@ -94,11 +94,12 @@
     __c_i32_1049455: %SystemInt32, 1049455
     __c_i32_12: %SystemInt32, 12
     __c_i32_133: %SystemInt32, 133
+    ___update_T5__: %SystemInt32, 0
     __c_i32_10: %SystemInt32, 10
-    ___update_T5__: %SystemInt64, null
+    ___update_T6__: %SystemInt64, null
     __c_i64_ffffffff: %SystemInt64, null
     __c_i64_a: %SystemInt64, null
-    ___update_T6__: %SystemInt32, 0
+    ___update_T7__: %SystemInt32, 0
     __c_i32_48: %SystemInt32, 48
     __c_i32_n2147483639: %SystemInt32, -2147483639
     __c_i32_n2147483545: %SystemInt32, -2147483545
@@ -109,7 +110,7 @@
     __c_i32_n2147483643: %SystemInt32, -2147483643
     __c_i32_5: %SystemInt32, 5
     __c_i32_1049429: %SystemInt32, 1049429
-    ___update_T7__: %SystemString, null
+    ___update_T8__: %SystemString, null
     __utf8: %SystemObject, null
     __c_i32_340: %SystemInt32, 340
     __c_i32_1504: %SystemInt32, 1504
@@ -629,9 +630,9 @@
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, ___update_L0__
         PUSH, __c_i32_133
-        PUSH, ___update_T1__
+        PUSH, ___update_T5__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, ___update_T1__
+        PUSH, ___update_T5__
         PUSH, ___update_L13__
         PUSH, ___update_T1__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
@@ -640,42 +641,42 @@
         PUSH, ___update_T1__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, ___update_L1__
-        PUSH, ___update_T5__
+        PUSH, ___update_T6__
         EXTERN, "SystemConvert.__ToInt64__SystemInt32__SystemInt64"
-        PUSH, ___update_T5__
+        PUSH, ___update_T6__
         PUSH, __c_i64_ffffffff
-        PUSH, ___update_T5__
+        PUSH, ___update_T6__
         EXTERN, "SystemInt64.__op_LogicalAnd__SystemInt64_SystemInt64__SystemInt64"
-        PUSH, ___update_T5__
+        PUSH, ___update_T6__
         PUSH, __c_i64_a
-        PUSH, ___update_T5__
+        PUSH, ___update_T6__
         EXTERN, "SystemInt64.__op_Division__SystemInt64_SystemInt64__SystemInt64"
-        PUSH, ___update_T5__
+        PUSH, ___update_T6__
         PUSH, __c_i32_32
-        PUSH, ___update_T5__
+        PUSH, ___update_T6__
         EXTERN, "SystemInt64.__op_LeftShift__SystemInt64_SystemInt32__SystemInt64"
-        PUSH, ___update_T5__
+        PUSH, ___update_T6__
         PUSH, __c_i32_32
-        PUSH, ___update_T5__
+        PUSH, ___update_T6__
         EXTERN, "SystemInt64.__op_RightShift__SystemInt64_SystemInt32__SystemInt64"
-        PUSH, ___update_T5__
+        PUSH, ___update_T6__
         PUSH, ___update_L10__
         EXTERN, "SystemConvert.__ToInt32__SystemInt64__SystemInt32"
         PUSH, ___update_L10__
         PUSH, __c_i32_10
-        PUSH, ___update_T6__
+        PUSH, ___update_T7__
         EXTERN, "SystemInt32.__op_Multiplication__SystemInt32_SystemInt32__SystemInt32"
         PUSH, ___update_L1__
-        PUSH, ___update_T6__
-        PUSH, ___update_T6__
+        PUSH, ___update_T7__
+        PUSH, ___update_T7__
         EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, ___update_T6__
+        PUSH, ___update_T7__
         PUSH, __c_i32_48
-        PUSH, ___update_T6__
+        PUSH, ___update_T7__
         EXTERN, "SystemInt32.__op_LogicalOr__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __st_i32
         PUSH, __c_i32_0
-        PUSH, ___update_T6__
+        PUSH, ___update_T7__
         EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
         PUSH, __st_i32
         PUSH, __c_i32_0
@@ -706,7 +707,7 @@
         PUSH, ___update_T2__
         EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, ___update_T2__
-        JUMP_IF_FALSE, 0x00000E48
+        JUMP_IF_FALSE, 0x00000E68
         PUSH, __c_i32_0
         PUSH, ___update_L13__
         PUSH, ___update_L1__
@@ -743,18 +744,18 @@
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, ___update_L0__
         PUSH, __c_i32_133
-        PUSH, ___update_T6__
+        PUSH, ___update_T7__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, ___update_T6__
+        PUSH, ___update_T7__
         PUSH, ___update_L13__
-        PUSH, ___update_T6__
+        PUSH, ___update_T7__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, ___update_T6__
+        PUSH, ___update_T7__
         PUSH, __c_i32_11
-        PUSH, ___update_T6__
+        PUSH, ___update_T7__
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __G__memory
-        PUSH, ___update_T6__
+        PUSH, ___update_T7__
         PUSH, __G__memory
         PUSH, ___update_T1__
         PUSH, ___update_L1__
@@ -825,9 +826,9 @@
         PUSH, __G__memory
         PUSH, ___update_L6__
         PUSH, ___update_L1__
-        PUSH, ___update_T7__
+        PUSH, ___update_T8__
         EXTERN, "SystemTextEncoding.__GetString__SystemByteArray_SystemInt32_SystemInt32__SystemString"
-        PUSH, ___update_T7__
+        PUSH, ___update_T8__
         EXTERN, "UnityEngineDebug.__Log__SystemObject__SystemVoid"
         PUSH, ___update_L0__
         PUSH, __c_i32_144

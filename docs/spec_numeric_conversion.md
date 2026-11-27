@@ -200,3 +200,11 @@ result is a dead scratch slot and the branch is its sole consumer.
 Only direct control flow and known numeric operators and array accessors
 are eligible. Array accesses retain their order. Unknown calls, escaping
 edges or exceeding the code-size budget leave the original loop intact.
+
+Nontrapping integer arithmetic on constants and unmodified locals can
+execute once in a loop preheader. This includes the sign-bit flip for
+unsigned order and constant address offsets. The outermost call-free
+loop in which both operands are invariant owns the result. Divisions,
+remainders and loads retain their execution order. A backedge skips the
+preheader, while entry from an enclosing block executes it. Sibling
+loops may share result slots, and nested loops use distinct slots.

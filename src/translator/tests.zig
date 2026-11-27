@@ -1230,6 +1230,37 @@ test "a loop-carried comparison stays known until either operand changes" {
     try testing.expect(optimized.vm.stats.externs < original.vm.stats.externs);
 }
 
+test "invariant arithmetic follows the lifetime of the outermost immutable operands" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const body = [_]I{
+        .{ .i32_const = 2 }, .{ .local_set = 0 },
+        loop(&.{
+            .{ .i32_const = 0 }, .{ .local_set = 1 },
+            loop(&.{
+                .{ .local_get = 2 }, .{ .local_get = 0 }, .{ .i32_const = 5 }, .i32_mul,            .i32_add,             .{ .local_set = 2 },
+                .{ .local_get = 1 }, .{ .i32_const = 1 }, .i32_add,            .{ .local_tee = 1 }, .{ .i32_const = 12 }, .i32_ne,
+                .{ .br_if = 0 },
+            }),
+            .{ .local_get = 0 }, .{ .i32_const = 1 },
+            .i32_add,            .{ .local_tee = 0 },
+            .{ .i32_const = 5 }, .i32_ne,
+            .{ .br_if = 0 },
+        }),
+        .{ .local_get = 2 }, .{ .global_set = 0 },
+    };
+    const mod = try simpleModule(arena.allocator(), &.{.i32}, &.{.{ .count = 3, .ty = .i32 }}, &body);
+    var original = try loadWith(mod, null, .{ .loop_invariants = true });
+    defer original.deinit();
+    var optimized = try load(mod, null);
+    defer optimized.deinit();
+    for ([_]*Program{ &original, &optimized }) |p| {
+        _ = try p.vm.runEvent("run");
+        try testing.expectEqual(Value{ .int32 = (2 + 3 + 4) * 5 * 12 }, p.global("__G__g0"));
+    }
+    try testing.expectEqual(@as(u64, 33), original.vm.stats.externs - optimized.vm.stats.externs);
+}
+
 test "a guarded unit induction variable reaches its unsigned sentinel or stays still" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

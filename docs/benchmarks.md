@@ -30,9 +30,16 @@ mode. Each row is a separate run of the scene's 511-byte benchmark.
 | 65,536-byte capacity, same 511-byte sample | 6.655 ms | 6.311 ms | 5.427 ms | 814 / 789 |
 | Eliminate the countdown and rebase induction variables | 5.152 ms | 4.650 ms | 4.959 ms | 726 / 701 |
 | Carry branch predicates around loops and use guarded induction sentinels | 4.180 ms | 4.087 ms | 4.992 ms | 668 / 655 |
+| Hoist invariant integer arithmetic | 4.307 ms | 4.153 ms | 5.059 ms | 646 / 633 |
 
-With 8,193 elements the same build measured 98.947 ms (Rust),
-93.756 ms (Zig) and 121.555 ms (UdonSharp).
+With 8,193 elements the branch-predicate build measured 98.947 ms (Rust),
+93.756 ms (Zig) and 121.555 ms (UdonSharp). With loop-invariant
+hoisting, the medians were 94.567 / 91.878 / 120.262 ms. A separate
+65,536-element run validated every output byte and measured 1,080.249 /
+1,146.436 / 1,542.401 ms. In the emulator, hoisting also reduced executed
+externs in `blockfall` (122,632 to 119,916) and `wasm-bench-alloc-rs`
+(119,025 to 115,313). `wasi-hello` increased from 9,521 to 9,523.
+The two sort assets each need one additional heap slot.
 
 Column meanings:
 

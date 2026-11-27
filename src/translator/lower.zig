@@ -198,6 +198,28 @@ const Derived = struct {
     bits: u32 = 0,
 };
 
+/// A pure integer expression whose operands are unchanged on every path
+/// around the loop. Keep its result in a slot private to this function.
+const LoopInvariants = struct {
+    writes: std.DynamicBitSetUnmanaged,
+    calls: bool = false,
+    expressions: std.ArrayList(Expression) = .empty,
+
+    const Expression = struct { ext: u32, lhs: Sym, rhs: Sym, dst: Sym };
+
+    fn inspect(self: *@This(), ins: Instruction) void {
+        switch (ins) {
+            .local_set, .local_tee => |i| if (i < self.writes.capacity()) self.writes.set(i),
+            .call, .call_indirect => self.calls = true,
+            else => {},
+        }
+    }
+
+    fn immutable(self: *const @This(), e: Entry) bool {
+        return e.kind == .konst or (e.kind == .local and e.local < self.writes.capacity() and !self.writes.isSet(e.local));
+    }
+};
+
 pub fn lowerFunction(t: *Translator, func_index: u32) Error!void {
     byte_operators_off = t.options.disable.byte_operators;
     var l: Lowerer = .{ .t = t, .a = &t.a, .f = &t.funcs[func_index], .f_idx = func_index };
@@ -214,6 +236,9 @@ const Lowerer = struct {
     ctrl: std.ArrayList(Ctrl) = .empty,
     pools: std.ArrayList(Pool) = .empty,
     temp_count: u32 = 0,
+    loops: std.ArrayList(LoopInvariants) = .empty,
+    // Sibling loops reuse slots. Nested loops have overlapping lifetimes.
+    invariant_slots: std.AutoHashMapUnmanaged(struct { depth: usize, index: usize, ty: ValType }, Sym) = .empty,
     scratch: [scratch_types.len]?Sym = @splat(null),
     /// Which locals are live after each call (`liveness.zig`).
     live: @import("liveness.zig").Liveness = .{},
@@ -231,6 +256,8 @@ const Lowerer = struct {
         const gpa = self.t.gpa;
         self.stack.deinit(gpa);
         self.ctrl.deinit(gpa);
+        self.loops.deinit(gpa);
+        self.invariant_slots.deinit(gpa);
         for (self.pools.items) |*p| p.free.deinit(gpa);
         self.pools.deinit(gpa);
     }
@@ -323,11 +350,15 @@ const Lowerer = struct {
     fn newTemp(self: *Lowerer, pool: u8) Error!Sym {
         const p = &self.pools.items[pool];
         if (p.free.pop()) |s| return s;
+        return self.freshTemp(p.type_name);
+    }
+
+    fn freshTemp(self: *Lowerer, type_name: []const u8) Error!Sym {
         self.temp_count += 1;
         return self.a.declare(.{
             .name = try self.t.name("__{s}_T{d}__", .{ self.f.name, self.temp_count }),
-            .type_name = p.type_name,
-            .init = tr.zeroOf(p.type_name),
+            .type_name = type_name,
+            .init = tr.zeroOf(type_name),
         });
     }
 
@@ -585,6 +616,8 @@ const Lowerer = struct {
     /// since the local last changed. Valid until the next call to this
     /// function but one, so use it at once.
     fn derive(self: *Lowerer, op: @FieldType(Derived, "op"), local: u32, local_sym: Sym, bits: u32) Error!Sym {
+        const operation: Bin = if (op == .add) .add else .xor;
+        if (try self.invariantBinary(.i32, operation, .{ .ty = .i32, .kind = .local, .local = local, .sym = local_sym }, .{ .ty = .i32, .kind = .konst, .bits = bits })) |sym| return sym;
         var free: ?usize = null;
         for (self.derived, 0..) |d, k| {
             if (d.op == op and d.local == local and d.bits == bits and !self.t.options.disable.derived) {
@@ -761,6 +794,45 @@ const Lowerer = struct {
         return true;
     }
 
+    fn invariantBinary(self: *Lowerer, ty: ValType, op: Bin, a: Entry, b: Entry) Error!?Sym {
+        if (!isInt(ty) or op == .div_s or op == .rem_s or (ty == .i64 and (op == .shl or op == .shr_s))) return null;
+        for (self.loops.items, 0..) |*region, depth| {
+            if (region.calls or !region.immutable(a) or !region.immutable(b)) continue;
+            const lhs = if (a.kind == .konst) try self.t.constSym(a.ty, a.bits) else a.sym;
+            const rhs = if (b.kind == .konst) try self.t.constSym(b.ty, b.bits) else b.sym;
+            const ext = try self.a.internExtern(binSig(ty, op));
+            for (region.expressions.items) |expr| {
+                if (expr.ext == ext and expr.lhs == lhs and expr.rhs == rhs) return expr.dst;
+            }
+            // Earlier instructions in this very loop may already use any
+            // slot in the ordinary temporary pool.
+            const slot = try self.invariant_slots.getOrPut(self.t.gpa, .{ .depth = depth, .index = region.expressions.items.len, .ty = ty });
+            if (!slot.found_existing) slot.value_ptr.* = try self.freshTemp(tr.udonType(ty));
+            const dst = slot.value_ptr.*;
+            try region.expressions.append(self.t.arena(), .{ .ext = ext, .lhs = lhs, .rhs = rhs, .dst = dst });
+            return dst;
+        }
+        return null;
+    }
+
+    fn emitInvariants(self: *Lowerer, head: Label, region: LoopInvariants) Error!void {
+        if (region.expressions.items.len == 0) return;
+        const start = self.a.labels.items[head].pos;
+        const n: u32 = @intCast(4 * region.expressions.items.len);
+        const preheader = try self.a.code.addManyAt(self.t.gpa, start, n);
+        for (region.expressions.items, 0..) |expr, i| {
+            preheader[i * 4 ..][0..4].* = .{
+                .{ .op = .push, .arg = expr.lhs }, .{ .op = .push, .arg = expr.rhs },
+                .{ .op = .push, .arg = expr.dst }, .{ .op = .extern_, .arg = expr.ext },
+            };
+        }
+        // Enclosing labels at the old loop entry enter the preheader.
+        // The header and labels allocated inside this loop follow it.
+        for (self.a.labels.items[head..]) |*label| {
+            if (label.pos != std.math.maxInt(u32) and label.pos >= start) label.pos += n;
+        }
+    }
+
     fn lowerLoop(self: *Lowerer, b: wasm.instruction.Block) Error!bool {
         try self.flushForBlock();
         const head = try self.a.newLabel();
@@ -769,6 +841,12 @@ const Lowerer = struct {
         // A branch to a loop carries its parameters, of which MVP has none.
         _ = try self.blockTypes(b.bt);
         try self.ctrl.append(self.t.gpa, .{ .kind = .loop, .label = head, .types = &.{}, .height = height });
+        const hoist = b.bt == .empty and !self.t.options.disable.loop_invariants;
+        if (hoist) {
+            var region = LoopInvariants{ .writes = try std.DynamicBitSetUnmanaged.initEmpty(self.t.arena(), self.f.locals.len) };
+            wasm.instruction.forEach(b.body, &region, LoopInvariants.inspect);
+            try self.loops.append(self.t.gpa, region);
+        }
         const falls = try self.lowerBody(b.body);
         _ = self.ctrl.pop();
         if (!falls) try self.truncate(height);
@@ -783,6 +861,7 @@ const Lowerer = struct {
             };
             if (try @import("loop_paths.zig").optimize(self.a, head, DeadBools{ .pools = self.pools.items })) self.forgetDerived();
         }
+        if (hoist) try self.emitInvariants(head, self.loops.pop().?);
         return falls;
     }
 
@@ -1342,6 +1421,9 @@ const Lowerer = struct {
             .shr_s => a.nonneg,
             else => false,
         };
+        if (try self.invariantBinary(ty, op, a, b)) |sym| {
+            return self.push(.{ .kind = .alias, .ty = ty, .sym = sym, .nonneg = nonneg });
+        }
         const sa = try self.operand(&a);
         const sb = try self.operand(&b);
         try self.release(a);
