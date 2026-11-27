@@ -95,17 +95,18 @@ test "the Unity Linux console boots in bounded events and reload starts fresh" {
 }
 
 test "the Unity assets hold what the translator produces now" {
-    inline for (.{ "wasm-bench", "udon-orbit", "pi", "mandelbrot", "image-codec", "ragdoll", "blockfall", "bench-zig", "wasi-hello", "sort-bench-zig" }) |name| {
+    inline for (.{ "wasm-bench", "udon-orbit", "pi", "mandelbrot", "image-codec", "ragdoll", "blockfall", "bench-zig", "wasi-hello", "sort-bench-zig", "grid-bench" }) |name| {
         try expectUnityAsset(name, @embedFile("unity/" ++ name ++ ".uasm.txt"));
     }
     const with_rust = comptime fixtures.find("sort-bench-rs") != null;
     if (with_rust) {
         try expectUnityAsset("sort-bench-rs", @embedFile("unity/sort-bench-rs.uasm.txt"));
+        try expectUnityAsset("grid-bench-rs", @embedFile("unity/grid-bench-rs.uasm.txt"));
     }
     // Every example with an asset is in the list above.
     var with_asset: usize = 0;
     for (fixtures.examples) |ex| with_asset += @intFromBool(fixtures.hasUnityAsset(ex));
-    try testing.expectEqual(@as(usize, 10) + @intFromBool(with_rust), with_asset);
+    try testing.expectEqual(@as(usize, 11) + @as(usize, if (with_rust) 2 else 0), with_asset);
 }
 
 fn expectUnityAsset(name: []const u8, asset: []const u8) !void {
@@ -118,6 +119,48 @@ fn expectUnityAsset(name: []const u8, asset: []const u8) !void {
         std.debug.print("unity/Wasdon/Examples/{s}.uasm.txt is out of date: run `zig build unity` (add `-Drust` for Rust)\n", .{name});
         return error.TestUnexpectedResult;
     }
+}
+
+test "the grid benchmark's timed and visual steps use only guest functions and scalar memory operations" {
+    try expectGuestGridKernels(fixtures.find("grid-bench").?.wasm);
+    if (fixtures.find("grid-bench-rs")) |rust| try expectGuestGridKernels(rust.wasm);
+}
+
+fn expectGuestGridKernels(bytes: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const mod = try wasdon.wasm.parseModule(a, bytes);
+    var imports: u32 = 0;
+    for (mod.imports) |imp| {
+        if (imp.desc == .func) imports += 1;
+    }
+    var table: std.ArrayList(u32) = .empty;
+    for (mod.elements) |segment| try table.appendSlice(a, segment.init);
+    const graph = try wasdon.translator.callgraph.analyze(a, mod, imports, table.items);
+    var pending: std.ArrayList(u32) = .empty;
+    for (mod.exports) |exp| {
+        if (std.mem.eql(u8, exp.name, "Run") or std.mem.eql(u8, exp.name, "Step"))
+            try pending.append(a, exp.desc.func);
+    }
+    try testing.expectEqual(@as(usize, 2), pending.items.len);
+    const seen = try a.alloc(bool, imports + mod.codes.len);
+    @memset(seen, false);
+    while (pending.pop()) |f| {
+        try testing.expect(f >= imports);
+        if (seen[f]) continue;
+        seen[f] = true;
+        // The translator implements bulk copies and fills with host array calls.
+        try testing.expect(!wasdon.wasm.instruction.any(mod.codes[f - imports].body, {}, isBulkMemory));
+        for (graph.callees(f)) |edge| try pending.append(a, edge.callee);
+    }
+}
+
+fn isBulkMemory(_: void, ins: wasdon.wasm.Instruction) bool {
+    return switch (ins) {
+        .memory_copy, .memory_fill, .memory_init => true,
+        else => false,
+    };
 }
 
 test "the bench fixture parses as a WASM module" {

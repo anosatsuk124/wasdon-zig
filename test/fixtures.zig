@@ -97,7 +97,90 @@ const zig_examples = [_]Example{
         .verify = blockfallVerify,
     },
     .{ .name = "sort-bench-zig", .wasm = @embedFile("sort-bench-zig.wasm"), .scenario = "Load,Step,Read,Sort,Read", .setup = sortSetup, .verify = sortVerify },
+    .{ .name = "grid-bench", .wasm = @embedFile("grid-bench.wasm"), .scenario = "Load,Step,Read,Run,Read", .setup = gridSetup, .verify = gridVerify },
 };
+
+const grid_side = 31;
+const grid_cells = grid_side * grid_side;
+const grid_sites = [_]usize{ 0, 107, 611, grid_cells - 1 };
+
+fn gridInput(vm: *Vm, kind: i32) !*udon.vm.Array {
+    const data = try vm.newArray("SystemByteArray", grid_cells);
+    @memset(data.bytes, 255);
+    if (kind == 1) @memset(data.bytes[1..], 0);
+    if (kind == 2) for (grid_sites) |site| {
+        data.bytes[site] = 0;
+    };
+    try std.testing.expect(vm.setVar("data", .{ .array = data }));
+    try std.testing.expect(vm.setVar("side", .{ .int32 = grid_side }));
+    try std.testing.expect(vm.setVar("kind", .{ .int32 = kind }));
+    return data;
+}
+
+fn gridSetup(vm: *Vm) !void {
+    _ = try gridInput(vm, 0);
+}
+
+fn gridExpected(kind: i32, i: usize) u8 {
+    switch (kind) {
+        1 => {
+            const odd = 2 * i + 1;
+            if (odd == 1) return 255;
+            var d: usize = 3;
+            while (d * d <= odd) : (d += 2) {
+                if (odd % d == 0) return 255;
+            }
+            return 0;
+        },
+        2 => {
+            var distance: usize = 255;
+            for (grid_sites) |site| {
+                const ax = i % grid_side;
+                const bx = site % grid_side;
+                const ay = i / grid_side;
+                const by = site / grid_side;
+                distance = @min(distance, (@max(ax, bx) - @min(ax, bx)) + (@max(ay, by) - @min(ay, by)));
+            }
+            return @intCast(distance);
+        },
+        else => {
+            const scale = 3.0 / @as(f64, grid_side);
+            var re = (@as(f64, @floatFromInt(i % grid_side)) + 0.5) * scale - 1.5;
+            var im = (@as(f64, @floatFromInt(i / grid_side)) + 0.5) * scale - 1.5;
+            var count: u8 = 0;
+            while (count < 64 and re * re + im * im <= 4.0) : (count += 1) {
+                const new_re = re * re - im * im - 0.75;
+                im = 2.0 * re * im + 0.125;
+                re = new_re;
+            }
+            return count;
+        },
+    }
+}
+
+fn gridVerify(vm: *Vm) !void {
+    for (0..3) |k| {
+        const kind: i32 = @intCast(k);
+        var expected: [grid_cells]u8 = undefined;
+        for (&expected, 0..) |*pixel, i| pixel.* = gridExpected(kind, i);
+        if (kind == 0) try std.testing.expectEqualSlices(u8, &expected, vm.getVar("data").?.array.bytes);
+        for ([_]bool{ true, false }) |stepped| {
+            const data = try gridInput(vm, kind);
+            _ = try vm.runEvent("Load");
+            if (stepped) {
+                _ = try vm.runEvent("Step");
+                _ = try vm.runEvent("Read");
+                try std.testing.expectEqual(@as(i32, 0), vm.getVar("finished").?.int32);
+                try std.testing.expect(!std.mem.eql(u8, &expected, data.bytes));
+                // Exercise the tail of a band and Step after completion.
+                for (0..2 * grid_side) |_| _ = try vm.runEvent("Step");
+            } else _ = try vm.runEvent("Run");
+            _ = try vm.runEvent("Read");
+            try std.testing.expectEqual(@as(i32, 1), vm.getVar("finished").?.int32);
+            try std.testing.expectEqualSlices(u8, &expected, data.bytes);
+        }
+    }
+}
 
 const sort_input = [_]u8{ 255, 42, 0, 42, 171, 1, 254, 17, 1, 16, 2 };
 const sort_output = [_]u8{ 0, 1, 1, 2, 16, 17, 42, 42, 171, 254, 255 };
@@ -454,6 +537,7 @@ const rust_examples = if (build_options.with_rust) [_]Example{
     },
     .{ .name = "bench-rs", .wasm = @embedFile("bench-rs.wasm"), .scenario = usharp_scenario, .verify = benchVerify, .optional = true },
     .{ .name = "sort-bench-rs", .wasm = @embedFile("sort-bench-rs.wasm"), .scenario = "Load,Step,Read,Sort,Read", .setup = sortSetup, .verify = sortVerify, .optional = true },
+    .{ .name = "grid-bench-rs", .wasm = @embedFile("grid-bench-rs.wasm"), .scenario = "Load,Step,Read,Run,Read", .setup = gridSetup, .verify = gridVerify, .optional = true },
     .{ .name = "bench-wasi-rs", .wasm = @embedFile("bench-wasi-rs.wasm"), .scenario = "_start", .expected_log = wasi_bench_log, .verify = wasiBenchVerify, .optional = true },
 } else [_]Example{};
 
@@ -547,7 +631,7 @@ pub const Result = struct {
 
 /// The shipped Unity assets (`unity/Wasdon/Examples/`).
 pub fn hasUnityAsset(ex: Example) bool {
-    return ex.uasm == null and (!ex.optional or std.mem.eql(u8, ex.name, "sort-bench-rs"));
+    return ex.uasm == null and (!ex.optional or std.mem.eql(u8, ex.name, "sort-bench-rs") or std.mem.eql(u8, ex.name, "grid-bench-rs"));
 }
 
 /// Translate an example, check the output against the Udon Assembly rules,

@@ -12,7 +12,8 @@ test`; `zig build stats` prints what each costs (`docs/benchmarks.md`).
 | [`ragdoll`](ragdoll/) | A humanoid of sixteen point masses: Verlet physics, an animated pose, and a wander / knocked-down / get-up state machine. |
 | [`blockfall`](blockfall/) | World logic: a falling-block puzzle shared by everyone in the instance — custom events, ownership, manual sync of the whole state as one `byte[]`. |
 | [`bench`](bench/) | The same three workloads in UdonSharp, Zig and Rust, measured against each other. |
-| [`sort-bench`](sort-bench/) | Stable bottom-up merge sort in Zig and Rust, with a Unity-compiled [UdonSharp implementation](../unity/Wasdon/Examples/WasdonMergeSort.cs) for comparison. |
+| [`sort-bench`](sort-bench/) | Stable bottom-up merge sort in Zig and Rust, with a Unity-compiled [UdonSharp implementation](../unity/Wasdon/Examples/UdonSharp/UdonSharpMergeSort.cs) for comparison. |
+| [`grid-bench`](grid-bench/) | [Zig](grid-bench/core.zig) and [Rust](grid-bench/rs/src/kernels.rs) compute Julia escape times, an odd-only prime sieve and Manhattan distances alongside a Unity-compiled [UdonSharp worker](../unity/Wasdon/Examples/UdonSharp/UdonSharpGridKernels.cs). |
 | [`wasi-hello`](wasi-hello/), [`bench/wasi-rs`](bench/wasi-rs/) | Ordinary programs with a `main`, built for WASI: Zig's and Rust's `std`, nothing Udon-specific in the source. |
 | [`rhai-bench`](rhai-bench/) | A whole scripting engine (Rhai, Rust `std`) interpreting the benchmark's workloads: the translator's largest test, built with `-Drhai`. |
 | [`mruby-bench`](mruby-bench/) | Ruby: mruby, 60 000 lines of C built with `zig cc`, running the same workloads from bytecode. Built with `-Dmruby`. |

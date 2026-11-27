@@ -23,6 +23,7 @@ const zig_examples = [_]struct {
     .{ .name = "blockfall", .root = "examples/blockfall/main.zig", .core = "examples/blockfall/core.zig" },
     .{ .name = "bench-zig", .root = "examples/bench/zig/main.zig", .optimize = .ReleaseFast },
     .{ .name = "sort-bench-zig", .root = "examples/sort-bench/zig/main.zig", .optimize = .ReleaseFast },
+    .{ .name = "grid-bench", .root = "examples/grid-bench/main.zig", .core = "examples/grid-bench/core.zig", .optimize = .ReleaseFast },
     .{ .name = "wasi-hello", .root = "examples/wasi-hello/main.zig", .wasi = true },
 };
 
@@ -39,6 +40,7 @@ const rust_examples = [_]struct {
     .{ .name = "udon-orbit-rs", .artifact = "udon_orbit_rs.wasm" },
     .{ .name = "bench-rs", .artifact = "bench_rs.wasm" },
     .{ .name = "sort-bench-rs", .artifact = "sort_bench_rs.wasm" },
+    .{ .name = "grid-bench-rs", .artifact = "grid_bench_rs.wasm" },
     .{ .name = "bench-wasi-rs", .artifact = "bench_wasi_rs.wasm", .wasi = true },
 };
 
@@ -224,9 +226,13 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path(b.fmt("unity/Wasdon/Examples/{s}.uasm.txt", .{ex.name})),
         });
     }
-    if (with_rust) integration.root_module.addAnonymousImport("unity/sort-bench-rs.uasm.txt", .{
-        .root_source_file = b.path("unity/Wasdon/Examples/sort-bench-rs.uasm.txt"),
-    });
+    if (with_rust) {
+        for ([_][]const u8{ "sort-bench-rs", "grid-bench-rs" }) |name| {
+            integration.root_module.addAnonymousImport(b.fmt("unity/{s}.uasm.txt", .{name}), .{
+                .root_source_file = b.path(b.fmt("unity/Wasdon/Examples/{s}.uasm.txt", .{name})),
+            });
+        }
+    }
     test_step.dependOn(&b.addRunArtifact(integration).step);
     test_step.dependOn(core_tests);
 

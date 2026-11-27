@@ -48,6 +48,7 @@ open scene, wired up and ready to enter Play mode or build:
 | `blockfall` | a quad showing the well, a score line, five UI buttons | the buttons; synced for everyone in the instance |
 | Linux Boot | live Linux WASM console output on a panel | Start and Reload are network events. Boot and display run locally. |
 | Sort Benchmark | three animated bar charts and timings for Rust, Zig and UdonSharp | Visualize, Benchmark and Reset run locally |
+| Grid Benchmarks | live images and elapsed times for Zig, Rust and UdonSharp on each panel | Visualize steps the workers, Benchmark measures full runs, Reset restores the input |
 
 The other examples have assets too, without scene objects of their own:
 `wasm-bench` and `wasi-hello` only log (put them on any UdonBehaviour and
@@ -88,7 +89,32 @@ displays each sample as it completes, and reports the median of nine
 runs and the ratio to the fastest median.
 Input preparation, array transfers, validation and UI updates are outside
 the measured event. The UdonSharp program is built from
-[`WasdonMergeSort.cs`](Examples/WasdonMergeSort.cs) by the Unity editor.
+[`UdonSharpMergeSort.cs`](Examples/UdonSharp/UdonSharpMergeSort.cs) by the Unity editor.
+
+### Grid benchmarks
+
+`Tools > Wasdon > Create Grid Benchmarks` creates panels at 256, 512 or
+1,024 cells per side. The largest setting has 1,048,576 output cells per
+worker. Each panel operates independently.
+
+| Panel | What the image shows |
+|---|---|
+| Julia set | Escape iteration of each pixel for `z² − 0.75 + 0.125i`, up to 64 iterations. Each step completes eight rows. |
+| Prime sieve | Odd candidates arranged in an outward square spiral. Gold points survive the factors processed so far. The largest grid tests odd numbers through 2,097,151. |
+| Manhattan distance | Distance to the nearest of 24 seeded points, capped at 255. The Zig and Rust workers first resolve the occupied columns. The UdonSharp worker sweeps the raster forward and backward. |
+
+**Visualize** updates point-sampled images from the workers'
+current output each frame and then starts the trials. **Benchmark** starts
+the trials directly. Every lane receives the same starting bytes before
+every run. The controller clocks the full `Run` event through 512 × 512.
+At 1,024 × 1,024 all lanes accumulate timed `Step` events across frames
+to fit the SDK's per-event time limit. It checks every output byte against
+a reference baked by the editor and shows the median of nine
+trials after a warm-up. A ratio above 1 means the Wasdon worker finished
+faster. Previously saved two-lane panels continue to run their original
+workers. Create a new panel from the menu for the three-way comparison.
+The [measurement record](../../docs/benchmarks.md#large-grid-benchmarks)
+describes the implementations and includes the batch command.
 
 Notes:
 

@@ -20,7 +20,7 @@ namespace Wasdon
     /// Creates the displays, controls and their Udon behaviours under a
     /// single root in the open scene.
     /// </summary>
-    public static class WasdonExamples
+    public static partial class WasdonExamples
     {
         private const float Spacing = 3f;
 
@@ -53,6 +53,10 @@ namespace Wasdon
             sort.transform.SetParent(root.transform, false);
             sort.transform.localPosition = new Vector3(20.5f, 1.5f, 0f);
 
+            GameObject grids = CreateGridBenchmarks(256);
+            grids.transform.SetParent(root.transform, false);
+            grids.transform.localPosition = new Vector3(25f, 1.5f, 0f);
+
             GameObject linux = CreateLinuxBoot();
             linux.transform.SetParent(root.transform, false);
             linux.transform.localPosition = new Vector3(15.7f, 1.5f, 0f);
@@ -62,7 +66,9 @@ namespace Wasdon
         {
             return IsCompiled(typeof(WasdonLinuxBoot)) &&
                 IsCompiled(typeof(WasdonSortBenchmark)) &&
-                IsCompiled(typeof(WasdonMergeSort));
+                IsCompiled(typeof(UdonSharpMergeSort)) &&
+                IsCompiled(typeof(WasdonGridBenchmark)) &&
+                IsCompiled(typeof(UdonSharpGridKernels));
         }
 
         private static bool IsCompiled(System.Type type)
@@ -266,7 +272,7 @@ namespace Wasdon
                 }
                 else
                 {
-                    var sorter = worker.AddUdonSharpComponent<WasdonMergeSort>();
+                    var sorter = worker.AddUdonSharpComponent<UdonSharpMergeSort>();
                     benchmark.sorters[lane] = UdonSharpEditorUtility.GetBackingUdonBehaviour(sorter);
                 }
 

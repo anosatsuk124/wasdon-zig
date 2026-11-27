@@ -1,10 +1,118 @@
 # Benchmarks and optimization log
 
-This file is the running record of how the translator's output changes over
-time. Every optimization or redesign appends a row; the first row of each
-table is the baseline it is measured against. Numbers are reproducible with
-`zig build stats` (static columns) and the bundled Udon VM emulator (dynamic
-columns) — see the "How the numbers are produced" section at the end.
+This file records Unity SDK wall-clock timings and the output of successive
+translator versions. The Unity benchmarks below include their measurement
+conditions. Reproduce static sizes and emulator instruction counts with
+`zig build stats` as described in “How the numbers are produced” at the end.
+
+## Large grid benchmarks
+
+Three Unity panels compare Wasdon-translated Zig and Rust workers with a
+worker compiled by the SDK's UdonSharp compiler. Each must produce the same
+byte at every grid position. The editor bakes an independent reference before
+Play Mode. Only the controller receives it.
+
+![Julia escape times, an odd-number prime spiral and a Manhattan distance field](grid-benchmark-preview.png)
+
+The three textures above come from the Wasdon panels after their final
+visual step at 512 × 512. Each shows 127 × 127 sampled output positions.
+
+| Workload | Wasdon implementation | UdonSharp implementation | Reference |
+|---|---|---|---|
+| Julia escape-time image | Four iterations per loop, with an escape test at each iteration. On power-of-two grids, opposite pixels have exactly negated coordinates and share the same orbit after one step. | Iterate each pixel in `double` up to the same 64-step cap. | Direct complex quadratic recurrence at each pixel centre. |
+| Odd-only prime sieve | Seed the periodic multiples of 3, 5 and 7 with a 105-word wheel. For each subsequent prime, Zig skips multipliers divisible by 3. Rust strikes the eight residues coprime to 30 per block. | Odd-only Eratosthenes sieve, striding from each prime's square. | Trial division for each odd integer. |
+| Manhattan distance field | Locate occupied columns in the input mask, compute their vertical distances and fill the gaps with clipped horizontal ramps. The search and ramp generation are timed. | Two raster sweeps using `System.Math.Min` to relax the horizontal and vertical neighbours. | For each cell, take the minimum Manhattan distance to the 24 seeded points, capped at 255. |
+
+### Unity Play Mode timings
+
+These runs used Unity Editor 2022.3.22f1 with Worlds SDK 3.10.6 on
+macOS 27.2.1 (arm64), in batch mode with graphics disabled. Each time is
+the median of nine runs after one warm-up. Speedup divides the UdonSharp
+median by the corresponding Wasdon median. A paired win means the Wasdon
+worker finished faster than UdonSharp in the same round. The three workers
+take turns running first. The ratios compare the implementations described
+above on the same input. [Raw samples in milliseconds](../examples/grid-bench/measurements.csv)
+
+| Grid | Workload | Zig (ms) | Rust (ms) | UdonSharp (ms) | U# / Zig | U# / Rust | Paired wins (Zig, Rust) |
+|---|---|---:|---:|---:|---:|---:|---|
+| 256 × 256 | Julia set | 319.407 | 311.315 | 687.128 | 2.15× | 2.21× | 9/9, 9/9 |
+| 256 × 256 | Prime sieve | 17.665 | 19.641 | 21.673 | 1.23× | 1.10× | 9/9, 7/9 |
+| 256 × 256 | Manhattan distance | 67.309 | 70.454 | 115.245 | 1.71× | 1.64× | 9/9, 9/9 |
+| 512 × 512 | Julia set | 1,341.271 | 1,325.889 | 2,899.829 | 2.16× | 2.19× | 9/9, 9/9 |
+| 512 × 512 | Prime sieve | 76.485 | 86.337 | 100.868 | 1.32× | 1.17× | 9/9, 8/9 |
+| 512 × 512 | Manhattan distance | 172.286 | 195.857 | 459.948 | 2.67× | 2.35× | 9/9, 9/9 |
+| 1,024 × 1,024 | Julia set | 5,672.041 | 5,631.201 | 12,314.300 | 2.17× | 2.19× | 9/9, 9/9 |
+| 1,024 × 1,024 | Prime sieve | 380.096 | 401.861 | 473.087 | 1.24× | 1.18× | 9/9, 9/9 |
+| 1,024 × 1,024 | Manhattan distance | 497.137 | 574.798 | 2,089.606 | 4.20× | 3.64× | 9/9, 9/9 |
+
+Both Wasdon workers beat UdonSharp on all nine medians. Zig won all 81
+paired rounds and Rust won 78. Rust's three slower rounds were in the
+sieve. Rust had the lowest Julia median at all three sizes. Zig led on
+the sieve and distance field at each size.
+
+### Earlier measurements
+
+The initial Zig and UdonSharp implementations both used per-pixel Julia
+iteration, a plain odd-only sieve and two raster sweeps. At 256 × 256 their
+respective medians were **926.435 / 802.187 ms**, **46.939 / 25.205 ms** and
+**226.406 / 133.741 ms**. The table below records the optimized Zig
+implementation and the same UdonSharp kernels before the Rust lane was added.
+
+| Grid | Workload | Wasdon median (ms) | UdonSharp median (ms) | Speedup | Wins |
+|---|---|---:|---:|---:|---:|
+| 256 × 256 | Julia set | 362.757 | 795.019 | 2.19× | 9/9 |
+| 256 × 256 | Prime sieve | 20.338 | 24.331 | 1.20× | 9/9 |
+| 256 × 256 | Manhattan distance | 77.018 | 132.769 | 1.72× | 9/9 |
+| 512 × 512 | Julia set | 1,472.692 | 3,521.752 | 2.39× | 9/9 |
+| 512 × 512 | Prime sieve | 85.387 | 103.835 | 1.22× | 9/9 |
+| 512 × 512 | Manhattan distance | 178.243 | 517.063 | 2.90× | 9/9 |
+| 1,024 × 1,024 | Julia set | 5,683.250 | 12,387.657 | 2.18× | 9/9 |
+| 1,024 × 1,024 | Prime sieve | 347.768 | 442.823 | 1.27× | 9/9 |
+| 1,024 × 1,024 | Manhattan distance | 474.780 | 2,030.843 | 4.28× | 9/9 |
+
+The initial Rust port used Zig's marking stride in the sieve. At 256 × 256
+it took 31.747 ms against 27.993 ms for UdonSharp (0.88×). Skipping
+multipliers divisible by 3 or 5 reduced redundant writes. The resulting ratio
+was 1.10×. The CSV labels the first two-worker comparisons `initial` and
+`optimized`, the Rust pilot `rust-initial`, and the final comparison `three-way`.
+
+### What each run measures
+
+The SDK's real-time clock surrounds a single complete `Run` event
+through 512 × 512. At 1,024 × 1,024
+the UdonSharp Julia event exceeded the SDK's 10-second execution limit.
+For all three workloads above 512 cells per side, all lanes sum the time
+around individual `Step` events over the full input. Each visual and timed
+step processes up to eight rows, columns or odd factors. Input reset, frame
+waits, progress queries, array transfers, drawing and byte-for-byte validation
+are outside the intervals. The batch runner also checks that each displayed
+texture reflects its live worker output. The Wasm call-graph test verifies
+that `Run` and `Step` in both producers call only guest code and use scalar
+memory operations. Udon executes the resulting instructions using its VM
+primitives.
+
+The emulator's 31 × 31 Julia fixture exercises initialization, a visual
+step, completion and readback. Reproduce these counts with `zig build stats -Drust`.
+
+| Worker | Wasm bytes | Udon heap slots | Executed VM instructions | Executed externs |
+|---|---:|---:|---:|---:|
+| Zig | 32,448 | 255 | 543,841 | 125,554 |
+| Rust | 8,682 | 294 | 545,067 | 122,265 |
+
+To reproduce, copy `unity/Wasdon` into the `Assets` folder of a Worlds SDK
+project with UdonSharp. Run in a closed project with Unity 2022.3.22f1
+and Worlds SDK 3.10.6. Each `WASDON_GRID` log entry lists the nine times
+in measurement order and their median. The optional `-wasdonRequireFaster`
+returns exit code 2 if any Wasdon median is greater than or equal to its
+UdonSharp counterpart.
+
+```sh
+"$UNITY" -batchmode -nographics -burst-disable-compilation \
+  -projectPath "$PROJECT" -executeMethod Wasdon.WasdonGridBenchmarkBatch.Run \
+  -wasdonGridSize 512 -wasdonRequireFaster -logFile "$PWD/grid-512.log"
+```
+
+## Unity sort benchmark
 
 The Unity sort benchmark runs the same stable bottom-up merge sort in
 Rust, Zig and UdonSharp. It draws 48 positions from each merge pass and

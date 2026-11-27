@@ -21,10 +21,10 @@ verified and measured without Unity.
   slots are strictly typed.
 - **No raw memory.** Linear memory is a .NET `byte[]`.
 
-Because `EXTERN` dominates run time on the Udon VM, the translator is built
-around emitting as few of them as possible. On the same workloads, Zig and
-Rust translated this way execute 1.5–1.7× fewer externs than UdonSharp
-(`examples/bench`); `docs/benchmarks.md` has every measurement.
+The translator reduces the number of `EXTERN` calls that the Udon VM
+executes. The emulator counts these calls for each workload. The Unity
+benchmarks measure elapsed time for sorting and grid computations in
+Zig, Rust and UdonSharp. [Measurements and methodology](docs/benchmarks.md)
 
 ## Status
 
@@ -125,8 +125,10 @@ wasdon_zig translate target/wasm32-wasip1/release/app.wasm -o app.uasm
 
 `examples/` has the programs the tests run and measure: digits of π, a
 Mandelbrot renderer, a QOI image codec, a physically simulated humanoid, a
-networked falling-block puzzle, WASI programs, and a benchmark against
-UdonSharp. See `examples/README.md`.
+networked falling-block puzzle, WASI programs, and benchmarks against
+UdonSharp. The [large grid benchmarks](docs/benchmarks.md#large-grid-benchmarks)
+visualize Julia escape times, prime sieving and Manhattan distances in Unity.
+See `examples/README.md` for the full list.
 
 ### In Unity
 

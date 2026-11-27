@@ -4,7 +4,7 @@ using UdonSharp;
 namespace Wasdon
 {
     [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
-    public class WasdonMergeSort : UdonSharpBehaviour
+    public class UdonSharpMergeSort : UdonSharpBehaviour
     {
         public byte[] data;
 

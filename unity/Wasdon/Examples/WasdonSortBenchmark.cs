@@ -78,7 +78,7 @@ namespace Wasdon
         private void PrepareRun()
         {
             ResetBenchmark();
-            count = Mathf.Clamp(sampleSize, 2, WasdonMergeSort.Capacity);
+            count = Mathf.Clamp(sampleSize, 2, UdonSharpMergeSort.Capacity);
             input = MakeInput(count);
             expected = ReferenceOrder(input);
             buffer = new byte[count];
