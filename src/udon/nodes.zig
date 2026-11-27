@@ -8,24 +8,35 @@
 
 const std = @import("std");
 
-/// One node name per line, ASCII-sorted.
-const list = @embedFile("udon_nodes");
+const catalog = @embedFile("udon_nodes");
+const header_end = std.mem.indexOfScalar(u8, catalog, '\n').?;
+pub const sdk_version = catalog["# wasdon-nodes-v1\t".len..header_end];
+const list = catalog[header_end + 1 ..];
 
-/// True iff `name` is a line of the node list.
+fn nodeName(row: []const u8) []const u8 {
+    return row[0 .. std.mem.indexOfScalar(u8, row, '\t') orelse row.len];
+}
+
+/// True iff the sorted SDK catalog contains this node name.
 pub fn exists(name: []const u8) bool {
+    return lookup(name) != null;
+}
+
+fn lookup(name: []const u8) ?[]const u8 {
     var lo: usize = 0;
     var hi: usize = list.len;
     while (lo < hi) {
         const mid = lo + (hi - lo) / 2;
         const start = if (std.mem.lastIndexOfScalar(u8, list[0..mid], '\n')) |i| i + 1 else 0;
         const end = std.mem.indexOfScalarPos(u8, list, start, '\n') orelse list.len;
-        switch (std.mem.order(u8, name, list[start..end])) {
-            .eq => return true,
+        const row = list[start..end];
+        switch (std.mem.order(u8, name, nodeName(row))) {
+            .eq => return row,
             .lt => hi = start,
             .gt => lo = @min(end + 1, list.len),
         }
     }
-    return false;
+    return null;
 }
 
 /// The node an import named `raw` calls: `raw` itself if it is a node, or
@@ -88,6 +99,107 @@ pub const Arg = struct {
     is_ref: bool = false,
 };
 
+pub const Port = struct {
+    name: []const u8,
+    type: []const u8,
+    direction: enum { in, in_out, out },
+    role: enum { receiver, argument, generic, result, event },
+    wasm: enum { i32, i64, f32, f64 },
+    passing: enum { value, handle, cell },
+};
+
+pub const AbiType = enum {
+    i32,
+    i64,
+    f32,
+    f64,
+    boolean,
+    narrow,
+    uint32,
+    uint64,
+    handle,
+
+    pub fn of(name: []const u8) AbiType {
+        const types = std.StaticStringMap(AbiType).initComptime(.{
+            .{ "SystemInt32", .i32 },     .{ "SystemInt64", .i64 },     .{ "SystemSingle", .f32 },      .{ "SystemDouble", .f64 },
+            .{ "SystemUInt32", .uint32 }, .{ "SystemUInt64", .uint64 }, .{ "SystemBoolean", .boolean }, .{ "SystemByte", .narrow },
+            .{ "SystemSByte", .narrow },  .{ "SystemInt16", .narrow },  .{ "SystemUInt16", .narrow },   .{ "SystemChar", .narrow },
+        });
+        return types.get(name) orelse .handle;
+    }
+
+    fn wasm(self: AbiType) @FieldType(Port, "wasm") {
+        return switch (self) {
+            .f32 => .f32,
+            .f64 => .f64,
+            .i64, .uint64 => .i64,
+            else => .i32,
+        };
+    }
+};
+
+fn portOf(text: []const u8, first: bool, generic: bool, event: bool) Port {
+    var parts = std.mem.splitScalar(u8, text, ':');
+    const direction = std.meta.stringToEnum(@FieldType(Port, "direction"), parts.next().?).?;
+    const name = parts.next().?;
+    const t = parts.next().?;
+    const eq = std.mem.eql;
+    const cell = direction == .in_out;
+    const ty = AbiType.of(t);
+    return .{
+        .name = name,
+        .type = t,
+        .direction = direction,
+        .role = if (event) .event else if (direction == .out) .result else if (first and eq(u8, name, "instance")) .receiver else if (generic and eq(u8, t, "SystemType")) .generic else .argument,
+        .wasm = if (cell) .i32 else ty.wasm(),
+        .passing = if (cell) .cell else if (ty == .handle) .handle else .value,
+    };
+}
+
+fn genericName(name: []const u8) bool {
+    const dot = std.mem.indexOf(u8, name, ".__") orelse return false;
+    const method_end = std.mem.indexOfPos(u8, name, dot + 3, "__") orelse return false;
+    var tokens = std.mem.tokenizeScalar(u8, name[method_end..], '_');
+    while (tokens.next()) |token| if (isTypeParam(token)) return true;
+    return false;
+}
+
+pub fn writeCatalog(out: *std.Io.Writer, args: []const []const u8) !u8 {
+    if (args.len != 2) return 1;
+    const limit = try std.fmt.parseInt(usize, args[1], 10);
+    try out.writeAll("{\"abi\":\"wasdon.v1\",\"sdkVersion\":\"" ++ sdk_version ++ "\",\"nodes\":[");
+    var rows = std.mem.tokenizeScalar(u8, list, '\n');
+    var count: usize = 0;
+    while (rows.next()) |row| {
+        var fields = std.mem.splitScalar(u8, row, '\t');
+        const name = fields.next().?;
+        const event = std.mem.startsWith(u8, name, "Event_");
+        const is_extern = std.mem.indexOf(u8, name, ".__") != null;
+        if (!event and !is_extern and !std.mem.startsWith(u8, name, "Type_")) continue;
+        if (std.ascii.findIgnoreCase(name, args[0]) == null) continue;
+        if (count > 0) try out.writeByte(',');
+        var json: std.json.Stringify = .{ .writer = out };
+        try json.beginObject();
+        try json.objectField("name");
+        try json.write(name);
+        try json.objectField("kind");
+        try json.write(@as([]const u8, if (event) "event" else if (is_extern) "extern" else "type"));
+        try json.objectField("ports");
+        try json.beginArray();
+        var first = true;
+        while (fields.next()) |field| {
+            try json.write(portOf(field, first, genericName(name), event));
+            first = false;
+        }
+        try json.endArray();
+        try json.endObject();
+        count += 1;
+        if (limit != 0 and count == limit) break;
+    }
+    try out.writeAll("]}\n");
+    return 0;
+}
+
 /// A parsed `<Type>.__<method>__<args>__<ret>` signature
 /// (`docs/udon_specs.md` §7). All slices alias the input string.
 pub const Signature = struct {
@@ -97,6 +209,9 @@ pub const Signature = struct {
     args_buf: [max_args]Arg = undefined,
     args_len: u8 = 0,
     ret: []const u8,
+    receiver: ?[]const u8 = null,
+    sdk_definition: bool = false,
+    generic: bool = false,
 
     pub const max_args = 16;
 
@@ -110,7 +225,7 @@ pub const Signature = struct {
 
     /// Heap indices the VM pops for this extern when it is static: one per
     /// argument plus the trailing return slot. An instance method pops one
-    /// more (the leading `this`); the signature cannot tell which it is.
+    /// more (the leading `this`), identified by the SDK receiver port.
     pub fn staticParamCount(self: *const Signature) u32 {
         return @as(u32, self.args_len) + @intFromBool(self.returnsValue());
     }
@@ -118,6 +233,7 @@ pub const Signature = struct {
     /// Signatures with open type parameters (`T`, `TArray`, `IEnumerableT`)
     /// take hidden `SystemType` arguments (`docs/udon_specs.md` §7.4).
     pub fn isGeneric(self: *const Signature) bool {
+        if (self.generic) return true;
         if (isTypeParam(self.ret)) return true;
         for (self.args()) |a| if (isTypeParam(a.type_name)) return true;
         return false;
@@ -126,12 +242,13 @@ pub const Signature = struct {
     /// Methods that are static by construction. Everything else may be
     /// either; callers decide from the argument count they were given.
     pub fn isKnownStatic(self: *const Signature) bool {
+        if (self.sdk_definition) return self.receiver == null;
         return std.mem.eql(u8, self.method, "ctor") or std.mem.startsWith(u8, self.method, "op_");
     }
 };
 
 fn isTypeParam(t: []const u8) bool {
-    return std.mem.eql(u8, t, "T") or std.mem.eql(u8, t, "TArray") or std.mem.eql(u8, t, "IEnumerableT");
+    return std.mem.eql(u8, t, "T") or std.mem.eql(u8, t, "TArray") or std.mem.eql(u8, t, "IEnumerableT") or std.mem.eql(u8, t, "ListT");
 }
 
 /// Parse an extern signature. Returns null when `name` does not have the
@@ -149,6 +266,28 @@ pub fn parseSignature(name: []const u8) ?Signature {
     if (method.len == 0) return null;
     const tail = body[m_end + 2 ..];
     var sig: Signature = .{ .raw = name, .type_name = type_name, .method = method, .ret = tail };
+    if (lookup(name)) |row| {
+        var fields = std.mem.splitScalar(u8, row, '\t');
+        _ = fields.next();
+        sig.sdk_definition = true;
+        sig.ret = void_type;
+        sig.generic = genericName(name);
+        var first = true;
+        while (fields.next()) |field| {
+            const port = portOf(field, first, sig.generic, false);
+            first = false;
+            switch (port.role) {
+                .receiver => sig.receiver = port.type,
+                .result => sig.ret = port.type,
+                else => {
+                    if (sig.args_len == Signature.max_args) return null;
+                    sig.args_buf[sig.args_len] = .{ .type_name = port.type, .is_ref = port.passing == .cell };
+                    sig.args_len += 1;
+                },
+            }
+        }
+        return sig;
+    }
     if (std.mem.lastIndexOf(u8, tail, "__")) |r| {
         sig.ret = tail[r + 2 ..];
         const args_text = tail[0..r];
@@ -197,7 +336,7 @@ test "exists: first, last and middle entries" {
     try testing.expect(!exists("SystemInt32.__op_Modulus__SystemInt32_SystemInt32__SystemInt32"));
     try testing.expect(!exists(""));
     const last_start = std.mem.lastIndexOfScalar(u8, std.mem.trimEnd(u8, list, "\n"), '\n').? + 1;
-    try testing.expect(exists(std.mem.trimEnd(u8, list[last_start..], "\n")));
+    try testing.expect(exists(nodeName(std.mem.trimEnd(u8, list[last_start..], "\n"))));
 }
 
 test "types and events" {
@@ -277,7 +416,7 @@ test "every extern-shaped node parses" {
     var n: usize = 0;
     while (it.next()) |line| {
         if (std.mem.indexOf(u8, line, ".__") == null) continue;
-        const s = parseSignature(line) orelse {
+        const s = parseSignature(nodeName(line)) orelse {
             std.debug.print("unparsed node: {s}\n", .{line});
             return error.TestUnexpectedResult;
         };

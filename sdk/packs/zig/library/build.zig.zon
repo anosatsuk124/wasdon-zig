@@ -1,0 +1,7 @@
+.{
+    .name = .wasdon,
+    .version = "0.1.0",
+    .fingerprint = 0x7d8c959ed15f3648,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{ "build.zig", "build.zig.zon", "root.zig", "raw.zig" },
+}

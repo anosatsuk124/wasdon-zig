@@ -3,9 +3,45 @@
 Editor support for running wasdon-zig output in a VRChat world, and the
 repository's examples as ready-made assets.
 
-Copy this folder (`unity/Wasdon/`) into the `Assets/` folder of a Unity
-project that has the VRChat Worlds SDK with UdonSharp and network events
-installed. The new examples use the UdonSharp compiler bundled with the SDK.
+Add the community repository below in ALCOM's **Packages → Add Repository**
+or VCC's **Settings → Packages → Add Repository**. In the project's package
+list, install **Wasdon Worlds SDK** (`io.github.anosatsuk124.wasdon`).
+
+```text
+https://github.com/anosatsuk124/wasdon-zig/releases/latest/download/vpm.json
+```
+
+When you open the project, Unity installs the bundled `wasdon-worlds` skill at
+`.agents/skills/wasdon-worlds/SKILL.md`. Use `$wasdon-worlds` in Codex from
+the project. SDK updates refresh the installed copy and preserve local edits.
+
+Open **Tools → Wasdon → Setup**. **Install release CLI** downloads the matching
+tag to `Library/Wasdon/SDK`. **Choose CLI** also accepts a local build or a
+mise executable. Select a language, name the project and create the world
+behaviour. The window reads `wasdon language list --json`. New packs can be
+added here using a development directory or distribution ZIP URL.
+
+The project manifest, sources and editable bindings live under `Assets/<name>`.
+Saving changes rebuilds the source-backed program asset. Compiler diagnostics
+appear on the asset and in the Console. A world build rechecks its program
+sources and stops on a compilation or assembly error. Existing assembly text
+assets retain their GUIDs and can still be assigned as Assembly Source.
+
+If you previously copied the SDK into `Assets/Wasdon`, move your own program
+assets and sources to another folder inside Unity first. Close the Editor,
+move the old SDK folder and its `.meta` outside the project, and install the
+VPM package before reopening the project. Existing scene references resolve
+to the same script and example GUIDs in the package.
+
+### Test the shared switch
+
+The starter cube controls the sphere above it. You can assign your own
+GameObject to its public `target` field in the Inspector. Open
+VRChat SDK **Build & Test** with two clients in the same instance. Interact as
+the first player and check the target on both clients. Interact as the second
+player to exercise ownership transfer. Switch it on, restart one client and
+join the same instance again. The target should reflect the current owner’s
+synced value as soon as deserialization runs. [VRChat Build & Test](https://creators.vrchat.com/worlds/udon/using-build-test/)
 
 ## Wasdon Assembly Program Asset
 

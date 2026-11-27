@@ -402,7 +402,7 @@ namespace Wasdon
 
         /// Set one of the program's public variables. `T` must be the
         /// variable's declared type.
-        private static void SetVariable<T>(UdonBehaviour udon, string name, T value)
+        internal static void SetVariable<T>(UdonBehaviour udon, string name, T value)
         {
             if (udon.publicVariables.TrySetVariableValue(name, value)) return;
             if (!udon.publicVariables.TryAddVariable(new UdonVariable<T>(name, value)))

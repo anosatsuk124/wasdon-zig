@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "behaviour": {
+    "syncMode": "manual"
+  },
+  "fields": {
+    "gameObject": {
+      "source": {
+        "kind": "import",
+        "module": "wasdon.field",
+        "name": "gameObject"
+      },
+      "type": "gameobject",
+      "export": false,
+      "default": "this"
+    },
+    "behaviour": {
+      "source": {
+        "kind": "import",
+        "module": "wasdon.field",
+        "name": "behaviour"
+      },
+      "type": "VRCUdonUdonBehaviour",
+      "export": false,
+      "default": "this"
+    },
+    "target": {
+      "source": {
+        "kind": "import",
+        "module": "wasdon.field",
+        "name": "target"
+      },
+      "type": "gameobject",
+      "export": true
+    },
+    "switchOn": {
+      "source": {
+        "kind": "import",
+        "module": "wasdon.field",
+        "name": "switchOn",
+        "setter": "set_switchOn"
+      },
+      "type": "bool",
+      "export": true,
+      "sync": {
+        "enabled": true,
+        "mode": "none"
+      }
+    },
+    "onPlayerJoinedPlayer": {
+      "source": {
+        "kind": "import",
+        "module": "wasdon.field",
+        "name": "onPlayerJoinedPlayer"
+      },
+      "type": "VRCSDKBaseVRCPlayerApi",
+      "export": false
+    }
+  }
+}

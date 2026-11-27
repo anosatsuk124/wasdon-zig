@@ -1,0 +1,29 @@
+{
+  "id": "c",
+  "displayName": "C",
+  "version": "0.1.0",
+  "interfaceVersion": 1,
+  "template": "template",
+  "commands": {
+    "doctor": [
+      "pack.py"
+    ],
+    "setup": [
+      "pack.py"
+    ],
+    "bindings": [
+      "pack.py"
+    ],
+    "build": [
+      "pack.py"
+    ]
+  },
+  "test": {
+    "events": [
+      "_start"
+    ],
+    "logs": [
+      "[info] Hello from Wasdon"
+    ]
+  }
+}

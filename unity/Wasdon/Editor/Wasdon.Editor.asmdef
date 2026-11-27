@@ -1,0 +1,5 @@
+{
+  "name": "Wasdon.Editor",
+  "references": ["Wasdon.Examples", "VRC.Udon", "VRC.Udon.Editor", "VRC.SDKBase", "VRC.SDKBase.Editor", "VRC.SDKBase.Editor.BuildPipeline", "VRC.SDK3", "UdonSharp.Runtime", "UdonSharp.Editor", "UnityEngine.UI"],
+  "includePlatforms": ["Editor"]
+}

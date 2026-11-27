@@ -11,6 +11,51 @@ WebAssembly — and translate the result. The repository also contains an
 Udon VM emulator and an Udon Assembly checker, so translated programs can be
 verified and measured without Unity.
 
+## Install the Worlds SDK
+
+GitHub Releases supply the CLI, its runtime, generated C, Zig and Rust packages,
+and the `wasdon-worlds` agent skill for Windows x64, macOS arm64/x64 and Linux x64 (glibc).
+Choose one installation command.
+
+| Environment | Command |
+|---|---|
+| mise | `mise use -g github:anosatsuk124/wasdon-zig@latest` |
+| macOS or Linux | `curl -fsSL https://github.com/anosatsuk124/wasdon-zig/releases/latest/download/install.sh \| sh` |
+| Windows PowerShell | `irm https://github.com/anosatsuk124/wasdon-zig/releases/latest/download/install.ps1 \| iex` |
+
+The shell installers verify the archive's SHA-256. Use a release tag in mise
+or set `WASDON_VERSION=v0.1.0` in the installer's environment to pin a version.
+
+**ALCOM and VRChat Creator Companion** accept the same community repository.
+In ALCOM open **Packages → Add Repository**. In VCC open **Settings → Packages
+→ Add Repository**. Paste the following URL, then add **Wasdon Worlds SDK** to
+a Worlds project from **Manage Project**.
+
+```text
+https://github.com/anosatsuk124/wasdon-zig/releases/latest/download/vpm.json
+```
+
+The VPM package includes the `wasdon-worlds` agent skill. Opening the project
+in Unity installs the project skill for Codex. Invoke it with `$wasdon-worlds`.
+
+In Unity open **Tools → Wasdon → Setup**, install or choose the CLI, select a
+language and click **Create world behaviour**. Saving a source rebuilds the
+program under `Library/Wasdon`. The starter's synced switch toggles a sphere
+above the cube. Assign a different GameObject to its `target` field in the
+Inspector to control it. [Unity setup and multiplayer test](unity/Wasdon/README.md)
+
+```sh
+wasdon language list --json
+wasdon init MyWorld --lang zig
+wasdon build MyWorld --json
+wasdon language validate zig
+```
+
+`build` returns the verified WASM and assembly paths. New projects include
+the selected language's bindings. The CLI diagnoses and sets up the compiler
+when needed. Third-party packs use the same four JSON commands as the bundled
+packs. [Language pack authoring and ABI](docs/language-packs.md)
+
 ## What makes this hard
 
 - **No local variables, no value stack.** Every value is a field of the
@@ -57,7 +102,8 @@ Zig, Rust and UdonSharp. [Measurements and methodology](docs/benchmarks.md)
 
 ## Getting started
 
-Zig 0.16 is required (pinned in `mise.toml`).
+Building the CLI from source requires Zig 0.16 (pinned in `mise.toml`).
+Source builds use Python 3.11 or newer for language pack commands.
 
 ```sh
 zig build                      # the CLI: zig-out/bin/wasdon_zig

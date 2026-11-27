@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using UnityEditor;
@@ -45,6 +46,21 @@ namespace Wasdon
         [Tooltip("Text file holding the Udon Assembly (.uasm.txt). When set, it replaces the embedded assembly on every refresh.")]
         public TextAsset assemblySource;
 
+        [SerializeField] private TextAsset projectSource;
+        [SerializeField, HideInInspector] private string projectGuid;
+        internal bool HasProject => projectSource != null || !string.IsNullOrEmpty(projectGuid);
+        internal string ProjectPath => AssetDatabase.GetAssetPath(projectSource);
+        public bool BuildSucceeded => program != null && string.IsNullOrEmpty(assemblyError);
+        public string BuildError => assemblyError;
+        internal VRC.SDKBase.Networking.SyncType SyncMode { get; private set; }
+
+        public void SetProject(TextAsset source)
+        {
+            projectSource = source;
+            projectGuid = source == null ? null : AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(source));
+            assembledRevision = default;
+        }
+
         [SerializeField, HideInInspector]
         private uint heapSize;
 
@@ -56,6 +72,31 @@ namespace Wasdon
 
         protected override void RefreshProgramImpl()
         {
+            if (HasProject)
+            {
+                string path = AssetDatabase.GetAssetPath(this);
+                try
+                {
+                    var build = WasdonSdk.Build(projectSource, path);
+                    string generated = File.ReadAllText(build.assembly);
+                    uint required = RequiredHeapSize(generated);
+                    if (required > MaximumHeapSize) throw new InvalidDataException("Udon heap exceeds its capacity.");
+                    heapSize = Math.Max(required, DefaultHeapSize);
+                    program = Assemble(generated, heapSize);
+                    assemblyError = null;
+                    var mode = build.metadata == null ? null :
+                        JsonUtility.FromJson<WasdonSdk.Metadata>(File.ReadAllText(build.metadata)).behaviour?.syncMode;
+                    SyncMode = mode == "manual" ? VRC.SDKBase.Networking.SyncType.Manual :
+                        mode == "continuous" ? VRC.SDKBase.Networking.SyncType.Continuous : VRC.SDKBase.Networking.SyncType.None;
+                }
+                catch (Exception e)
+                {
+                    program = null;
+                    assemblyError = ProjectPath + "\n" + e.GetBaseException().Message;
+                    Debug.LogError(assemblyError, this);
+                }
+                return;
+            }
             Hash128 revision = assemblySource != null
                 ? AssetDatabase.GetAssetDependencyHash(AssetDatabase.GetAssetPath(assemblySource))
                 : default;
@@ -208,6 +249,23 @@ namespace Wasdon
         protected override void DrawAssemblyTextArea(bool allowEditing, ref bool dirty)
         {
             EditorGUILayout.LabelField("Wasdon Assembly", EditorStyles.boldLabel);
+            using (new EditorGUI.DisabledScope(!allowEditing))
+            {
+                EditorGUI.BeginChangeCheck();
+                var source = (TextAsset)EditorGUILayout.ObjectField("Wasdon Project", projectSource, typeof(TextAsset), false);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    Undo.RecordObject(this, "Change Wasdon Project");
+                    SetProject(source);
+                    dirty = true;
+                    UdonEditorManager.Instance.QueueAndRefreshProgram(this);
+                }
+            }
+            if (HasProject)
+            {
+                if (GUILayout.Button("Rebuild project")) UdonEditorManager.Instance.QueueAndRefreshProgram(this);
+                return;
+            }
 
             using (new EditorGUI.DisabledScope(!allowEditing))
             {
@@ -268,8 +326,11 @@ namespace Wasdon
     {
         private static void OnPostprocessAllAssets(string[] imported, string[] deleted, string[] moved, string[] movedFrom)
         {
-            if (imported.Length == 0) return;
+            if (imported.Length + deleted.Length + moved.Length + movedFrom.Length == 0) return;
             var changed = new HashSet<string>(imported);
+            changed.UnionWith(deleted);
+            changed.UnionWith(moved);
+            changed.UnionWith(movedFrom);
 
             // Deferred: program sources cannot be refreshed in the middle of
             // an import.
@@ -280,6 +341,11 @@ namespace Wasdon
                     string path = AssetDatabase.GUIDToAssetPath(guid);
                     var asset = AssetDatabase.LoadAssetAtPath<WasdonProgramAsset>(path);
                     if (asset == null) continue;
+                    if (asset.HasProject)
+                    {
+                        if (WasdonSourceWatch.Changed(asset, changed)) asset.RefreshProgram();
+                        continue;
+                    }
 
                     string sourcePath = asset.assemblySource != null ? AssetDatabase.GetAssetPath(asset.assemblySource) : null;
                     if (changed.Contains(path) || (sourcePath != null && changed.Contains(sourcePath)))

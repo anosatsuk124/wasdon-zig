@@ -8,6 +8,15 @@ only through `EXTERN` with a signature string (`docs/udon_specs.md` §7).
 The translator has to turn the first into the second without a per-import
 table that would need editing for every new extern.
 
+SDK language packs import exact node names from `wasdon.v1`. The translator
+reads receiver, argument and result slots from the Worlds SDK port definitions
+in `docs/udon_nodes.txt`. The pack receives the same slots as JSON. A generic
+type argument is an explicit `SystemType` handle. Each `ref` or `out` argument
+is a handle to a one-element array of its SDK element type. The translator
+passes element zero to Udon and writes the updated value back after the call.
+The following sections also describe imports from older producers using
+`env`. [Language pack ABI](language-packs.md)
+
 ## 2. The import name is the extern signature
 
 An import whose **name** is an Udon extern signature is called as that

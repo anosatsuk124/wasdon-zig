@@ -1,0 +1,103 @@
+name: SDK distribution
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  binary:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-22.04, platform: linux-x64, target: x86_64-linux-musl}
+          - {runner: windows-2022, platform: windows-x64, target: x86_64-windows-gnu}
+          - {runner: macos-15, platform: macos-arm64, target: aarch64-macos.11.0}
+          - {runner: macos-15-intel, platform: macos-x64, target: x86_64-macos.11.0}
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: jdx/mise-action@v2
+      - uses: astral-sh/setup-uv@v6
+      - name: Install producer targets and portable Python
+        run: |
+          rustup target add wasm32v1-none
+          uv python install 3.12.13
+      - name: Build and test the translator
+        run: |
+          zig build -Doptimize=ReleaseFast
+          zig build test -Doptimize=ReleaseFast
+      - name: Exercise the three packs and an external pack
+        run: zig build test-sdk -Doptimize=ReleaseFast
+      - name: Verify every generated extern declaration and call
+        if: matrix.platform == 'linux-x64'
+        run: python tools/test_bindings.py zig-out/bin/wasdon
+      - name: Test the VCC package resolver
+        if: matrix.platform == 'windows-x64'
+        run: |
+          dotnet tool install --global vrchat.vpm.cli --version 0.1.28
+          python tools/test_vpm.py vpm
+      - name: Test the ALCOM package resolver
+        if: matrix.platform == 'macos-arm64'
+        run: |
+          brew install vrc-get
+          python3 tools/test_vpm.py vrc-get
+      - name: Package the SDK and test installation
+        run: |
+          zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.target }} -Dcpu=baseline
+          runtime="$(uv run --no-project --managed-python --python 3.12.13 python -c 'import sys; print(sys.base_prefix)')"
+          python tools/release.py binary --runtime "$runtime" --output dist
+          python tools/test_install.py dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasdon-${{ matrix.platform }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+    needs: binary
+    runs-on: ubuntu-latest
+    concurrency: wasdon-release
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wasdon-*
+          path: dist
+          merge-multiple: true
+      - name: Build VCC and ALCOM listing and publish verified assets
+        shell: bash
+        run: |
+          previous=()
+          latest=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // empty')
+          if [[ -n "$latest" ]]; then
+            has_listing=$(gh release view "$latest" --json assets --jq 'any(.assets[]; .name == "vpm.json")')
+            if [[ "$has_listing" == true ]]; then
+              gh release download "$latest" --pattern vpm.json --dir "$RUNNER_TEMP"
+              previous=(--previous "$RUNNER_TEMP/vpm.json")
+            fi
+          fi
+          python3 tools/release.py vpm --tag "$GITHUB_REF_NAME" --repository "$GITHUB_REPOSITORY" --output dist "${previous[@]}"
+          if draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft' 2>/dev/null); then
+            if [[ "$draft" == false ]]; then echo "$GITHUB_REF_NAME is already published"; exit 0; fi
+          else
+            options=()
+            if [[ "$GITHUB_REF_NAME" == *-* ]]; then options+=(--prerelease); fi
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes "${options[@]}"
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false
