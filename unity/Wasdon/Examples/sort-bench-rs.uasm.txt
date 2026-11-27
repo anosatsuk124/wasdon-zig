@@ -1,0 +1,859 @@
+.data_start
+    # wasdon-zig heap-size: 106
+    __G__memory: %SystemByteArray, null
+    __G__memory_size_pages: %SystemInt32, 17
+    __G__g0: %SystemInt32, 1048576
+    __G____data_end: %SystemInt32, 1049892
+    __G____heap_base: %SystemInt32, 1049904
+    .export data
+    data: %SystemByteArray, null
+    __Load_L0__: %SystemInt32, 0
+    __Load_L1__: %SystemInt32, 0
+    __Read_L0__: %SystemInt32, 0
+    __Sort_L0__: %SystemInt32, 0
+    __Sort_L1__: %SystemInt32, 0
+    __Sort_L2__: %SystemInt32, 0
+    __Sort_L3__: %SystemInt32, 0
+    __Sort_L4__: %SystemInt32, 0
+    __Sort_L5__: %SystemInt32, 0
+    __Sort_L6__: %SystemInt32, 0
+    __Sort_L7__: %SystemInt32, 0
+    __Sort_L8__: %SystemInt32, 0
+    __Sort_L9__: %SystemInt32, 0
+    __Sort_L10__: %SystemInt32, 0
+    __Sort_L11__: %SystemInt32, 0
+    __Sort_L12__: %SystemInt32, 0
+    __Sort_L13__: %SystemInt32, 0
+    __Step_L0__: %SystemInt32, 0
+    __Step_L1__: %SystemInt32, 0
+    __Step_L2__: %SystemInt32, 0
+    __Step_L3__: %SystemInt32, 0
+    __Step_L4__: %SystemInt32, 0
+    __Step_L5__: %SystemInt32, 0
+    __Step_L6__: %SystemInt32, 0
+    __Step_L7__: %SystemInt32, 0
+    __Step_L8__: %SystemInt32, 0
+    __Step_L9__: %SystemInt32, 0
+    __Step_L10__: %SystemInt32, 0
+    __Step_L11__: %SystemInt32, 0
+    __Step_L12__: %SystemInt32, 0
+    __Step_L13__: %SystemInt32, 0
+    __Load_T1__: %SystemInt32, 0
+    __derived0: %SystemInt32, 0
+    __c_i32_n2147483648: %SystemInt32, 0x80000000
+    __c_i32_n2147483136: %SystemInt32, -2147483136
+    __Load_T2__: %SystemBoolean, null
+    __c_i32_512: %SystemInt32, 512
+    __c_i32_4: %SystemInt32, 4
+    __c_i32_1049888: %SystemInt32, 1049888
+    __c_i32_0: %SystemInt32, 0
+    __st_i32: %SystemInt32Array, null
+    __c_i32_1049376: %SystemInt32, 1049376
+    __c_i32_1: %SystemInt32, 1
+    __c_i32_1048860: %SystemInt32, 1048860
+    __kpool: %SystemByteArray, null
+    __c_i32_1048856: %SystemInt32, 1048856
+    __Read_T1__: %SystemByte, null
+    __Read_T2__: %SystemInt32, 0
+    __c_i32_1048864: %SystemInt32, 1048864
+    __Read_T3__: %SystemBoolean, null
+    __Read_T4__: %SystemInt32, 0
+    __Sort_T1__: %SystemInt32, 0
+    __derived1: %SystemInt32, 0
+    __Sort_T2__: %SystemBoolean, null
+    __Sort_T3__: %SystemByte, null
+    __derived2: %SystemInt32, 0
+    __derived3: %SystemInt32, 0
+    __derived4: %SystemInt32, 0
+    __c_i32_255: %SystemInt32, 255
+    __Sort_T4__: %SystemInt32, 0
+    __c_i32_n1: %SystemInt32, -1
+    __Step_T1__: %SystemInt32, 0
+    __Step_T2__: %SystemBoolean, null
+    __Step_T3__: %SystemByte, null
+    __Step_T4__: %SystemInt32, 0
+    __init_RA: %SystemUInt32, 0
+    __inited: %SystemBoolean, null
+    __ra_1: %SystemUInt32, 5460
+    __ra_2: %SystemUInt32, 5484
+    __ra_3: %SystemUInt32, 5508
+    __ra_4: %SystemUInt32, 5532
+    __c_i32_1114112: %SystemInt32, 1114112
+    __data_0: %SystemString, "ewogICJ2ZXJzaW9uIjogMSwKICAiZmllbGRzIjogewogICAgIm1lbW9yeSI6IHsgInNvdXJjZSI6IHsia2luZCI6ImltcG9ydCIsIm5hbWUiOiJ1ZG9uLm1lbW9yeSJ9LCAidWRvbk5hbWUiOiJfX0dfX21lbW9yeSIsICJ0eXBlIjoiU3lzdGVtQnl0ZUFycmF5IiB9LAogICAgImRhdGEiOiB7ICJzb3VyY2UiOiB7ImtpbmQiOiJpbXBvcnQiLCJuYW1lIjoic29ydC5kYXRhIn0sICJ1ZG9uTmFtZSI6ImRhdGEiLCAidHlwZSI6IlN5c3RlbUJ5dGVBcnJheSIsICJleHBvcnQiOnRydWUgfQogIH0KfQ=="
+    __data_bytes: %SystemByteArray, null
+    __c_i32_1048576: %SystemInt32, 1048576
+    __c_i32_280: %SystemInt32, 280
+    __data_1: %SystemString, "AQAAAAE="
+    __c_i32_5: %SystemInt32, 5
+    __kpool_b64: %SystemString, "AQEAAAA="
+.data_end
+
+.code_start
+        PUSH, data
+        PUSH, __Load_L0__
+        COPY
+        PUSH, __Load_L0__
+        PUSH, __Load_L1__
+        EXTERN, "SystemByteArray.__get_Length__SystemInt32"
+        PUSH, __Load_L1__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __c_i32_n2147483136
+        PUSH, __Load_T2__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Load_T2__
+        JUMP_IF_FALSE, 0x00000098
+        PUSH, __Load_L1__
+        PUSH, __Load_T1__
+        COPY
+        JUMP, 0x000000AC
+        PUSH, __c_i32_512
+        PUSH, __Load_T1__
+        COPY
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __Load_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1049888
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__memory
+        PUSH, __c_i32_1049888
+        PUSH, __Load_T1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __Load_L0__
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1049376
+        PUSH, __Load_T1__
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __kpool
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1048860
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __kpool
+        PUSH, __c_i32_1
+        PUSH, __G__memory
+        PUSH, __c_i32_1048856
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP, 0xFFFFFFFC
+        PUSH, __G__memory
+        PUSH, __c_i32_1048860
+        PUSH, __Read_T1__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, __Read_T1__
+        PUSH, __Read_L0__
+        EXTERN, "SystemConvert.__ToInt32__SystemByte__SystemInt32"
+        PUSH, __Read_L0__
+        PUSH, __Read_T3__
+        EXTERN, "SystemConvert.__ToBoolean__SystemInt32__SystemBoolean"
+        PUSH, __Read_T3__
+        JUMP_IF_FALSE, 0x00000230
+        PUSH, __c_i32_1049376
+        PUSH, __Read_T2__
+        COPY
+        JUMP, 0x00000244
+        PUSH, __c_i32_1048864
+        PUSH, __Read_T2__
+        COPY
+        PUSH, __G__memory
+        PUSH, __c_i32_1049888
+        PUSH, __Read_T4__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __Read_T2__
+        PUSH, data
+        PUSH, __c_i32_0
+        PUSH, __Read_T4__
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP, 0xFFFFFFFC
+        PUSH, __c_i32_0
+        PUSH, __Sort_L9__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Sort_L12__
+        COPY
+        PUSH, __G__memory
+        PUSH, __c_i32_1048856
+        PUSH, __Sort_L0__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1049888
+        PUSH, __Sort_L1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __Sort_L0__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L1__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __derived1
+        PUSH, __Sort_T2__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Sort_T2__
+        JUMP_IF_FALSE, 0xFFFFFFFC
+        PUSH, __G__memory
+        PUSH, __c_i32_1048860
+        PUSH, __Sort_T3__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, __Sort_T3__
+        PUSH, __Sort_L2__
+        EXTERN, "SystemConvert.__ToInt32__SystemByte__SystemInt32"
+        PUSH, __Sort_L2__
+        PUSH, __c_i32_1
+        PUSH, __Sort_L3__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L3__
+        PUSH, __Sort_T2__
+        EXTERN, "SystemConvert.__ToBoolean__SystemInt32__SystemBoolean"
+        PUSH, __Sort_T2__
+        JUMP_IF_FALSE, 0x00000410
+        PUSH, __c_i32_1048864
+        PUSH, __Sort_T1__
+        COPY
+        JUMP, 0x00000424
+        PUSH, __c_i32_1049376
+        PUSH, __Sort_T1__
+        COPY
+        PUSH, __Sort_T1__
+        PUSH, __Sort_L4__
+        COPY
+        PUSH, __Sort_L3__
+        PUSH, __Sort_T2__
+        EXTERN, "SystemConvert.__ToBoolean__SystemInt32__SystemBoolean"
+        PUSH, __Sort_T2__
+        JUMP_IF_FALSE, 0x0000047C
+        PUSH, __c_i32_1049376
+        PUSH, __Sort_T1__
+        COPY
+        JUMP, 0x00000490
+        PUSH, __c_i32_1048864
+        PUSH, __Sort_T1__
+        COPY
+        PUSH, __Sort_T1__
+        PUSH, __Sort_L5__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Sort_L6__
+        COPY
+        PUSH, __Sort_L6__
+        PUSH, __Sort_L7__
+        COPY
+        PUSH, __Sort_L7__
+        PUSH, __Sort_L0__
+        PUSH, __Sort_L3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L1__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L3__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __derived1
+        PUSH, __Sort_T2__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Sort_T2__
+        JUMP_IF_FALSE, 0x00000578
+        PUSH, __Sort_L1__
+        PUSH, __Sort_T1__
+        COPY
+        JUMP, 0x0000058C
+        PUSH, __Sort_L3__
+        PUSH, __Sort_T1__
+        COPY
+        PUSH, __Sort_T1__
+        PUSH, __Sort_L8__
+        COPY
+        PUSH, __Sort_L8__
+        PUSH, __Sort_L0__
+        PUSH, __Sort_L9__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L9__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived2
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __derived2
+        PUSH, __Sort_T2__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Sort_T2__
+        JUMP_IF_FALSE, 0x0000062C
+        PUSH, __Sort_L1__
+        PUSH, __Sort_T1__
+        COPY
+        JUMP, 0x00000640
+        PUSH, __Sort_L9__
+        PUSH, __Sort_T1__
+        COPY
+        PUSH, __Sort_T1__
+        PUSH, __Sort_L6__
+        COPY
+        PUSH, __Sort_L6__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived3
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L7__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived4
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived3
+        PUSH, __derived4
+        PUSH, __Sort_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Sort_T2__
+        JUMP_IF_FALSE, 0x00000A70
+        PUSH, __Sort_L6__
+        PUSH, __Sort_L7__
+        PUSH, __Sort_L10__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L4__
+        PUSH, __Sort_L7__
+        PUSH, __Sort_L3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L8__
+        PUSH, __Sort_L11__
+        COPY
+        PUSH, __Sort_L7__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L8__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __derived1
+        PUSH, __Sort_T2__
+        EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Sort_T2__
+        JUMP_IF_FALSE, 0x000007E8
+        PUSH, __Sort_L5__
+        PUSH, __Sort_L11__
+        PUSH, __Sort_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __Sort_T1__
+        PUSH, __Sort_T3__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, __Sort_T3__
+        PUSH, __Sort_L12__
+        EXTERN, "SystemConvert.__ToInt32__SystemByte__SystemInt32"
+        JUMP, 0x00000990
+        PUSH, __Sort_L5__
+        PUSH, __Sort_L7__
+        PUSH, __Sort_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __Sort_T1__
+        PUSH, __Sort_T3__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, __Sort_T3__
+        PUSH, __Sort_L13__
+        EXTERN, "SystemConvert.__ToInt32__SystemByte__SystemInt32"
+        PUSH, __Sort_L11__
+        PUSH, __Sort_L6__
+        PUSH, __Sort_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Sort_T2__
+        JUMP_IF_FALSE, 0x00000918
+        PUSH, __Sort_L13__
+        PUSH, __c_i32_255
+        PUSH, __Sort_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L5__
+        PUSH, __Sort_L11__
+        PUSH, __Sort_T4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __Sort_T4__
+        PUSH, __Sort_T3__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, __Sort_T3__
+        PUSH, __Sort_L12__
+        EXTERN, "SystemConvert.__ToInt32__SystemByte__SystemInt32"
+        PUSH, __Sort_T1__
+        PUSH, __Sort_L12__
+        PUSH, __Sort_T2__
+        EXTERN, "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Sort_T2__
+        JUMP_IF_FALSE, 0x00000990
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __Sort_L13__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __Sort_L3__
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __Sort_L7__
+        PUSH, __c_i32_1
+        PUSH, __Sort_L7__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x00000A00
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __Sort_L12__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __Sort_L3__
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __Sort_L11__
+        PUSH, __c_i32_1
+        PUSH, __Sort_L11__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L3__
+        PUSH, __c_i32_1
+        PUSH, __Sort_L3__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L10__
+        PUSH, __c_i32_n1
+        PUSH, __Sort_L10__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L10__
+        PUSH, __c_i32_0
+        PUSH, __Sort_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Sort_T2__
+        JUMP_IF_FALSE, 0x00000718
+        PUSH, __Sort_L9__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L1__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __derived1
+        PUSH, __Sort_T2__
+        EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Sort_T2__
+        JUMP_IF_FALSE, 0x000004B8
+        PUSH, __Sort_L2__
+        PUSH, __c_i32_1
+        PUSH, __Sort_L2__
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L0__
+        PUSH, __c_i32_1
+        PUSH, __Sort_L0__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Sort_L0__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived2
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived2
+        PUSH, __derived1
+        PUSH, __Sort_T2__
+        EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Sort_T2__
+        JUMP_IF_FALSE, 0x000003AC
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __Sort_L0__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1048856
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __Sort_L2__
+        PUSH, __c_i32_1
+        PUSH, __Sort_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __Sort_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1048860
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP, 0xFFFFFFFC
+        PUSH, __c_i32_0
+        PUSH, __Step_L9__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Step_L12__
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __Step_L0__
+        COPY
+        PUSH, __G__memory
+        PUSH, __c_i32_1048856
+        PUSH, __Step_L1__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __c_i32_1049888
+        PUSH, __Step_L2__
+        EXTERN, "SystemBitConverter.__ToInt32__SystemByteArray_SystemInt32__SystemInt32"
+        PUSH, __Step_L1__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Step_L2__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __derived1
+        PUSH, __Step_T2__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Step_T2__
+        JUMP_IF_FALSE, 0xFFFFFFFC
+        PUSH, __G__memory
+        PUSH, __c_i32_1048860
+        PUSH, __Step_T3__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, __Step_T3__
+        PUSH, __Step_L3__
+        EXTERN, "SystemConvert.__ToInt32__SystemByte__SystemInt32"
+        PUSH, __Step_L3__
+        PUSH, __Step_T2__
+        EXTERN, "SystemConvert.__ToBoolean__SystemInt32__SystemBoolean"
+        PUSH, __Step_T2__
+        JUMP_IF_FALSE, 0x00000DA0
+        PUSH, __c_i32_1048864
+        PUSH, __Step_T1__
+        COPY
+        JUMP, 0x00000DB4
+        PUSH, __c_i32_1049376
+        PUSH, __Step_T1__
+        COPY
+        PUSH, __Step_T1__
+        PUSH, __Step_L4__
+        COPY
+        PUSH, __Step_L3__
+        PUSH, __Step_T2__
+        EXTERN, "SystemConvert.__ToBoolean__SystemInt32__SystemBoolean"
+        PUSH, __Step_T2__
+        JUMP_IF_FALSE, 0x00000E0C
+        PUSH, __c_i32_1049376
+        PUSH, __Step_T1__
+        COPY
+        JUMP, 0x00000E20
+        PUSH, __c_i32_1048864
+        PUSH, __Step_T1__
+        COPY
+        PUSH, __Step_T1__
+        PUSH, __Step_L5__
+        COPY
+        PUSH, __Step_L0__
+        PUSH, __Step_L6__
+        COPY
+        PUSH, __Step_L6__
+        PUSH, __Step_L1__
+        PUSH, __Step_L7__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Step_L2__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Step_L7__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __derived1
+        PUSH, __Step_T2__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Step_T2__
+        JUMP_IF_FALSE, 0x00000EF4
+        PUSH, __Step_L2__
+        PUSH, __Step_T1__
+        COPY
+        JUMP, 0x00000F08
+        PUSH, __Step_L7__
+        PUSH, __Step_T1__
+        COPY
+        PUSH, __Step_T1__
+        PUSH, __Step_L8__
+        COPY
+        PUSH, __Step_L8__
+        PUSH, __Step_L1__
+        PUSH, __Step_L9__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Step_L9__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived2
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __derived2
+        PUSH, __Step_T2__
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Step_T2__
+        JUMP_IF_FALSE, 0x00000FA8
+        PUSH, __Step_L2__
+        PUSH, __Step_T1__
+        COPY
+        JUMP, 0x00000FBC
+        PUSH, __Step_L9__
+        PUSH, __Step_T1__
+        COPY
+        PUSH, __Step_T1__
+        PUSH, __Step_L0__
+        COPY
+        PUSH, __Step_L0__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived3
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Step_L6__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived4
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived3
+        PUSH, __derived4
+        PUSH, __Step_T2__
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Step_T2__
+        JUMP_IF_FALSE, 0x000013EC
+        PUSH, __Step_L0__
+        PUSH, __Step_L6__
+        PUSH, __Step_L10__
+        EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Step_L4__
+        PUSH, __Step_L6__
+        PUSH, __Step_L7__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Step_L8__
+        PUSH, __Step_L11__
+        COPY
+        PUSH, __Step_L6__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Step_L8__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __derived1
+        PUSH, __Step_T2__
+        EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Step_T2__
+        JUMP_IF_FALSE, 0x00001164
+        PUSH, __Step_L5__
+        PUSH, __Step_L11__
+        PUSH, __Step_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __Step_T1__
+        PUSH, __Step_T3__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, __Step_T3__
+        PUSH, __Step_L12__
+        EXTERN, "SystemConvert.__ToInt32__SystemByte__SystemInt32"
+        JUMP, 0x0000130C
+        PUSH, __Step_L5__
+        PUSH, __Step_L6__
+        PUSH, __Step_T1__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __Step_T1__
+        PUSH, __Step_T3__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, __Step_T3__
+        PUSH, __Step_L13__
+        EXTERN, "SystemConvert.__ToInt32__SystemByte__SystemInt32"
+        PUSH, __Step_L11__
+        PUSH, __Step_L0__
+        PUSH, __Step_T2__
+        EXTERN, "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Step_T2__
+        JUMP_IF_FALSE, 0x00001294
+        PUSH, __Step_L13__
+        PUSH, __c_i32_255
+        PUSH, __Step_T1__
+        EXTERN, "SystemInt32.__op_LogicalAnd__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Step_L5__
+        PUSH, __Step_L11__
+        PUSH, __Step_T4__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __G__memory
+        PUSH, __Step_T4__
+        PUSH, __Step_T3__
+        EXTERN, "SystemByteArray.__Get__SystemInt32__SystemByte"
+        PUSH, __Step_T3__
+        PUSH, __Step_L12__
+        EXTERN, "SystemConvert.__ToInt32__SystemByte__SystemInt32"
+        PUSH, __Step_T1__
+        PUSH, __Step_L12__
+        PUSH, __Step_T2__
+        EXTERN, "SystemInt32.__op_LessThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Step_T2__
+        JUMP_IF_FALSE, 0x0000130C
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __Step_L13__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __Step_L7__
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __Step_L6__
+        PUSH, __c_i32_1
+        PUSH, __Step_L6__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        JUMP, 0x0000137C
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __Step_L12__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __Step_L7__
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __Step_L11__
+        PUSH, __c_i32_1
+        PUSH, __Step_L11__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Step_L7__
+        PUSH, __c_i32_1
+        PUSH, __Step_L7__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Step_L10__
+        PUSH, __c_i32_n1
+        PUSH, __Step_L10__
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Step_L10__
+        PUSH, __c_i32_0
+        PUSH, __Step_T2__
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Step_T2__
+        JUMP_IF_FALSE, 0x00001094
+        PUSH, __Step_L9__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived0
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __Step_L2__
+        PUSH, __c_i32_n2147483648
+        PUSH, __derived1
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __derived0
+        PUSH, __derived1
+        PUSH, __Step_T2__
+        EXTERN, "SystemInt32.__op_GreaterThanOrEqual__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __Step_T2__
+        JUMP_IF_FALSE, 0x00000E34
+        PUSH, __Step_L1__
+        PUSH, __c_i32_1
+        PUSH, __Step_T1__
+        EXTERN, "SystemInt32.__op_LeftShift__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __Step_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1048856
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __Step_L3__
+        PUSH, __c_i32_1
+        PUSH, __Step_T1__
+        EXTERN, "SystemInt32.__op_LogicalXor__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __Step_T1__
+        EXTERN, "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_i32
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1048860
+        PUSH, __c_i32_1
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP, 0xFFFFFFFC
+    .export Load
+    Load:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x000015A4
+        JUMP, 0x00000000
+    .export Read
+    Read:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x000015C0
+        JUMP, 0x000001B4
+    .export Sort
+    Sort:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x000015DC
+        JUMP, 0x0000029C
+    .export Step
+    Step:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x000015F8
+        JUMP, 0x00000C38
+        PUSH, __ra_1
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x0000160C
+        PUSH, __ra_2
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x0000160C
+        PUSH, __ra_3
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x0000160C
+        PUSH, __ra_4
+        PUSH, __init_RA
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __c_i32_0
+        PUSH, __inited
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __c_i32_1114112
+        PUSH, __G__memory
+        EXTERN, "SystemByteArray.__ctor__SystemInt32__SystemByteArray"
+        PUSH, __data_0
+        PUSH, __data_bytes
+        EXTERN, "SystemConvert.__FromBase64String__SystemString__SystemByteArray"
+        PUSH, __data_bytes
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1048576
+        PUSH, __c_i32_280
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __data_1
+        PUSH, __data_bytes
+        EXTERN, "SystemConvert.__FromBase64String__SystemString__SystemByteArray"
+        PUSH, __data_bytes
+        PUSH, __c_i32_0
+        PUSH, __G__memory
+        PUSH, __c_i32_1048856
+        PUSH, __c_i32_5
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __kpool_b64
+        PUSH, __kpool
+        EXTERN, "SystemConvert.__FromBase64String__SystemString__SystemByteArray"
+        PUSH, __c_i32_1
+        PUSH, __st_i32
+        EXTERN, "SystemInt32Array.__ctor__SystemInt32__SystemInt32Array"
+        JUMP_INDIRECT, __init_RA
+.code_end

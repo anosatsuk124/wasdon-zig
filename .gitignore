@@ -4,3 +4,9 @@ zig-out/
 
 # Rust build outputs (produced by `cargo build` for the examples/*-rs crates)
 target/
+
+# Generated from the optional external Linux kernel (zig build unity -Dlinux=…)
+unity/Wasdon/Examples/linux-boot.asset
+unity/Wasdon/Examples/linux-boot.asset.meta
+unity/Wasdon/Examples/linux-boot.uasm.txt
+unity/Wasdon/Examples/linux-boot.uasm.txt.meta

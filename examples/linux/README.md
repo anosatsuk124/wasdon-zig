@@ -56,17 +56,36 @@ function the kernel called has no counterpart here.)
 | checker findings | 0 |
 | executed up to the task switch | 249 565 381 instructions, 51 691 377 `EXTERN`s |
 
-This has been run in the emulator only. It is not a world asset: the Udon
-VM ends an event after ten seconds and this boot is one event of fifty
-million externs, the kernel takes half a gigabyte of linear memory for
-itself, and nobody has given the Unity assembler a 124 MB program.
+The table describes the single-event emulator run. For Unity, generate
+the separate `linux-boot` asset with
+`zig build unity -Doptimize=ReleaseFast -Dlinux=/path/to/vmlinux.wasm`.
+Its example-only assembly pass adds resumable events at points where the
+Udon operand stack is empty, and mirrors console lines to a heap variable
+read by the scene panel. The guest still takes about half a gigabyte of
+linear memory and stops at the same task switch. See the
+[Unity example setup](../../unity/Wasdon/README.md#linux-boot).
 
 ## Reproducing it
 
 No kernel binary is checked in (30 MB, GPL-2.0). The one used here is the
 build the project's demo page loads,
 `https://joelseverin.github.io/linux-wasm/vmlinux.wasm` (Linux 6.4.16,
-clang 18.1.2; SHA-256 `3fa6b282…1353d39`).
+clang 18.1.2). Its SHA-256 digest is below.
+
+```text
+3fa6b28252b0d72c826991a8e2e95a9919a9e8ea46d2d38a6d28b91011353d39
+```
+
+Download and check that image before building the Unity asset:
+
+```sh
+mkdir -p zig-out/wasm
+curl -fL https://joelseverin.github.io/linux-wasm/vmlinux.wasm -o zig-out/wasm/vmlinux.wasm
+printf '%s  %s\n' 3fa6b28252b0d72c826991a8e2e95a9919a9e8ea46d2d38a6d28b91011353d39 zig-out/wasm/vmlinux.wasm | shasum -a 256 -c -
+zig build unity -Doptimize=ReleaseFast -Dlinux=zig-out/wasm/vmlinux.wasm
+```
+
+For the emulator and statistics:
 
 ```sh
 zig build test  -Dlinux=/path/to/vmlinux.wasm   # translate, check, boot, verify the log

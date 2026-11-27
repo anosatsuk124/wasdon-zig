@@ -6,6 +6,14 @@ table is the baseline it is measured against. Numbers are reproducible with
 `zig build stats` (static columns) and the bundled Udon VM emulator (dynamic
 columns) — see the "How the numbers are produced" section at the end.
 
+The Unity sort benchmark runs the same stable bottom-up merge sort in
+Rust, Zig and UdonSharp. It draws the result of each merge width for 48
+values, and measures a separate full sort of 511 values with a warm-up
+and nine measured trials per implementation. Unity's real-time clock
+surrounds the `Sort` event. Array transfers, drawing and the reference
+comparison are outside that interval. These elapsed times measure
+the Udon SDK's execution on the local client.
+
 Column meanings:
 
 | Column | Meaning |

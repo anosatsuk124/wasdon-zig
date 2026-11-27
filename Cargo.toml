@@ -5,6 +5,7 @@ members = [
     "examples/wasm-bench-rs",
     "examples/wasm-bench-alloc-rs",
     "examples/bench/rs",
+    "examples/sort-bench/rs",
     "examples/bench/wasi-rs",
     "examples/rhai-bench",
 ]
@@ -15,6 +16,7 @@ default-members = [
     "examples/wasm-bench-rs",
     "examples/wasm-bench-alloc-rs",
     "examples/bench/rs",
+    "examples/sort-bench/rs",
 ]
 
 [workspace.package]
@@ -34,4 +36,7 @@ strip = "symbols"
 opt-level = 3
 
 [profile.release.package.bench-wasi-rs]
+opt-level = 3
+
+[profile.release.package.sort-bench-rs]
 opt-level = 3

@@ -1,6 +1,6 @@
 //! `zig build unity` — regenerate the Unity assets of the examples.
 //!
-//! For every Zig example this writes, into `unity/Wasdon/Examples/`:
+//! For every shipped example this writes, into `unity/Wasdon/Examples/`:
 //!
 //!   <name>.uasm.txt   the translated Udon Assembly, as a Unity TextAsset
 //!   <name>.asset      a Wasdon Assembly Program Asset that reads it
@@ -14,6 +14,7 @@
 const std = @import("std");
 const wasdon = @import("wasdon_zig");
 const fixtures = @import("fixtures");
+const linux_boot = @import("linux_boot.zig");
 
 /// GUID of `unity/Wasdon/Editor/WasdonProgramAsset.cs` (from its .meta).
 const program_asset_script = "db8885294ebd4dce1bbd53442e33630b";
@@ -33,16 +34,30 @@ pub fn main(init: std.process.Init) !u8 {
         var text: std.Io.Writer.Allocating = .init(arena);
         _ = try wasdon.translateBytes(arena, ex.wasm, &text.writer, .{});
 
-        const uasm = try std.fmt.allocPrint(arena, "Examples/{s}.uasm.txt", .{ex.name});
-        const asset = try std.fmt.allocPrint(arena, "Examples/{s}.asset", .{ex.name});
-        try write(init.io, arena, dir, uasm, text.written());
-        try write(init.io, arena, dir, try meta(arena, uasm), try std.fmt.allocPrint(arena, text_meta, .{guid(uasm)}));
-        try write(init.io, arena, dir, asset, try std.fmt.allocPrint(arena, asset_yaml, .{ program_asset_script, ex.name, guid(uasm) }));
-        try write(init.io, arena, dir, try meta(arena, asset), try std.fmt.allocPrint(arena, asset_meta, .{guid(asset)}));
+        try writeExample(init.io, arena, dir, ex.name, text.written());
+        count += 1;
+    }
+    if (fixtures.find("linux")) |ex| {
+        var raw: std.Io.Writer.Allocating = .init(init.gpa);
+        defer raw.deinit();
+        _ = try wasdon.translateWithMeta(init.gpa, ex.wasm, ex.meta, &raw.writer, .{ .disable = .{ .stack_return = true } });
+        var sliced: std.Io.Writer.Allocating = .init(init.gpa);
+        defer sliced.deinit();
+        try linux_boot.write(init.gpa, raw.written(), &sliced.writer);
+        try writeExample(init.io, arena, dir, "linux-boot", sliced.written());
         count += 1;
     }
     std.debug.print("wrote {d} examples to {s}\n", .{ count, dir });
     return 0;
+}
+
+fn writeExample(io: std.Io, arena: std.mem.Allocator, dir: []const u8, name: []const u8, assembly: []const u8) !void {
+    const uasm = try std.fmt.allocPrint(arena, "Examples/{s}.uasm.txt", .{name});
+    const asset = try std.fmt.allocPrint(arena, "Examples/{s}.asset", .{name});
+    try write(io, arena, dir, uasm, assembly);
+    try write(io, arena, dir, try meta(arena, uasm), try std.fmt.allocPrint(arena, text_meta, .{guid(uasm)}));
+    try write(io, arena, dir, asset, try std.fmt.allocPrint(arena, asset_yaml, .{ program_asset_script, name, guid(uasm) }));
+    try write(io, arena, dir, try meta(arena, asset), try std.fmt.allocPrint(arena, asset_meta, .{guid(asset)}));
 }
 
 fn meta(arena: std.mem.Allocator, path: []const u8) ![]const u8 {

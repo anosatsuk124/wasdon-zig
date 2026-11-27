@@ -4,7 +4,8 @@ Editor support for running wasdon-zig output in a VRChat world, and the
 repository's examples as ready-made assets.
 
 Copy this folder (`unity/Wasdon/`) into the `Assets/` folder of a Unity
-project that has the VRChat Worlds SDK installed.
+project that has the VRChat Worlds SDK with UdonSharp and network events
+installed. The new examples use the UdonSharp compiler bundled with the SDK.
 
 ## Wasdon Assembly Program Asset
 
@@ -45,12 +46,44 @@ open scene, wired up and ready to enter Play mode or build:
 | `image-codec` | a quad; QOI pictures decode onto it, are re-encoded and compared | interact for the next picture |
 | `ragdoll` | sixteen joint spheres and a line renderer: a figure that walks about | interact to knock it over |
 | `blockfall` | a quad showing the well, a score line, five UI buttons | the buttons; synced for everyone in the instance |
+| Linux Boot | live Linux WASM console output on a panel | Start and Reload are network events. Boot and display run locally. |
+| Sort Benchmark | three animated bar charts and timings for Rust, Zig and UdonSharp | Visualize, Benchmark and Reset run locally |
 
 The other examples have assets too, without scene objects of their own:
 `wasm-bench` and `wasi-hello` only log (put them on any UdonBehaviour and
 read the console); `bench-zig` runs a workload for each of the custom
 events `Fib`, `Mandel`, `Str`, `Tak` and `Ack`; `udon-orbit` needs an object to orbit and
 a prefab to clone (see the comments in `examples/udon-orbit/main.zig`).
+
+### Linux Boot
+
+Generate the Linux program asset from the kernel image documented in
+[`examples/linux/`](../../examples/linux/) before copying the Wasdon folder
+into Unity:
+
+```sh
+zig build unity -Doptimize=ReleaseFast -Dlinux=/path/to/vmlinux.wasm
+```
+
+**Start** boots an idle console and **Reload** restarts it at any point.
+The button starts the local request immediately and broadcasts the command
+to other clients once the network object is ready. The panel shows when
+it is waiting for the local kernel and counts boot steps while the
+console initializes. The first kernel line appears late in the boot.
+The panel then streams the console up to the first task switch. A late
+joiner starts in the ready state until the next command. The kernel
+allocates about 512 MiB of guest memory per client.
+The generated program is large and is built locally.
+
+### Sort Benchmark
+
+**Visualize** steps through the merge widths for the same 48 values in
+each implementation. **Benchmark** sorts the same 511 values in each
+implementation after a warm-up, checks each result against a reference
+and shows the median of nine runs and the ratio to the fastest median.
+Input preparation, array transfers, validation and UI updates are outside
+the measured event. The UdonSharp program is built from
+[`WasdonMergeSort.cs`](Examples/WasdonMergeSort.cs) by the Unity editor.
 
 Notes:
 
@@ -63,12 +96,19 @@ Notes:
 
 ## Regenerating the examples
 
-The files in `Examples/` are generated; do not edit them. From the
-repository root:
+The translated assets were generated with Zig 0.16.0 and Rust 1.94.0. The
+UdonSharp sources were checked with Unity 2022.3.22f1 and Worlds SDK 3.10.6.
+From the repository root, with Zig 0.16.0 on `PATH`:
 
 ```sh
-zig build unity
+rustup toolchain install 1.94.0
+rustup target add --toolchain 1.94.0 wasm32v1-none wasm32-wasip1
+RUSTUP_TOOLCHAIN=1.94.0 zig build unity -Drust -Doptimize=ReleaseFast
+RUSTUP_TOOLCHAIN=1.94.0 zig build test -Drust -Doptimize=ReleaseFast
 ```
 
-`zig build test` fails if they no longer match what the translator
-produces.
+Add `-Dlinux=/path/to/vmlinux.wasm` to both commands to generate and test
+Linux using the image with the SHA-256 listed in
+[`examples/linux/`](../../examples/linux/#reproducing-it).
+The first Unity import assembles the Linux program. Unity stores the
+resulting SDK program and reuses it when the source file is unchanged.

@@ -1,6 +1,9 @@
 {
   "version": 1,
   "behaviour": { "name": "Linux" },
+  "functions": {
+    "boot": { "source": { "kind": "export", "name": "_start" }, "label": "_start" }
+  },
   "fields": {
     "commandLine": {
       "source": { "kind": "symbol", "name": "boot_command_line" },

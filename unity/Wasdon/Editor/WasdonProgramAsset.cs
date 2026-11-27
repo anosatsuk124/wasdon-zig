@@ -48,17 +48,28 @@ namespace Wasdon
         [SerializeField, HideInInspector]
         private uint heapSize;
 
+        [SerializeField, HideInInspector]
+        private Hash128 assembledRevision;
+
         /// Heap slots the current assembly was given.
         public uint HeapSize => heapSize;
 
         protected override void RefreshProgramImpl()
         {
-            if (assemblySource != null)
+            Hash128 revision = assemblySource != null
+                ? AssetDatabase.GetAssetDependencyHash(AssetDatabase.GetAssetPath(assemblySource))
+                : default;
+            if (revision.isValid && assembledRevision == revision)
             {
-                udonAssembly = assemblySource.text;
+                if (program == null && serializedUdonProgramAsset != null)
+                    program = serializedUdonProgramAsset.RetrieveProgram();
+                if (program != null) return;
             }
 
-            if (string.IsNullOrWhiteSpace(udonAssembly))
+            // A file-backed program can be very large. Keep only the
+            // TextAsset reference in the serialized program source.
+            string assembly = assemblySource != null ? assemblySource.text : udonAssembly;
+            if (string.IsNullOrWhiteSpace(assembly))
             {
                 program = null;
                 assemblyError = "No assembly. Assign an Assembly Source or load a .uasm file.";
@@ -67,7 +78,7 @@ namespace Wasdon
 
             try
             {
-                uint required = RequiredHeapSize(udonAssembly);
+                uint required = RequiredHeapSize(assembly);
                 if (required > MaximumHeapSize)
                 {
                     throw new InvalidOperationException(
@@ -75,7 +86,8 @@ namespace Wasdon
                 }
 
                 heapSize = Math.Max(required, DefaultHeapSize);
-                program = Assemble(udonAssembly, heapSize);
+                program = Assemble(assembly, heapSize);
+                assembledRevision = revision;
                 assemblyError = null;
             }
             catch (Exception e)
@@ -130,14 +142,24 @@ namespace Wasdon
         private static readonly FieldInfo TypeResolverGroupField =
             typeof(UdonEditorInterface).GetField("_typeResolverGroup", BindingFlags.NonPublic | BindingFlags.Instance);
 
+        private static readonly PropertyInfo EditorInterfaceProperty =
+            typeof(UdonEditorManager).GetProperty("UdonEditorInterface", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+
         /// Assemble with a heap of exactly `size` slots. The SDK's own entry
         /// point (UdonEditorManager.Assemble) offers no way to choose the
         /// size, so this builds an assembler around a custom heap factory,
         /// the way UdonSharp does.
         private static IUdonProgram Assemble(string assembly, uint size)
         {
-            var editorInterface = new UdonEditorInterface();
-            editorInterface.AddTypeResolver(new UdonBehaviourTypeResolver());
+            // Reuse the SDK's lazily initialized interface. Creating our
+            // own here can race the SDK's background node registration
+            // while Unity imports program assets.
+            var editorInterface = EditorInterfaceProperty?.GetValue(UdonEditorManager.Instance) as UdonEditorInterface;
+            if (editorInterface == null)
+            {
+                editorInterface = new UdonEditorInterface();
+                editorInterface.AddTypeResolver(new UdonBehaviourTypeResolver());
+            }
             var factory = new FixedHeapFactory(size);
 
             if (TypeResolverGroupField?.GetValue(editorInterface) is IUAssemblyTypeResolver resolver)
@@ -194,14 +216,18 @@ namespace Wasdon
                 if (EditorGUI.EndChangeCheck())
                 {
                     Undo.RecordObject(this, "Change Assembly Source");
+                    if (newSource == null && assemblySource != null)
+                        udonAssembly = assemblySource.text;
                     assemblySource = newSource;
                     dirty = true;
                     UdonEditorManager.Instance.QueueAndRefreshProgram(this);
                 }
             }
 
-            int length = udonAssembly?.Length ?? 0;
-            EditorGUILayout.LabelField("Assembly size", $"{length:N0} characters");
+            string length = assemblySource != null
+                ? $"{assemblySource.dataSize:N0} bytes"
+                : $"{udonAssembly?.Length ?? 0:N0} characters";
+            EditorGUILayout.LabelField("Assembly size", length);
             EditorGUILayout.LabelField("Heap size", heapSize == 0 ? "not assembled" : $"{heapSize:N0} slots");
 
             using (new EditorGUILayout.HorizontalScope())
@@ -223,13 +249,14 @@ namespace Wasdon
 
                     if (GUILayout.Button("Reassemble"))
                     {
+                        assembledRevision = default;
                         UdonEditorManager.Instance.QueueAndRefreshProgram(this);
                     }
                 }
 
                 if (GUILayout.Button("Copy Assembly"))
                 {
-                    EditorGUIUtility.systemCopyBuffer = udonAssembly;
+                    EditorGUIUtility.systemCopyBuffer = assemblySource != null ? assemblySource.text : udonAssembly;
                 }
             }
         }

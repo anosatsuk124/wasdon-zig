@@ -48,22 +48,76 @@ test "every example translates to valid Udon Assembly and behaves as expected" {
     }
 }
 
-test "the Unity assets hold what the translator produces now" {
-    inline for (.{ "wasm-bench", "udon-orbit", "pi", "mandelbrot", "image-codec", "ragdoll", "blockfall", "bench-zig", "wasi-hello" }) |name| {
-        const ex = fixtures.find(name).?;
-        try testing.expect(fixtures.hasUnityAsset(ex));
-        var fresh: std.Io.Writer.Allocating = .init(testing.allocator);
-        defer fresh.deinit();
-        _ = try wasdon.translateBytes(testing.allocator, ex.wasm, &fresh.writer, .{});
-        if (!std.mem.eql(u8, @embedFile("unity/" ++ name ++ ".uasm.txt"), fresh.written())) {
-            std.debug.print("unity/Wasdon/Examples/{s}.uasm.txt is out of date: run `zig build unity`\n", .{name});
-            return error.TestUnexpectedResult;
+test "the Unity Linux console boots in bounded events and reload starts fresh" {
+    const linux = fixtures.find("linux") orelse return error.SkipZigTest;
+    const gpa = testing.allocator;
+    var raw: std.Io.Writer.Allocating = .init(gpa);
+    defer raw.deinit();
+    _ = try wasdon.translateWithMeta(gpa, linux.wasm, linux.meta, &raw.writer, .{ .disable = .{ .stack_return = true } });
+    var sliced: std.Io.Writer.Allocating = .init(gpa);
+    defer sliced.deinit();
+    try @import("linux_boot").write(gpa, raw.written(), &sliced.writer);
+    var program = try wasdon.udon.program.parse(gpa, sliced.written(), null);
+    defer program.deinit();
+
+    var report = try wasdon.udon.check.check(gpa, &program);
+    defer report.deinit();
+    if (!report.ok()) {
+        for (report.errors[0..@min(report.errors.len, 20)]) |finding| {
+            std.debug.print("linux-boot:{d}: {s}\n", .{ finding.line, finding.message });
         }
+        return error.TestUnexpectedResult;
+    }
+
+    const vm = try wasdon.udon.vm.Vm.init(gpa, &program, .{});
+    defer vm.deinit();
+    try testing.expect(try vm.runEvent("Boot"));
+    try testing.expectEqualStrings("", vm.getVar("bootConsole").?.string);
+    for (0..30000) |_| {
+        if (!vm.getVar("bootRunning").?.boolean) break;
+        const before = vm.stats.instrs;
+        try testing.expect(try vm.runEvent("BootStep"));
+        try testing.expect(vm.stats.instrs - before < 1_000_000);
+    }
+    try testing.expect(!vm.getVar("bootRunning").?.boolean);
+    try linux.verify.?(vm);
+    try testing.expectEqualStrings(try vm.logText(), vm.getVar("bootConsole").?.string);
+
+    try testing.expect(try vm.runEvent("Boot"));
+    try testing.expect(vm.getVar("bootRunning").?.boolean);
+    try testing.expectEqualStrings("", vm.getVar("bootConsole").?.string);
+    for (0..30000) |_| {
+        try testing.expect(try vm.runEvent("BootStep"));
+        if (vm.getVar("bootConsole").?.string.len != 0) break;
+    }
+    try testing.expect(vm.getVar("bootRunning").?.boolean);
+    try testing.expect(std.mem.startsWith(u8, vm.getVar("bootConsole").?.string, "Linux version "));
+}
+
+test "the Unity assets hold what the translator produces now" {
+    inline for (.{ "wasm-bench", "udon-orbit", "pi", "mandelbrot", "image-codec", "ragdoll", "blockfall", "bench-zig", "wasi-hello", "sort-bench-zig" }) |name| {
+        try expectUnityAsset(name, @embedFile("unity/" ++ name ++ ".uasm.txt"));
+    }
+    const with_rust = comptime fixtures.find("sort-bench-rs") != null;
+    if (with_rust) {
+        try expectUnityAsset("sort-bench-rs", @embedFile("unity/sort-bench-rs.uasm.txt"));
     }
     // Every example with an asset is in the list above.
     var with_asset: usize = 0;
     for (fixtures.examples) |ex| with_asset += @intFromBool(fixtures.hasUnityAsset(ex));
-    try testing.expectEqual(@as(usize, 9), with_asset);
+    try testing.expectEqual(@as(usize, 10) + @intFromBool(with_rust), with_asset);
+}
+
+fn expectUnityAsset(name: []const u8, asset: []const u8) !void {
+    const ex = fixtures.find(name).?;
+    try testing.expect(fixtures.hasUnityAsset(ex));
+    var fresh: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer fresh.deinit();
+    _ = try wasdon.translateBytes(testing.allocator, ex.wasm, &fresh.writer, .{});
+    if (!std.mem.eql(u8, asset, fresh.written())) {
+        std.debug.print("unity/Wasdon/Examples/{s}.uasm.txt is out of date: run `zig build unity` (add `-Drust` for Rust)\n", .{name});
+        return error.TestUnexpectedResult;
+    }
 }
 
 test "the bench fixture parses as a WASM module" {

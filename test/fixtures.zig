@@ -33,7 +33,7 @@ pub const Example = struct {
     /// Inspect the emulated scene after the last event.
     verify: ?*const fn (*Vm) anyerror!void = null,
     /// Built only on request (`-Drust`, `-Drhai`, `-Dmruby`): it needs a
-    /// toolchain not every build has, so it is not among the Unity assets.
+    /// toolchain or input file not every build has.
     optional: bool = false,
 };
 
@@ -96,7 +96,36 @@ const zig_examples = [_]Example{
         .setup = blockfallSetup,
         .verify = blockfallVerify,
     },
+    .{ .name = "sort-bench-zig", .wasm = @embedFile("sort-bench-zig.wasm"), .scenario = "Load,Step,Read,Sort,Read", .setup = sortSetup, .verify = sortVerify },
 };
+
+const sort_input = [_]u8{ 255, 42, 0, 42, 171, 1, 254, 17, 1, 16, 2 };
+const sort_output = [_]u8{ 0, 1, 1, 2, 16, 17, 42, 42, 171, 254, 255 };
+
+fn sortSetInput(vm: *Vm, input: []const u8) !*udon.vm.Array {
+    const data = try vm.newArray("SystemByteArray", @intCast(input.len));
+    @memcpy(data.bytes, input);
+    try std.testing.expect(vm.setVar("data", .{ .array = data }));
+    return data;
+}
+
+fn sortSetup(vm: *Vm) !void {
+    _ = try sortSetInput(vm, &sort_input);
+}
+
+fn sortVerify(vm: *Vm) !void {
+    try std.testing.expectEqualSlices(u8, &sort_output, vm.getVar("data").?.array.bytes);
+    const data = try sortSetInput(vm, &sort_input);
+    _ = try vm.runEvent("Load");
+    _ = try vm.runEvent("Step");
+    _ = try vm.runEvent("Read");
+    try std.testing.expectEqualSlices(u8, &.{ 42, 255, 0, 42, 1, 171, 17, 254, 1, 16, 2 }, data.bytes);
+    _ = try sortSetInput(vm, &.{});
+    _ = try vm.runEvent("Load");
+    _ = try vm.runEvent("Sort");
+    _ = try vm.runEvent("Read");
+    try std.testing.expect(vm.fault == null);
+}
 
 fn piSetup(vm: *Vm) !void {
     const text = try vm.newObject("UnityEngineUIText");
@@ -424,6 +453,7 @@ const rust_examples = if (build_options.with_rust) [_]Example{
         .optional = true,
     },
     .{ .name = "bench-rs", .wasm = @embedFile("bench-rs.wasm"), .scenario = usharp_scenario, .verify = benchVerify, .optional = true },
+    .{ .name = "sort-bench-rs", .wasm = @embedFile("sort-bench-rs.wasm"), .scenario = "Load,Step,Read,Sort,Read", .setup = sortSetup, .verify = sortVerify, .optional = true },
     .{ .name = "bench-wasi-rs", .wasm = @embedFile("bench-wasi-rs.wasm"), .scenario = "_start", .expected_log = wasi_bench_log, .verify = wasiBenchVerify, .optional = true },
 } else [_]Example{};
 
@@ -515,9 +545,9 @@ pub const Result = struct {
     }
 };
 
-/// The Zig examples ship as Unity assets (`unity/Wasdon/Examples/`).
+/// The shipped Unity assets (`unity/Wasdon/Examples/`).
 pub fn hasUnityAsset(ex: Example) bool {
-    return ex.uasm == null and !ex.optional;
+    return ex.uasm == null and (!ex.optional or std.mem.eql(u8, ex.name, "sort-bench-rs"));
 }
 
 /// Translate an example, check the output against the Udon Assembly rules,

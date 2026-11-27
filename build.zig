@@ -22,6 +22,7 @@ const zig_examples = [_]struct {
     .{ .name = "ragdoll", .root = "examples/ragdoll/main.zig", .core = "examples/ragdoll/core.zig" },
     .{ .name = "blockfall", .root = "examples/blockfall/main.zig", .core = "examples/blockfall/core.zig" },
     .{ .name = "bench-zig", .root = "examples/bench/zig/main.zig", .optimize = .ReleaseFast },
+    .{ .name = "sort-bench-zig", .root = "examples/sort-bench/zig/main.zig", .optimize = .ReleaseFast },
     .{ .name = "wasi-hello", .root = "examples/wasi-hello/main.zig", .wasi = true },
 };
 
@@ -37,6 +38,7 @@ const rust_examples = [_]struct {
     .{ .name = "wasm-bench-alloc-rs", .artifact = "wasm_bench_alloc_rs.wasm" },
     .{ .name = "udon-orbit-rs", .artifact = "udon_orbit_rs.wasm" },
     .{ .name = "bench-rs", .artifact = "bench_rs.wasm" },
+    .{ .name = "sort-bench-rs", .artifact = "sort_bench_rs.wasm" },
     .{ .name = "bench-wasi-rs", .artifact = "bench_wasi_rs.wasm", .wasi = true },
 };
 
@@ -152,9 +154,9 @@ pub fn build(b: *std.Build) void {
     }
 
     if (with_rust) {
-        const cargo = b.addSystemCommand(&.{ "cargo", "build", "--release", "--quiet" });
+        const cargo = b.addSystemCommand(&.{ "cargo", "build", "--release", "--locked", "--quiet" });
         // The WASI programs are not default members of the workspace.
-        const cargo_wasi = b.addSystemCommand(&.{ "cargo", "build", "--release", "--quiet", "--target", "wasm32-wasip1", "-p", "bench-wasi-rs" });
+        const cargo_wasi = b.addSystemCommand(&.{ "cargo", "build", "--release", "--locked", "--quiet", "--target", "wasm32-wasip1", "-p", "bench-wasi-rs" });
         cargo_wasi.step.dependOn(&cargo.step);
         for (rust_examples) |ex| {
             const copy = b.addWriteFiles();
@@ -198,12 +200,22 @@ pub fn build(b: *std.Build) void {
     for ([_]*std.Build.Module{ wasm_mod, udon_mod, translator_mod, lib_mod, exe.root_module }) |m| {
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = m })).step);
     }
+    const linux_boot = b.createModule(.{
+        .root_source_file = b.path("tools/linux_boot.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "wasdon_zig", .module = lib_mod }},
+    });
     const integration = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("test/examples_test.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{ .{ .name = "wasdon_zig", .module = lib_mod }, .{ .name = "fixtures", .module = fixtures } },
+            .imports = &.{
+                .{ .name = "wasdon_zig", .module = lib_mod },
+                .{ .name = "fixtures", .module = fixtures },
+                .{ .name = "linux_boot", .module = linux_boot },
+            },
         }),
     });
     // The checked-in Unity assets must be what the translator produces now.
@@ -212,6 +224,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path(b.fmt("unity/Wasdon/Examples/{s}.uasm.txt", .{ex.name})),
         });
     }
+    if (with_rust) integration.root_module.addAnonymousImport("unity/sort-bench-rs.uasm.txt", .{
+        .root_source_file = b.path("unity/Wasdon/Examples/sort-bench-rs.uasm.txt"),
+    });
     test_step.dependOn(&b.addRunArtifact(integration).step);
     test_step.dependOn(core_tests);
 
