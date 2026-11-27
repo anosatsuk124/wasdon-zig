@@ -30,6 +30,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - name: Install producer targets and portable Python
         run: |
+          mise bin-paths zig >> "$GITHUB_PATH"
           rustup target add wasm32v1-none
           uv python install 3.12.13
       - name: Build and test the translator

@@ -26,16 +26,23 @@ def run(args, **kwargs):
 
 
 def tool(name):
-    names = [shutil.which(name)]
     if name == "zig":
-        names += [CACHE / ("zig-" + ZIG) / ("zig" + EXE),
-                  MISE / "installs/zig" / ZIG / ("zig" + EXE),
-                  MISE / "installs/zig" / ZIG / "bin" / ("zig" + EXE)]
+        # A mise shim can select a different toolchain when the build changes cwd.
+        names = [CACHE / ("zig-" + ZIG) / ("zig" + EXE),
+                 MISE / "installs/zig" / ZIG / ("zig" + EXE),
+                 MISE / "installs/zig" / ZIG / "bin" / ("zig" + EXE), shutil.which(name)]
     else:
-        names += [Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "bin" / (name + EXE)]
+        names = [shutil.which(name), Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "bin" / (name + EXE)]
     for p in names:
-        if p and Path(p).is_file() and (name != "zig" or run([p, "version"]) == ZIG):
-            return str(p)
+        if not p or not Path(p).is_file():
+            continue
+        if name == "zig":
+            try:
+                if run([p, "version"], stderr=subprocess.DEVNULL) != ZIG:
+                    continue
+            except (OSError, subprocess.CalledProcessError):
+                continue
+        return str(p)
     return None
 
 

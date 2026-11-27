@@ -1,3 +1,4 @@
 docs/udon_nodes.txt text eol=lf
+test/expected/*.log text eol=lf
 *.uasm.txt text eol=lf
 *.sh text eol=lf
