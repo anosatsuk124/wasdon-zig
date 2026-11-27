@@ -1,6 +1,8 @@
 # Zig build outputs / caches
 .zig-cache/
 zig-out/
+.wasdon/
+__pycache__/
 
 # Rust build outputs (produced by `cargo build` for the examples/*-rs crates)
 target/

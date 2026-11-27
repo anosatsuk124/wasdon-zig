@@ -1,0 +1,29 @@
+
+export fn Probe() void {
+    const go = gameObject();
+    const tr = w.raw.UnityEngineGameObject_get_transform__UnityEngineTransform(go);
+    const kind = w.raw.UnityEngineTransform_GetType__SystemType(tr);
+    const found = w.raw.UnityEngineGameObject_GetComponent__T(go, kind);
+    const p = w.raw.UnityEngineVector3Array_ctor__SystemInt32__UnityEngineVector3Array(1);
+    const q = w.raw.UnityEngineQuaternionArray_ctor__SystemInt32__UnityEngineQuaternionArray(1);
+    w.raw.UnityEngineTransform_GetPositionAndRotation__UnityEngineVector3Ref_UnityEngineQuaternionRef__SystemVoid(tr, p, q);
+    const pos = w.raw.UnityEngineVector3Array_Get__SystemInt32__UnityEngineVector3(p, 0);
+    const rot = w.raw.UnityEngineQuaternionArray_Get__SystemInt32__UnityEngineQuaternion(q, 0);
+    const origin = w.raw.UnityEngineVector3_ctor__SystemSingle_SystemSingle_SystemSingle__UnityEngineVector3(40.0, 0.0, 0.0);
+    const dir = w.raw.UnityEngineVector3_ctor__SystemSingle_SystemSingle_SystemSingle__UnityEngineVector3(0.0, 0.0, 1.0);
+    const hits = w.raw.UnityEngineRaycastHitArray_ctor__SystemInt32__UnityEngineRaycastHitArray(1);
+    const hit = w.raw.UnityEnginePhysics_Raycast__UnityEngineVector3_UnityEngineVector3_UnityEngineRaycastHitRef__SystemBoolean(origin, dir, hits);
+    const info = w.raw.UnityEngineRaycastHitArray_Get__SystemInt32__UnityEngineRaycastHit(hits, 0);
+    if (w.raw.SystemString_get_Length__SystemInt32(w.string("abc")) == 3) {
+        w.log("string OK");
+    }
+    if (w.raw.UnityEngineObject_op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean(found, tr) != 0) {
+        w.log("generic OK");
+    }
+    if (w.raw.UnityEngineVector3_get_x__SystemSingle(pos) == 2.0 and w.raw.UnityEngineQuaternion_get_w__SystemSingle(rot) == 1.0) {
+        w.log("multiple out OK");
+    }
+    if (hit != 0 and w.raw.UnityEngineRaycastHit_get_distance__SystemSingle(info) == 4.5) {
+        w.log("raycast OK");
+    }
+}

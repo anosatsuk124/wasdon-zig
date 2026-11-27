@@ -9,6 +9,10 @@ const udon = wasdon_zig.udon;
 
 const usage =
     \\Usage:
+    \\  wasdon language <new|add|list|validate|doctor|setup|bindings> [--help]
+    \\  wasdon init [directory] --lang <id>
+    \\  wasdon build [project] [--output <directory>] [--json]
+    \\  wasdon nodes search <text> [--lang <id>] [--json]
     \\  wasdon-zig translate <input.wasm> [-o <output.uasm>] [--meta <file.json>] [--strict] [--stats]
     \\      Translate a WebAssembly module to Udon Assembly (stdout without -o).
     \\      A module built for WASI (wasm32-wasi, wasm32-wasip1) needs nothing
@@ -62,11 +66,38 @@ pub fn main(init: std.process.Init) !u8 {
     if (args.len < 2) return cli.fail("missing subcommand\n\n{s}", .{usage});
     const cmd = args[1];
     const rest = args[2..];
+    if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h")) {
+        try cli.out.interface.writeAll(usage);
+        return 0;
+    }
+    if (std.mem.eql(u8, cmd, "node-catalog")) return udon.nodes.writeCatalog(&cli.out.interface, rest);
+    for ([_][]const u8{ "language", "init", "build", "nodes" }) |sdk_cmd|
+        if (std.mem.eql(u8, cmd, sdk_cmd)) return runSdk(&cli, args[1..]);
     if (std.mem.eql(u8, cmd, "translate")) return runTranslate(&cli, rest);
     if (std.mem.eql(u8, cmd, "inspect")) return runInspect(&cli, rest);
     if (std.mem.eql(u8, cmd, "run")) return runProgram(&cli, rest);
     if (std.mem.eql(u8, cmd, "check")) return runCheck(&cli, rest);
     return cli.fail("unknown subcommand '{s}'\n\n{s}", .{ cmd, usage });
+}
+
+fn runSdk(cli: *Cli, args: []const []const u8) !u8 {
+    const io = cli.init.io;
+    const a = cli.arena;
+    const exe = try Io.Dir.realPathFileAbsoluteAlloc(io, try std.process.executablePathAlloc(io, a), a);
+    const prefix = std.fs.path.dirname(std.fs.path.dirname(exe).?) orelse return cli.fail("SDK executable must be under its bin directory", .{});
+    const windows = @import("builtin").os.tag == .windows;
+    const python = try std.fs.path.join(a, &.{ prefix, "libexec", "python", if (windows) "python.exe" else "bin/python3" });
+    var command: std.ArrayList([]const u8) = .empty;
+    const interpreter = if (std.Io.Dir.accessAbsolute(io, python, .{})) |_| python else |_| if (windows) "python" else "python3";
+    try command.appendSlice(a, &.{ interpreter, "-B", "-X", "utf8", try std.fs.path.join(a, &.{ prefix, "share", "wasdon", "host.py" }) });
+    try command.append(a, exe);
+    try command.appendSlice(a, args);
+    var child = std.process.spawn(io, .{ .argv = command.items }) catch |e|
+        return cli.fail("could not start SDK host '{s}': {t}", .{ command.items[0], e });
+    return switch (try child.wait(io)) {
+        .exited => |status| status,
+        else => 1,
+    };
 }
 
 /// The switches of `translate --without`, as the fields of `Disable` name

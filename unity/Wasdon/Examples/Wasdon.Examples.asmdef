@@ -1,0 +1,4 @@
+{
+  "name": "Wasdon.Examples",
+  "references": ["VRC.Udon", "VRC.SDKBase", "UdonSharp.Runtime", "UnityEngine.UI"]
+}

@@ -83,7 +83,10 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.installArtifact(exe);
-    const run_cmd = b.addRunArtifact(exe);
+    b.getInstallStep().dependOn(&b.addInstallBinFile(exe.getEmittedBin(), if (target.result.os.tag == .windows) "wasdon.exe" else "wasdon").step);
+    b.installDirectory(.{ .source_dir = b.path("sdk"), .install_dir = .prefix, .install_subdir = "share/wasdon", .exclude_extensions = &.{".pyc"} });
+    b.installDirectory(.{ .source_dir = b.path("skills/wasdon-worlds"), .install_dir = .prefix, .install_subdir = "share/wasdon/skills/wasdon-worlds" });
+    const run_cmd = b.addSystemCommand(&.{b.getInstallPath(.bin, if (target.result.os.tag == .windows) "wasdon.exe" else "wasdon")});
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
     b.step("run", "Run the CLI (arguments after --)").dependOn(&run_cmd.step);
@@ -199,6 +202,21 @@ pub fn build(b: *std.Build) void {
 
     // ---- tests ----
     const test_step = b.step("test", "Run unit and integration tests");
+    const switch_runner = b.addExecutable(.{
+        .name = "test-shared-switch",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/shared_switch.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "wasdon_zig", .module = lib_mod }},
+        }),
+    });
+    const sdk_test = b.addSystemCommand(&.{if (b.graph.host.result.os.tag == .windows) "python" else "python3"});
+    sdk_test.addFileArg(b.path("tools/test_sdk.py"));
+    sdk_test.addArg(b.getInstallPath(.bin, if (target.result.os.tag == .windows) "wasdon.exe" else "wasdon"));
+    sdk_test.addArtifactArg(switch_runner);
+    sdk_test.step.dependOn(b.getInstallStep());
+    b.step("test-sdk", "Test language packs and networked switch templates").dependOn(&sdk_test.step);
     for ([_]*std.Build.Module{ wasm_mod, udon_mod, translator_mod, lib_mod, exe.root_module }) |m| {
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = m })).step);
     }

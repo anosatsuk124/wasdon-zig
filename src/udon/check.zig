@@ -335,11 +335,9 @@ fn checkExtern(ctx: *Ctx, ins: program.Instr, pushed: []const u32) !void {
     };
     if (!nodes.exists(text)) return ctx.err(ins.line, "EXTERN \"{s}\" is not in the Udon node list", .{text});
     const sig = nodes.parseSignature(text) orelse return ctx.err(ins.line, "EXTERN \"{s}\" is not a method signature", .{text});
-    if (sig.isGeneric()) return;
-
     const n = sig.staticParamCount();
     const has_this = pushed.len == n + 1 and !sig.isKnownStatic();
-    if (pushed.len != n and !has_this)
+    if ((sig.receiver != null and !has_this) or (pushed.len != n and !has_this))
         return ctx.err(ins.line, "EXTERN \"{s}\" takes {d} operand(s){s}, {d} pushed", .{
             text, n, if (sig.isKnownStatic()) "" else " (one more for an instance call)", pushed.len,
         });

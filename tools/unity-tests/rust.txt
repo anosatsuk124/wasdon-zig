@@ -1,0 +1,30 @@
+
+#[no_mangle]
+pub unsafe extern "C" fn Probe() {
+    let go = game_object();
+    let tr = raw::UnityEngineGameObject_get_transform__UnityEngineTransform(go);
+    let kind = raw::UnityEngineTransform_GetType__SystemType(tr);
+    let found = raw::UnityEngineGameObject_GetComponent__T(go, kind);
+    let p = raw::UnityEngineVector3Array_ctor__SystemInt32__UnityEngineVector3Array(1);
+    let q = raw::UnityEngineQuaternionArray_ctor__SystemInt32__UnityEngineQuaternionArray(1);
+    raw::UnityEngineTransform_GetPositionAndRotation__UnityEngineVector3Ref_UnityEngineQuaternionRef__SystemVoid(tr, p, q);
+    let pos = raw::UnityEngineVector3Array_Get__SystemInt32__UnityEngineVector3(p, 0);
+    let rot = raw::UnityEngineQuaternionArray_Get__SystemInt32__UnityEngineQuaternion(q, 0);
+    let origin = raw::UnityEngineVector3_ctor__SystemSingle_SystemSingle_SystemSingle__UnityEngineVector3(40.0, 0.0, 0.0);
+    let dir = raw::UnityEngineVector3_ctor__SystemSingle_SystemSingle_SystemSingle__UnityEngineVector3(0.0, 0.0, 1.0);
+    let hits = raw::UnityEngineRaycastHitArray_ctor__SystemInt32__UnityEngineRaycastHitArray(1);
+    let hit = raw::UnityEnginePhysics_Raycast__UnityEngineVector3_UnityEngineVector3_UnityEngineRaycastHitRef__SystemBoolean(origin, dir, hits);
+    let info = raw::UnityEngineRaycastHitArray_Get__SystemInt32__UnityEngineRaycastHit(hits, 0);
+    if raw::SystemString_get_Length__SystemInt32(w::string("abc")) == 3 {
+        w::log("string OK");
+    }
+    if raw::UnityEngineObject_op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean(found, tr) != 0 {
+        w::log("generic OK");
+    }
+    if raw::UnityEngineVector3_get_x__SystemSingle(pos) == 2.0 && raw::UnityEngineQuaternion_get_w__SystemSingle(rot) == 1.0 {
+        w::log("multiple out OK");
+    }
+    if hit != 0 && raw::UnityEngineRaycastHit_get_distance__SystemSingle(info) == 4.5 {
+        w::log("raycast OK");
+    }
+}

@@ -2185,23 +2185,14 @@ const Lowerer = struct {
         try self.push(.{ .ty = ty.results[0], .kind = .shared, .sym = fa.sym });
     }
 
-    const scalar_types = [_]struct { name: []const u8, ty: ValType }{
-        .{ .name = "SystemInt32", .ty = .i32 },  .{ .name = "SystemInt64", .ty = .i64 },
-        .{ .name = "SystemSingle", .ty = .f32 }, .{ .name = "SystemDouble", .ty = .f64 },
-    };
-
-    /// Small .NET integer types that travel through WASM as i32 and are
-    /// converted (range-checked) at the call boundary.
-    const narrow_types = [_][]const u8{ "SystemByte", "SystemSByte", "SystemInt16", "SystemUInt16", "SystemChar" };
-
     fn scalarOf(type_name: []const u8) ?ValType {
-        for (scalar_types) |s| if (std.mem.eql(u8, s.name, type_name)) return s.ty;
-        return null;
-    }
-
-    fn isNarrow(type_name: []const u8) bool {
-        for (narrow_types) |n| if (std.mem.eql(u8, n, type_name)) return true;
-        return false;
+        return switch (nodes.AbiType.of(type_name)) {
+            .i32 => .i32,
+            .i64 => .i64,
+            .f32 => .f32,
+            .f64 => .f64,
+            else => null,
+        };
     }
 
     /// The name to put in the `EXTERN`. Udon sometimes exposes only the
@@ -2226,7 +2217,9 @@ const Lowerer = struct {
         // leading receiver is present, and whether strings arrive as
         // (pointer, length) pairs or as handles.
         const w = ty.params.len;
-        const force_instance = std.mem.eql(u8, imp.module, "udon.instance");
+        const sdk = std.mem.eql(u8, imp.module, "wasdon.v1");
+        if (sdk and !sig.sdk_definition) return self.t.fail(error.Unsupported, "unknown SDK import '{s}'", .{imp.name});
+        const force_instance = std.mem.eql(u8, imp.module, "udon.instance") or (sdk and sig.receiver != null);
         const force_static = std.mem.eql(u8, imp.module, "udon.static") or sig.isKnownStatic();
         const Shape = struct { inst: bool, marshal: bool };
         const shapes = [_]Shape{
@@ -2237,8 +2230,9 @@ const Lowerer = struct {
             if (s.inst and force_static) continue;
             if (!s.inst and force_instance) continue;
             if (s.marshal and n_str == 0) continue;
+            if (sdk and s.marshal) continue;
             const expect = args.len + @intFromBool(s.inst) + (if (s.marshal) n_str else 0);
-            if (w == expect or (sig.isGeneric() and w > expect)) break s;
+            if (w == expect or (!sdk and sig.isGeneric() and w > expect)) break s;
         } else return self.t.fail(error.Invalid, "import '{s}': {d} WASM parameters do not fit the signature's {d} arguments", .{ imp.name, w, args.len });
         if (self.stack.items.len < w) return self.t.fail(error.Invalid, "operand stack underflow in function {s}", .{self.f.name});
 
@@ -2250,15 +2244,29 @@ const Lowerer = struct {
         var temps: std.ArrayList(Temp) = .empty;
         const WriteBack = struct { addr: Sym, tmp: Sym, ty: ValType };
         var write_backs: std.ArrayList(WriteBack) = .empty;
+        // An SDK ref is a one-element managed array. Udon objects never
+        // pass through byte-addressed WASM memory, including across calls.
+        const Cell = struct { array: Sym, value: Sym };
+        var cells: std.ArrayList(Cell) = .empty;
 
         var cur: usize = 0;
         if (shape.inst) {
-            try ops.append(a, try self.operand(&in[0]));
+            try ops.append(a, if (sdk) try self.argument(imp, sig.receiver.?, &in[0], &temps) else try self.operand(&in[0]));
             cur = 1;
         }
         for (args) |arg| {
             const e = &in[cur];
-            if (arg.is_ref) {
+            if (sdk and arg.is_ref) {
+                if (e.ty != .i32) return self.t.fail(error.Invalid, "SDK ref/out expects an array handle in '{s}'", .{imp.name});
+                const array = try self.operand(e);
+                const pool = try self.poolFor(handleType(arg.type_name));
+                const value = try self.newTemp(pool);
+                try temps.append(a, .{ .pool = pool, .sym = value });
+                try self.a.call("SystemArray.__GetValue__SystemInt32__SystemObject", &.{ array, try self.t.constI32(0), value });
+                try cells.append(a, .{ .array = array, .value = value });
+                try ops.append(a, value);
+                cur += 1;
+            } else if (arg.is_ref) {
                 // ref/out: the WASM argument is an address; the extern gets
                 // a slot loaded from it and the slot is stored back after.
                 const vt = scalarOf(arg.type_name) orelse
@@ -2298,7 +2306,8 @@ const Lowerer = struct {
         const name = try self.externName(imp.name);
         // Operand temporaries can be reused for the result, unless an
         // address among them is still needed for a write-back.
-        if (write_backs.items.len == 0) for (in) |e| try self.release(e);
+        const keep_inputs = write_backs.items.len != 0 or cells.items.len != 0;
+        if (!keep_inputs) for (in) |e| try self.release(e);
         const ret = sig.ret;
         if (!sig.returnsValue()) {
             if (ty.results.len != 0) return self.t.fail(error.Invalid, "import '{s}' returns nothing in Udon but a value in WASM", .{imp.name});
@@ -2317,7 +2326,7 @@ const Lowerer = struct {
                 try self.result(vt, name, ops.items);
             } else if (std.mem.eql(u8, ret, "SystemBoolean")) {
                 try self.resultCond(name, null, ops.items);
-            } else if (isNarrow(ret)) {
+            } else if (nodes.AbiType.of(ret) == .narrow) {
                 const pool = try self.poolFor(ret);
                 const raw = try self.newTemp(pool);
                 try ops.append(a, raw);
@@ -2343,13 +2352,14 @@ const Lowerer = struct {
                 try self.resultIn(.i32, try self.poolFor(handleType(ret)), name, ops.items);
             }
         }
-        for (temps.items) |tmp| try self.freeTemp(tmp.pool, tmp.sym);
+        for (cells.items) |cell| try self.a.call("SystemArray.__SetValue__SystemObject_SystemInt32__SystemVoid", &.{ cell.array, cell.value, try self.t.constI32(0) });
         for (write_backs.items) |wb| {
             try self.push(.{ .ty = .i32, .kind = .alias, .sym = wb.addr });
             try self.push(.{ .ty = wb.ty, .kind = .alias, .sym = wb.tmp });
             try self.storeMem(.{ .@"align" = 0, .offset = 0 }, wb.ty, tr.Translator.byteSize(wb.ty));
         }
-        if (write_backs.items.len != 0) for (in) |e| try self.release(e);
+        for (temps.items) |tmp| try self.freeTemp(tmp.pool, tmp.sym);
+        if (keep_inputs) for (in) |e| try self.release(e);
     }
 
     /// Declared type for a slot that receives a value of Udon type `t`.
@@ -2368,7 +2378,7 @@ const Lowerer = struct {
         if (e.ty != (if (wide) ValType.i64 else ValType.i32))
             return self.t.fail(error.Invalid, "import '{s}': a {s} argument must be WASM {s}", .{ imp.name, type_name, if (wide) "i64" else "i32 (an opaque handle for object types)" });
         if (std.mem.eql(u8, type_name, "SystemBoolean")) return self.condBool(e, true);
-        if (isNarrow(type_name)) {
+        if (nodes.AbiType.of(type_name) == .narrow) {
             const pool = try self.poolFor(type_name);
             const d = try self.newTemp(pool);
             try temps.append(a, .{ .pool = pool, .sym = d });

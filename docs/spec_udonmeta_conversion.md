@@ -454,9 +454,9 @@ All fields are optional (`docs/spec_linear_memory.md` §9).
    its `.export` / `.sync` attributes and initial value.
 3. **Functions.** Emit an exported label per binding; translate only what
    those labels (and the WASM start function) reach.
-4. **`behaviour.syncMode`** has no Udon Assembly representation; it is
-   parsed and otherwise ignored. Set the sync mode on the UdonBehaviour
-   component.
+4. **`behaviour.syncMode`** configures the UdonBehaviour component. The
+   Unity setup window reads it from the pack's metadata when creating the
+   behaviour. For a standalone assembly asset, set it in the Inspector.
 5. **Options** steer the translator as listed above.
 
 ---
