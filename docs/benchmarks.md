@@ -29,6 +29,10 @@ mode. Each row is a separate run of the scene's 511-byte benchmark.
 | Preserve byte locals through comparisons and stores | 7.657 ms | 7.609 ms | 6.359 ms | 814 / 789 |
 | 65,536-byte capacity, same 511-byte sample | 6.655 ms | 6.311 ms | 5.427 ms | 814 / 789 |
 | Eliminate the countdown and rebase induction variables | 5.152 ms | 4.650 ms | 4.959 ms | 726 / 701 |
+| Carry branch predicates around loops and use guarded induction sentinels | 4.180 ms | 4.087 ms | 4.992 ms | 668 / 655 |
+
+With 8,193 elements the same build measured 98.947 ms (Rust),
+93.756 ms (Zig) and 121.555 ms (UdonSharp).
 
 Column meanings:
 

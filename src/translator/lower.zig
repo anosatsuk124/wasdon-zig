@@ -772,6 +772,17 @@ const Lowerer = struct {
         const falls = try self.lowerBody(b.body);
         _ = self.ctrl.pop();
         if (!falls) try self.truncate(height);
+        if (b.bt == .empty and falls and !self.t.options.disable.loop_paths) {
+            const DeadBools = struct {
+                pools: []const Pool,
+                pub fn contains(d: @This(), sym: Sym) bool {
+                    for (d.pools) |p| if (std.mem.eql(u8, p.type_name, "SystemBoolean"))
+                        return std.mem.indexOfScalar(Sym, p.free.items, sym) != null;
+                    return false;
+                }
+            };
+            if (try @import("loop_paths.zig").optimize(self.a, head, DeadBools{ .pools = self.pools.items })) self.forgetDerived();
+        }
         return falls;
     }
 

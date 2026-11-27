@@ -184,3 +184,19 @@ unsigned ordering comparison, the offset is instead the i32 sign bit
 and the comparison uses signed order. The base receives the opposite
 offset, preserving addresses modulo 2^32. The translator restores a
 cursor's original representation when it is live after the loop.
+
+For a unit-stride cursor, the translator also follows control flow with
+the condition `i < limit` assumed false. If no increment is reachable
+on that path, an unsigned less-than test is equivalent to inequality
+against a fixed sentinel. The sentinel is initially `max_u(i, limit)`,
+so a cursor that starts past the limit stays put. Both cursor and
+sentinel can then use absolute addresses.
+
+For small innermost loops the translator can generate multiple versions
+of a basic block. Each entry records which numeric comparisons were
+true or false on the incoming edge. Writing either operand invalidates
+the fact. A repeated comparison can disappear only when its Boolean
+result is a dead scratch slot and the branch is its sole consumer.
+Only direct control flow and known numeric operators and array accessors
+are eligible. Array accesses retain their order. Unknown calls, escaping
+edges or exceeding the code-size budget leave the original loop intact.

@@ -51,12 +51,16 @@ fn unrolled(depth: u32) wasm.UdonMeta {
 
 /// Translate, check and load a module. Any checker finding fails the test.
 fn load(mod: wasm.Module, meta: ?wasm.UdonMeta) !Program {
+    return loadWith(mod, meta, .{});
+}
+
+fn loadWith(mod: wasm.Module, meta: ?wasm.UdonMeta, disable: translate_.Disable) !Program {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     errdefer arena.deinit();
     const a = arena.allocator();
     var diag: translate_.Diagnostics = .init(a);
     var out: std.Io.Writer.Allocating = .init(a);
-    _ = translate_.translate(testing.allocator, mod, meta, &out.writer, .{ .diagnostics = &diag }) catch |e| {
+    _ = translate_.translate(testing.allocator, mod, meta, &out.writer, .{ .diagnostics = &diag, .disable = disable }) catch |e| {
         std.debug.print("translation failed: {t}: {s}\n", .{ e, diag.message });
         return e;
     };
@@ -1193,6 +1197,87 @@ test "counted loops preserve unsigned order, wrapping addresses and live cursors
     try testing.expectEqual(Value{ .int64 = 0x8000_0002 }, p.global("__G__g0"));
     try testing.expectEqual(Value{ .int64 = 2 }, p.global("__G__g1"));
     try testing.expectEqual(Value{ .int32 = 0 }, p.global("__G__g3"));
+}
+
+test "a loop-carried comparison stays known until either operand changes" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const body = [_]I{
+        .{ .i32_const = 17 }, .{ .local_set = 0 },
+        loop(&.{
+            .{ .local_get = 0 },                                                 .{ .i32_const = 17 }, .i32_eq,
+            ifElse(null, &.{
+                .{ .local_get = 2 }, .{ .i32_const = 3 }, .i32_add, .{ .local_set = 2 },
+            }, &.{
+                .{ .local_get = 2 }, .{ .i32_const = 1 }, .i32_add, .{ .local_set = 2 },
+            }),
+            .{ .local_get = 1 },                                                 .{ .i32_const = 10 }, .i32_eq,
+            ifElse(null, &.{ .{ .i32_const = 18 }, .{ .local_set = 0 } }, null), .{ .local_get = 1 },  .{ .i32_const = 1 },
+            .i32_add,                                                            .{ .local_tee = 1 },  .{ .i32_const = 24 },
+            .i32_ne,                                                             .{ .br_if = 0 },
+        }),
+        .{ .local_get = 2 },  .{ .global_set = 0 },
+    };
+    const mod = try simpleModule(arena.allocator(), &.{.i32}, &.{.{ .count = 3, .ty = .i32 }}, &body);
+    var original = try loadWith(mod, null, .{ .loop_paths = true });
+    defer original.deinit();
+    var optimized = try load(mod, null);
+    defer optimized.deinit();
+    for ([_]*Program{ &original, &optimized }) |p| {
+        _ = try p.vm.runEvent("run");
+        try testing.expectEqual(Value{ .int32 = 46 }, p.global("__G__g0"));
+    }
+    try testing.expect(optimized.vm.stats.externs < original.vm.stats.externs);
+}
+
+test "a guarded unit induction variable reaches its unsigned sentinel or stays still" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    for ([_]u32{ 0x7fff_fffe, 0x8000_0001, 0x8000_0002, 0xffff_ffff }) |initial| {
+        const limit: u32 = 0x8000_0001;
+        const base: i32 = -0x7fff_fffc;
+        const body = [_]I{
+            .{ .i32_const = @bitCast(initial) }, .{ .local_set = 0 },
+            .{ .i32_const = @bitCast(limit) },   .{ .local_set = 1 },
+            .{ .i32_const = base },              .{ .local_set = 2 },
+            .{ .i32_const = 5 },                 .{ .local_set = 3 },
+            loop(&.{
+                block(null, &.{
+                    block(null, &.{ .{ .local_get = 0 }, .{ .local_get = 1 }, .i32_lt_u, .{ .br_if = 0 }, .{ .br = 1 } }),
+                    .{ .global_get = 2 },
+                    .{ .local_get = 0 },
+                    .{ .local_get = 2 },
+                    .i32_add,
+                    .i32_add,
+                    .{ .global_set = 2 },
+                    .{ .local_get = 0 },
+                    .{ .i32_const = 1 },
+                    .i32_add,
+                    .{ .local_set = 0 },
+                }),
+                .{ .local_get = 4 },
+                .{ .i32_const = 1 },
+                .i32_add,
+                .{ .local_set = 4 },
+                .{ .local_get = 3 },
+                .{ .i32_const = -1 },
+                .i32_add,
+                .{ .local_tee = 3 },
+                .{ .br_if = 0 },
+            }),
+            .{ .local_get = 0 },                 .{ .global_set = 3 },
+        };
+        var p = try runBody(arena.allocator(), &body, &.{.{ .count = 5, .ty = .i32 }});
+        defer p.deinit();
+        var i = initial;
+        var sum: i32 = 0;
+        for (0..5) |_| if (i < limit) {
+            sum +%= @as(i32, @bitCast(i)) +% base;
+            i += 1;
+        };
+        try testing.expectEqual(Value{ .int32 = sum }, p.global("__G__g2"));
+        try testing.expectEqual(Value{ .int32 = @bitCast(i) }, p.global("__G__g3"));
+    }
 }
 
 test "loops, br_table and select" {

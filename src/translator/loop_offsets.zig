@@ -17,6 +17,7 @@ const Cursor = struct {
     shifted_limit: u32 = none,
     shifted_base: u32 = none,
     ordered: bool = false,
+    until_limit: bool = false,
     adds: u32 = 0,
     comparisons: u32 = 0,
 };
@@ -33,23 +34,32 @@ pub fn plan(arena: Allocator, body: []const I, first: u32, live_out: std.Dynamic
         if (c.limit != none and written(body, c.limit)) continue;
         // The biased representation removes both sign flips in an unsigned
         // comparison. A plain address removes each per-element base addition.
-        if (c.ordered) {
+        if (c.ordered and bounded(result.body, c, 0, true) != null) {
+            c.until_limit = true;
+        }
+        if (c.ordered and !c.until_limit) {
             if (c.comparisons == 0) continue;
             c.shifted_base = first + result.temps;
             result.temps += 1;
             try before.appendSlice(arena, &.{ get(c.base), bias, .i32_xor, set(c.shifted_base) });
         }
-        const offset = if (c.ordered) bias else get(c.base);
-        const combine: I = if (c.ordered) .i32_xor else .i32_add;
+        const use_bias = c.ordered and !c.until_limit;
+        const offset = if (use_bias) bias else get(c.base);
+        const combine: I = if (use_bias) .i32_xor else .i32_add;
         if (c.limit != none) {
             c.shifted_limit = first + result.temps;
             result.temps += 1;
-            try before.appendSlice(arena, &.{ get(c.limit), offset, combine, set(c.shifted_limit) });
+            if (c.until_limit) {
+                // Starting above the limit means no increment can execute.
+                // Set the sentinel to the starting position on that path.
+                try before.appendSlice(arena, &.{ get(c.limit), get(index), get(index), get(c.limit), .i32_lt_u, .select });
+            } else try before.append(arena, get(c.limit));
+            try before.appendSlice(arena, &.{ offset, combine, set(c.shifted_limit) });
         }
         try before.appendSlice(arena, &.{ get(index), offset, combine, set(index) });
         result.body = try rewrite(arena, result.body, c);
         if (index < live_out.capacity() and live_out.isSet(index))
-            try after.appendSlice(arena, &.{ get(index), offset, if (c.ordered) .i32_xor else .i32_sub, set(index) });
+            try after.appendSlice(arena, &.{ get(index), offset, if (use_bias) .i32_xor else .i32_sub, set(index) });
     }
     result.before = before.items;
     result.after = after.items;
@@ -142,6 +152,44 @@ fn scan(body: []const I, c: *Cursor) bool {
     return true;
 }
 
+// Explore the path on which index < limit is false. If no increment
+// is reachable there, a unit-stride index can be tested for inequality
+// with its sentinel. Only accept this one order relation for every use
+// of the limit. Other writes or non-unit steps invalidate the proof.
+fn bounded(body: []const I, c: Cursor, depth: u32, reachable: bool) ?u64 {
+    if (depth >= 60) return null;
+    var flow: u64 = @intFromBool(reachable); // bit 0 falls through; bit d+1 branches to label d
+    for (body, 0..) |ins, i| {
+        const active = flow & 1 != 0;
+        if (pair(body[i..], c.index)) |other| {
+            if (other == c.limit and body[i + 2] != .i32_add and
+                !(body[i].local_get == c.index and body[i + 2] == .i32_lt_u)) return null;
+        }
+        if (step(body[i..]) == c.index and body[i + 1].i32_const != 1) return null;
+        switch (ins) {
+            .local_set, .local_tee => |l| if (active and l == c.index) return null,
+            .block => |b| {
+                const child = bounded(b.body, c, depth + 1, active) orelse return null;
+                if (active) flow = (flow & ~@as(u64, 1)) | (child & 1) | (child >> 1);
+            },
+            .if_, .br_table, .loop => return null,
+            .br, .br_if => |d| {
+                if (d >= 60) return null;
+                const always_false = ins == .br_if and i >= 3 and
+                    body[i - 3] == .local_get and body[i - 3].local_get == c.index and
+                    body[i - 2] == .local_get and body[i - 2].local_get == c.limit and body[i - 1] == .i32_lt_u;
+                if (active and !always_false) {
+                    if (ins == .br) flow &= ~@as(u64, 1);
+                    flow |= @as(u64, 2) << @intCast(d);
+                }
+            },
+            .return_, .unreachable_ => flow &= ~@as(u64, 1),
+            else => {},
+        }
+    }
+    return flow;
+}
+
 fn rewrite(arena: Allocator, body: []const I, c: Cursor) Allocator.Error![]const I {
     var out: std.ArrayList(I) = .empty;
     var i: usize = 0;
@@ -150,11 +198,11 @@ fn rewrite(arena: Allocator, body: []const I, c: Cursor) Allocator.Error![]const
             const op = body[i + 2];
             if (op == .i32_add) {
                 try out.append(arena, get(c.index));
-                if (c.ordered) try out.appendSlice(arena, &.{ get(c.shifted_base), .i32_add });
+                if (c.ordered and !c.until_limit) try out.appendSlice(arena, &.{ get(c.shifted_base), .i32_add });
             } else {
                 for (body[i..][0..2]) |arg| try out.append(arena, if (arg.local_get == c.index) arg else get(c.shifted_limit));
                 try out.append(arena, switch (op) {
-                    .i32_lt_u => .i32_lt_s,
+                    .i32_lt_u => if (c.until_limit) .i32_ne else .i32_lt_s,
                     .i32_ge_u => .i32_ge_s,
                     .i32_gt_u => .i32_gt_s,
                     .i32_le_u => .i32_le_s,

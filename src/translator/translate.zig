@@ -70,6 +70,8 @@ pub const Options = struct {
 pub const Disable = struct {
     /// Retain redundant unit-stride loop induction variables.
     induction: bool = false,
+    /// Re-test predicates along every loop backedge.
+    loop_paths: bool = false,
     /// Save every local around a re-entrant call, not just the live ones.
     liveness: bool = false,
     /// Keep recursive functions' return addresses in slots.
