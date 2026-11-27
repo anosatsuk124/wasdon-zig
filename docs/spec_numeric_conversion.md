@@ -167,3 +167,20 @@ straight from the pool (`docs/spec_linear_memory.md` §4).
 An `f32` constant is written as a literal only when its shortest decimal
 representation denotes exactly that float (`0.5`, `1.5`, `100`), so that
 any correctly or incorrectly rounding parser reads the same value.
+
+## 6. Counted loops
+
+For an innermost i32 countdown with a second cursor advancing by one
+on every iteration, the translator computes the final cursor before
+the loop. Comparing against that value replaces the count update and
+zero test. The identity also holds for a wrapping cursor or count.
+A count read elsewhere, an early branch bypassing the latch, or an
+additional write prevents this transformation.
+
+An induction variable used only as `base + i`, in constant increments
+and in equality tests against a fixed limit can hold the address
+directly. The limit receives the same offset before the loop. For an
+unsigned ordering comparison, the offset is instead the i32 sign bit
+and the comparison uses signed order. The base receives the opposite
+offset, preserving addresses modulo 2^32. The translator restores a
+cursor's original representation when it is live after the loop.

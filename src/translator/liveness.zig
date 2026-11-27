@@ -18,6 +18,7 @@ const Bits = std.DynamicBitSetUnmanaged;
 pub const Liveness = struct {
     /// Locals live after a call, keyed by the call instruction's address.
     after_call: std.AutoHashMapUnmanaged(*const Instruction, Bits) = .empty,
+    after_loop: std.AutoHashMapUnmanaged(*const Instruction, Bits) = .empty,
 
     pub fn liveAfter(self: *const Liveness, call: *const Instruction, local: usize) bool {
         // A call this pass did not see (one the lowering synthesized):
@@ -31,6 +32,7 @@ const Pass = struct {
     arena: std.mem.Allocator,
     n: usize,
     out: *Liveness,
+    record_loops: bool,
     /// Live set at each enclosing label, innermost last.
     labels: std.ArrayList(Bits) = .empty,
 
@@ -56,7 +58,7 @@ const Pass = struct {
             switch (ins.*) {
                 .local_get => |l| if (l < self.n) live.set(l),
                 .local_set, .local_tee => |l| if (l < self.n) live.unset(l),
-                .call, .call_indirect => try self.out.after_call.put(self.arena, ins, try self.clone(live)),
+                .call, .call_indirect => if (!self.record_loops) try self.out.after_call.put(self.arena, ins, try self.clone(live)),
                 .br => |d| live = try self.clone(self.labelAt(d)),
                 .br_if => |d| live.setUnion(self.labelAt(d)),
                 .br_table => |bt| {
@@ -78,6 +80,7 @@ const Pass = struct {
                     _ = self.labels.pop();
                 },
                 .loop => |b| {
+                    if (self.record_loops) try self.out.after_loop.put(self.arena, ins, try self.clone(live));
                     // A branch to the loop's label re-enters the body, so
                     // the label's live set is the body's own entry set:
                     // iterate until it stops growing.
@@ -104,8 +107,12 @@ const Pass = struct {
 
 /// Analyze a function body with `n_locals` locals (parameters included).
 pub fn analyze(arena: std.mem.Allocator, n_locals: usize, body: []const Instruction) !Liveness {
+    return analyzeAt(arena, n_locals, body, false);
+}
+
+pub fn analyzeAt(arena: std.mem.Allocator, n_locals: usize, body: []const Instruction, loops: bool) !Liveness {
     var out: Liveness = .{};
-    var pass: Pass = .{ .arena = arena, .n = n_locals, .out = &out };
+    var pass: Pass = .{ .arena = arena, .n = n_locals, .out = &out, .record_loops = loops };
     // The function's own frame: a branch to it returns.
     try pass.labels.append(arena, try Bits.initEmpty(arena, n_locals));
     _ = try pass.scan(body, try Bits.initEmpty(arena, n_locals));

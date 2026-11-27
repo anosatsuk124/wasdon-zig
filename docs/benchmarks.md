@@ -27,6 +27,8 @@ mode. Each row is a separate run of the scene's 511-byte benchmark.
 |---|---:|---:|---:|---:|
 | Before byte-local lowering | 8.218 ms | 7.824 ms | 5.223 ms | 949 / 924 |
 | Preserve byte locals through comparisons and stores | 7.657 ms | 7.609 ms | 6.359 ms | 814 / 789 |
+| 65,536-byte capacity, same 511-byte sample | 6.655 ms | 6.311 ms | 5.427 ms | 814 / 789 |
+| Eliminate the countdown and rebase induction variables | 5.152 ms | 4.650 ms | 4.959 ms | 726 / 701 |
 
 Column meanings:
 

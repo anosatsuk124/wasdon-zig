@@ -68,6 +68,8 @@ pub const Options = struct {
 };
 
 pub const Disable = struct {
+    /// Retain redundant unit-stride loop induction variables.
+    induction: bool = false,
     /// Save every local around a re-entrant call, not just the live ones.
     liveness: bool = false,
     /// Keep recursive functions' return addresses in slots.
@@ -302,6 +304,14 @@ pub const Translator = struct {
         }
 
         const wasi = @import("wasi.zig");
+        if (!self.options.disable.induction) {
+            const codes = try self.arena().dupe(wasm.module.Code, self.mod.codes);
+            for (codes, self.mod.funcs) |*code, type_idx| {
+                if (type_idx < self.mod.types_.len)
+                    code.* = try @import("induction.zig").optimize(self.arena(), code.*, self.mod.types_[type_idx].params.len);
+            }
+            self.mod.codes = codes;
+        }
         var offender: []const u8 = "";
         var fields: std.ArrayList(wasm.udon_meta.Field) = .empty;
         if (self.meta) |m| try fields.appendSlice(self.arena(), m.fields);

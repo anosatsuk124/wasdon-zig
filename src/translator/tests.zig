@@ -1160,6 +1160,41 @@ test "br_table through a jump table: cases that return, a loop as a case" {
     }
 }
 
+test "counted loops preserve unsigned order, wrapping addresses and live cursors" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    // Both the same-base address expression and the unsigned comparison
+    // observe i. It crosses the sign boundary during the four iterations.
+    const body = [_]I{
+        .{ .i32_const = 0x7fff_fffe },  .{ .local_set = 0 },
+        .{ .i32_const = -0x7fff_ffff }, .{ .local_set = 1 },
+        .{ .i32_const = -0x7fff_fffc }, .{ .local_set = 2 },
+        .{ .i32_const = 4 },            .{ .local_set = 3 },
+        .{ .i32_const = -2 },           .{ .local_set = 4 },
+        loop(&.{
+            .{ .local_get = 0 },  .{ .local_get = 1 }, .i32_lt_u,
+            ifElse(null, &.{
+                .{ .global_get = 2 }, .{ .local_get = 2 }, .{ .local_get = 0 }, .i32_add, .i32_add, .{ .global_set = 2 },
+            }, null),
+            .{ .local_get = 4 },  .{ .i32_const = 1 }, .i32_add,
+            .{ .local_set = 4 },  .{ .local_get = 0 }, .{ .i32_const = 1 },
+            .i32_add,             .{ .local_set = 0 }, .{ .local_get = 3 },
+            .{ .i32_const = -1 }, .i32_add,            .{ .local_tee = 3 },
+            .{ .br_if = 0 },
+        }),
+        .{ .local_get = 0 },            .i64_extend_i32_u,
+        .{ .global_set = 0 },           .{ .local_get = 4 },
+        .i64_extend_i32_s,              .{ .global_set = 1 },
+        .{ .local_get = 3 },            .{ .global_set = 3 },
+    };
+    var p = try runBody(arena.allocator(), &body, &.{.{ .count = 5, .ty = .i32 }});
+    defer p.deinit();
+    try testing.expectEqual(Value{ .int32 = 2 + 3 + 4 }, p.global("__G__g2"));
+    try testing.expectEqual(Value{ .int64 = 0x8000_0002 }, p.global("__G__g0"));
+    try testing.expectEqual(Value{ .int64 = 2 }, p.global("__G__g1"));
+    try testing.expectEqual(Value{ .int32 = 0 }, p.global("__G__g3"));
+}
+
 test "loops, br_table and select" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
