@@ -104,7 +104,7 @@ const Graph = struct {
 
 /// Compile only loops whose complete control flow and heap writes are
 /// visible here. In particular a host call may re-enter the VM.
-pub fn optimize(a: *A, head: Label, dead: anytype, backend: anytype) !bool {
+pub fn optimize(a: *A, head: Label, dead: anytype, backend: anytype, loop_site: anytype) !bool {
     const start = a.labels.items[head].pos;
     const raw = a.code.items[start..];
     if (raw.len < 8 or raw.len > max_ins) return false;
@@ -188,7 +188,7 @@ pub fn optimize(a: *A, head: Label, dead: anytype, backend: anytype) !bool {
     const done = try a.newLabel();
     if (!backend.t.options.disable.loop_strip_mining) {
         if (stripPlan(&g, a, saved, try backend.t.constI32(1))) |plan|
-            try emitStrips(&g, a, saved, plan, backend, done);
+            try emitStrips(&g, a, saved, plan, backend, done, loop_site);
     }
     try emit(&g, a, saved, done);
     a.bind(done);
@@ -274,17 +274,19 @@ fn stripPlan(g: *const Graph, a: *A, raw: []const Instr, one: Sym) ?Strip {
     return if (plan.len == 0) null else plan;
 }
 
-fn emitStrips(g: *const Graph, a: *A, raw: []const Instr, plan: Strip, backend: anytype, done: Label) !void {
+fn emitStrips(g: *const Graph, a: *A, raw: []const Instr, plan: Strip, backend: anytype, done: Label, loop_site: anytype) !void {
     const factor = 4;
     const span = try backend.freshTemp("SystemInt32");
     const stop = try backend.freshTemp("SystemInt32");
     const flag = try backend.freshTemp("SystemBoolean");
+    const dead_update = try finalDead(g, a, raw, backend, loop_site);
     const guard = try a.newLabel();
     const scalar = try a.newLabel();
+    const small = try a.newLabel();
     a.bind(guard);
     try a.call(i32_sub, &.{ plan.latch.limit, plan.latch.cursor, span });
-    try a.call(i32_ge, &.{ span, try backend.t.constI32(factor), flag });
-    try a.jumpIfFalse(flag, scalar);
+    try a.call(i32_ge, &.{ span, try backend.t.constI32(factor + 1), flag });
+    try a.jumpIfFalse(flag, small);
     var taken: [max_ins]?bool = @splat(null);
     for (plan.bounds[0..plan.len]) |b| {
         try a.call(i32_sub, &.{ b.limit, b.cursor, stop });
@@ -297,28 +299,115 @@ fn emitStrips(g: *const Graph, a: *A, raw: []const Instr, plan: Strip, backend: 
     try a.call(i32_add, &.{ plan.latch.cursor, span, stop });
     const header = try a.newLabel();
     a.bind(header);
-    for (0..factor) |_| {
-        var labels: [max_ins]Label = undefined;
-        for (labels[0..g.len]) |*label| label.* = try a.newLabel();
-        for (g.ops[0 .. g.len - 1], 0..) |op, pc| {
-            a.bind(labels[pc]);
-            if (taken[pc]) |jump| {
-                if (jump) try a.jump(labels[op.target]);
-            } else if (op.kind == .compute) {
-                try a.code.appendSlice(a.gpa, raw[op.start..op.end]);
-            } else {
-                try a.code.appendSlice(a.gpa, raw[op.start .. op.end - 1]);
-                try a.code.append(a.gpa, .{ .op = raw[op.end - 1].op, .arg = labels[op.target] });
-            }
-        }
-        a.bind(labels[g.len - 1]);
-    }
+    for (0..factor) |_| try emitIteration(g, a, raw, &taken, null);
     try a.call(i32_eq, &.{ plan.latch.cursor, stop, flag });
     try a.jumpIfFalse(flag, header);
     try a.call(i32_eq, &.{ plan.latch.cursor, plan.latch.limit, flag });
     try a.jumpIfFalse(flag, guard);
     try a.jump(done);
+    a.bind(small);
+    try a.call(i32_ge, &.{ span, try backend.t.constI32(0), flag });
+    try a.jumpIfFalse(flag, scalar);
+    const entries = try backend.t.arena().alloc(Label, factor + 1);
+    entries[0] = scalar; // Zero trips in a do-while with i32 wrap denote 2^32 iterations.
+    for (entries[1..]) |*entry| entry.* = try a.newLabel();
+    const target = try backend.freshTemp("SystemUInt32");
+    try a.call("SystemUInt32Array.__Get__SystemInt32__SystemUInt32", &.{ try backend.t.jumpTable(entries), span, target });
+    try a.jumpIndirect(target);
+    const unknown: [max_ins]?bool = @splat(null);
+    for (0..factor) |j| {
+        const remaining = factor - j;
+        a.bind(entries[remaining]);
+        try emitIteration(g, a, raw, &unknown, if (remaining == 1) &dead_update else null);
+    }
+    try a.jump(done);
     a.bind(scalar);
+}
+
+// With the latch peeled off, the last iteration is an acyclic CFG. Drop
+// unused computations along its paths, preserving memory operations and
+// integer divisions, which may still fault even when their result is dead.
+fn finalDead(g: *const Graph, a: *A, raw: []const Instr, backend: anytype, site: anytype) ![max_ins]bool {
+    const Bits = std.StaticBitSet(max_ins);
+    var omit = [_]bool{false} ** max_ins;
+    const live_out = try backend.liveAfterLoop(site) orelse return omit;
+    var slots: [max_ins]Sym = undefined;
+    var n: usize = 0;
+    for (g.ops[0..g.len]) |op| {
+        if (op.writes == none or std.mem.indexOfScalar(Sym, slots[0..n], op.writes) != null) continue;
+        slots[n] = op.writes;
+        n += 1;
+    }
+    var before: [max_ins]Bits = undefined;
+    const latch = g.len - 1;
+    before[latch] = Bits.initFull();
+    for (slots[0..n], 0..) |slot, k| {
+        if (std.mem.indexOfScalar(Sym, backend.f.locals, slot)) |local| {
+            if (!live_out.isSet(local)) before[latch].unset(k);
+        } else for (backend.pools.items) |pool| {
+            if (std.mem.indexOfScalar(Sym, pool.free.items, slot) != null) before[latch].unset(k);
+        }
+    }
+    var pc: usize = latch;
+    while (pc > 0) {
+        pc -= 1;
+        const op = g.ops[pc];
+        var live = if (op.kind == .jump) before[op.target] else before[pc + 1];
+        if (op.kind == .test_branch or op.kind == .branch) live.setUnion(before[op.target]);
+        var args = raw[op.start..op.end];
+        if (op.writes != none) {
+            const dst = std.mem.indexOfScalar(Sym, slots[0..n], op.writes).?;
+            if (op.kind == .compute and !live.isSet(dst) and removable(a, args)) {
+                omit[pc] = true;
+                before[pc] = live;
+                continue;
+            }
+            live.unset(dst);
+            args = args[0 .. args.len - @as(usize, if (op.kind == .test_branch) 4 else 2)];
+        }
+        for (args) |ins| if (ins.op == .push) {
+            if (std.mem.indexOfScalar(Sym, slots[0..n], ins.arg)) |id| live.set(id);
+        };
+        before[pc] = live;
+    }
+    return omit;
+}
+
+fn removable(a: *A, raw: []const Instr) bool {
+    const ins = raw[raw.len - 1];
+    if (ins.op == .copy) return true;
+    const sig = udon.nodes.parseSignature(a.externs.items[ins.arg]) orelse return false;
+    if (!numericOperator(sig)) return false;
+    for ([_][]const u8{ "op_Addition", "op_Subtraction", "op_Multiplication", "op_LogicalAnd", "op_LogicalOr", "op_LogicalXor", "op_LeftShift", "op_RightShift", "op_Equality", "op_Inequality", "op_LessThan", "op_LessThanOrEqual", "op_GreaterThan", "op_GreaterThanOrEqual" }) |name| {
+        if (std.mem.eql(u8, sig.method, name)) return true;
+    }
+    return false;
+}
+
+fn emitIteration(g: *const Graph, a: *A, raw: []const Instr, fixed: *const [max_ins]?bool, omit: ?*const [max_ins]bool) !void {
+    var labels: [max_ins]Label = undefined;
+    var reachable = [_]bool{false} ** max_ins;
+    reachable[0] = true;
+    for (labels[0..g.len]) |*label| label.* = try a.newLabel();
+    for (g.ops[0 .. g.len - 1], 0..) |op, pc| {
+        a.bind(labels[pc]);
+        if (!reachable[pc]) continue;
+        if (fixed[pc]) |jump| {
+            if (jump) {
+                try a.jump(labels[op.target]);
+                reachable[op.target] = true;
+            } else reachable[pc + 1] = true;
+        } else if (op.kind == .compute) {
+            if (omit == null or !omit.?[pc]) try a.code.appendSlice(a.gpa, raw[op.start..op.end]);
+            reachable[pc + 1] = true;
+        } else {
+            try a.code.appendSlice(a.gpa, raw[op.start .. op.end - 1]);
+            try a.code.append(a.gpa, .{ .op = raw[op.end - 1].op, .arg = labels[op.target] });
+            reachable[op.target] = true;
+            if (op.kind != .jump) reachable[pc + 1] = true;
+        }
+    }
+    a.bind(labels[g.len - 1]);
 }
 
 fn numericOperator(signature: udon.nodes.Signature) bool {

@@ -242,6 +242,7 @@ const Lowerer = struct {
     scratch: [scratch_types.len]?Sym = @splat(null),
     /// Which locals are live after each call (`liveness.zig`).
     live: @import("liveness.zig").Liveness = .{},
+    loop_live: ?@import("liveness.zig").Liveness = null,
     /// The instruction being lowered.
     current: ?*const Instruction = null,
     /// Per local: its current value is known to be ≥ 0. Tracked along
@@ -833,7 +834,17 @@ const Lowerer = struct {
         }
     }
 
+    pub fn liveAfterLoop(self: *Lowerer, site: ?*const Instruction) Error!?std.DynamicBitSetUnmanaged {
+        const loop = site orelse return null;
+        if (self.loop_live == null) {
+            const code = self.t.mod.codes[self.f_idx - self.t.num_imported_funcs];
+            self.loop_live = try @import("liveness.zig").analyzeAt(self.t.arena(), self.f.locals.len, code.body, true);
+        }
+        return self.loop_live.?.after_loop.get(loop);
+    }
+
     fn lowerLoop(self: *Lowerer, b: wasm.instruction.Block) Error!bool {
+        const loop_site = self.current;
         try self.flushForBlock();
         const head = try self.a.newLabel();
         self.bindJoin(head);
@@ -859,7 +870,7 @@ const Lowerer = struct {
                     return false;
                 }
             };
-            if (try @import("loop_paths.zig").optimize(self.a, head, DeadBools{ .pools = self.pools.items }, self)) self.forgetDerived();
+            if (try @import("loop_paths.zig").optimize(self.a, head, DeadBools{ .pools = self.pools.items }, self, loop_site)) self.forgetDerived();
         }
         if (hoist) try self.emitInvariants(head, self.loops.pop().?);
         return falls;

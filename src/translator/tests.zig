@@ -1234,7 +1234,7 @@ test "strip-mined equality bounds retain partial steps, tails and i32 wraparound
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const first: i32 = 0x7fff_fffd;
-    for ([_]i32{ 1, 3, 4, 7, 65, 67 }) |count| {
+    for ([_]i32{ 1, 2, 3, 4, 5, 7, 65, 67 }) |count| {
         for ([_]i32{ -1, 0, 2, 11, 93 }) |distance| {
             const limit = first +% distance;
             const body = [_]I{

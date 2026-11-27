@@ -219,3 +219,10 @@ runs again after that group range. A short or negative distance enters
 the original scalar control flow. This transformation requires a single
 backedge and an unconditional update of the primary induction variable.
 It makes no assumptions about the contents of linear memory.
+
+For one to four remaining iterations an indexed jump selects the entry
+of an unrolled body. Zero and negative signed trip counts retain the
+scalar path, including a wrapping do-while count of 2^32. The last
+unrolled iteration has no backedge. Backward liveness through that
+iteration can discard unused arithmetic and copies. Array accesses and
+potentially trapping arithmetic still execute in their original order.
