@@ -44,9 +44,12 @@ pub const Export = struct {
 };
 
 pub const Element = struct {
-    table_index: u32, // MVP: always 0
+    table_index: u32,
+    /// Empty for passive and declarative segments, which place nothing in
+    /// the table at instantiation.
     offset: []const Instruction,
     init: []const u32, // funcidx sequence
+    active: bool = true,
 };
 
 pub const LocalGroup = struct {
@@ -60,9 +63,11 @@ pub const Code = struct {
 };
 
 pub const Data = struct {
-    memory_index: u32, // MVP: always 0
+    memory_index: u32,
+    /// Empty for passive segments (copied only by `memory.init`).
     offset: []const Instruction,
     init: []const u8,
+    passive: bool = false,
 };
 
 pub const CustomSection = struct {
@@ -224,13 +229,19 @@ pub fn parseStartSection(payload: []const u8) errors.ParseError!u32 {
     return idx;
 }
 
+/// Element segments in the function-index forms (flags 0–3). The
+/// expression forms (flags 4–7) belong to the reference-types proposal and
+/// are rejected.
 fn decodeElementEntry(allocator: std.mem.Allocator, r: *Reader) errors.ParseError!Element {
-    const prefix = try leb128.readULEB128(u32, r);
-    if (prefix != 0) return error.MalformedElementSegment;
-    const offset = try instruction.decodeExpr(allocator, r);
-    errdefer allocator.free(offset);
+    const flags = try leb128.readULEB128(u32, r);
+    if (flags > 3) return error.MalformedElementSegment;
+    const active = flags & 1 == 0;
+    const table_index: u32 = if (flags == 2) try leb128.readULEB128(u32, r) else 0;
+    const offset: []const Instruction = if (active) try instruction.decodeExpr(allocator, r) else &.{};
+    // Flags 1–3 carry an element kind byte; 0x00 (funcref) is the only one.
+    if (flags != 0 and try r.readByte() != 0x00) return error.MalformedElementSegment;
     const init = try readVec(u32, allocator, r, decodeTypeIdx);
-    return .{ .table_index = 0, .offset = offset, .init = init };
+    return .{ .table_index = table_index, .offset = offset, .init = init, .active = active };
 }
 
 pub fn parseElementSection(allocator: std.mem.Allocator, payload: []const u8) errors.ParseError![]Element {
@@ -265,14 +276,16 @@ pub fn parseCodeSection(allocator: std.mem.Allocator, payload: []const u8) error
     return out;
 }
 
+/// Flag 0: active in memory 0. Flag 1: passive. Flag 2: active with an
+/// explicit memory index.
 fn decodeDataEntry(allocator: std.mem.Allocator, r: *Reader) errors.ParseError!Data {
-    const prefix = try leb128.readULEB128(u32, r);
-    if (prefix != 0) return error.MalformedDataSegment;
-    const offset = try instruction.decodeExpr(allocator, r);
-    errdefer allocator.free(offset);
+    const flags = try leb128.readULEB128(u32, r);
+    if (flags > 2) return error.MalformedDataSegment;
+    const memory_index: u32 = if (flags == 2) try leb128.readULEB128(u32, r) else 0;
+    const offset: []const Instruction = if (flags != 1) try instruction.decodeExpr(allocator, r) else &.{};
     const n = try leb128.readULEB128(u32, r);
     const bytes = try r.readBytes(n);
-    return .{ .memory_index = 0, .offset = offset, .init = bytes };
+    return .{ .memory_index = memory_index, .offset = offset, .init = bytes, .passive = flags == 1 };
 }
 
 pub fn parseDataSection(allocator: std.mem.Allocator, payload: []const u8) errors.ParseError![]Data {
@@ -280,6 +293,41 @@ pub fn parseDataSection(allocator: std.mem.Allocator, payload: []const u8) error
     const out = try readVec(Data, allocator, &r, decodeDataEntry);
     if (!r.eof()) return error.SectionSizeMismatch;
     return out;
+}
+
+/// Function names from the `name` custom section (subsection 1), indexed by
+/// function index. Entries without a name are empty. Returns an empty slice
+/// when the module carries no names or the section is malformed — names are
+/// only ever used to make output readable.
+pub fn functionNames(allocator: std.mem.Allocator, mod: Module, func_count: u32) std.mem.Allocator.Error![]const []const u8 {
+    for (mod.customs) |c| {
+        if (!std.mem.eql(u8, c.name, "name")) continue;
+        const out = try allocator.alloc([]const u8, func_count);
+        @memset(out, "");
+        readFunctionNames(c.bytes, out) catch {
+            allocator.free(out);
+            return &.{};
+        };
+        return out;
+    }
+    return &.{};
+}
+
+fn readFunctionNames(bytes: []const u8, out: [][]const u8) errors.ParseError!void {
+    var r = Reader.init(bytes);
+    while (!r.eof()) {
+        const id = try r.readByte();
+        const size = try leb128.readULEB128(u32, &r);
+        const payload = try r.readBytes(size);
+        if (id != 1) continue;
+        var sub = Reader.init(payload);
+        const n = try leb128.readULEB128(u32, &sub);
+        for (0..n) |_| {
+            const idx = try leb128.readULEB128(u32, &sub);
+            const name = try types.decodeName(&sub);
+            if (idx < out.len) out[idx] = name;
+        }
+    }
 }
 
 pub fn parseCustomSection(payload: []const u8) errors.ParseError!CustomSection {

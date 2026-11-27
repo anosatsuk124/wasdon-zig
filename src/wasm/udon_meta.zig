@@ -20,25 +20,32 @@ pub const FieldSyncMode = enum { none, linear, smooth };
 /// `export` is a Zig keyword so the enum field is escaped; `stringToEnum`
 /// matches on the unescaped name "export".
 pub const SourceKind = enum { global, symbol, name, @"export", import };
-/// Types a `__udon_meta.fields[*].type` JSON value may declare.
-///
-/// `gameobject`, `transform`, and `udon_behaviour` are the three reference
-/// types the Udon runtime accepts as `this`-init targets — see
-/// `src/udon/type_name.zig` for the runtime constraint that motivates each
-/// variant. Use them when the field needs to be initialised to `this`.
-pub const FieldType = enum {
-    bool_,
-    int,
-    uint,
-    float,
-    string,
-    object,
-    gameobject,
-    transform,
-    udon_behaviour,
-};
+/// Resolve a `__udon_meta.fields[*].type` value to an Udon type name. The
+/// short aliases cover the common cases; anything else is taken to already
+/// be an Udon type name (`UnityEngineTexture2D`, `SystemByteArray`, …) and is
+/// validated against the node list by the translator.
+pub fn udonTypeName(s: []const u8) []const u8 {
+    const aliases = [_]struct { []const u8, []const u8 }{
+        .{ "bool", "SystemBoolean" },
+        .{ "int", "SystemInt32" },
+        .{ "uint", "SystemUInt32" },
+        .{ "float", "SystemSingle" },
+        .{ "string", "SystemString" },
+        .{ "object", "SystemObject" },
+        .{ "gameobject", "UnityEngineGameObject" },
+        .{ "transform", "UnityEngineTransform" },
+        .{ "udonBehaviour", "VRCUdonCommonInterfacesIUdonEventReceiver" },
+        .{ "udon_behaviour", "VRCUdonCommonInterfacesIUdonEventReceiver" },
+    };
+    for (aliases) |a| if (std.mem.eql(u8, s, a[0])) return a[1];
+    return s;
+}
+
 pub const EventKind = enum { Start, Update, Interact, custom };
 pub const UnknownPolicy = enum { ignore, warn, error_ };
+/// `stack`: functions on a call-graph cycle save their frame around calls
+/// that may re-enter them. `disabled`: the producer asserts no function is
+/// ever re-entered, and no frames are saved.
 pub const RecursionMode = enum { disabled, stack };
 
 pub const Source = struct {
@@ -49,6 +56,9 @@ pub const Source = struct {
     /// to a `(import "<module>" "<name>" (global …))` declaration in
     /// the WASM binary.
     module: ?[]const u8 = null,
+    /// Name of a second function import (same module) that writes the
+    /// field. Only meaningful when `kind == .import`.
+    setter: ?[]const u8 = null,
 };
 
 pub const FieldSync = struct {
@@ -60,7 +70,8 @@ pub const Field = struct {
     key: []const u8,
     source: Source,
     udon_name: ?[]const u8 = null,
-    type: ?FieldType = null,
+    /// Udon type name (aliases already resolved).
+    type_name: ?[]const u8 = null,
     is_export: bool = false,
     sync: FieldSync = .{},
     default: ?std.json.Value = null,
@@ -92,7 +103,35 @@ pub const Options = struct {
     unknown_field_policy: ?UnknownPolicy = null,
     unknown_function_policy: ?UnknownPolicy = null,
     memory: MemoryOptions = .{},
-    recursion: RecursionMode = .disabled,
+    recursion: RecursionMode = .stack,
+    /// Slots in the frame stack used by recursive functions.
+    call_stack_size: ?u32 = null,
+    /// Levels of a small self-recursive function that get slots of their
+    /// own instead of saving frames; 0 turns that off.
+    recursion_unroll: ?u32 = null,
+};
+
+/// What the translator can supply for an import of a module that has a
+/// host of its own and cannot be rebuilt.
+pub const HostFunction = enum {
+    /// `(pointer, length) [→ length]`: console output, logged by line.
+    write,
+    /// `() → i64`: nanoseconds since the application started.
+    clock,
+    /// `(message)`: a NUL-terminated string for the error log; the event
+    /// ends.
+    panic,
+    /// Any type: the call is reported and the event ends.
+    halt,
+};
+
+pub const ImportBinding = struct {
+    /// `module.name`; a trailing `*` stands for any rest. The first
+    /// binding that matches an import applies.
+    pattern: []const u8,
+    as: ?HostFunction = null,
+    /// Without `as`: the function's result, whatever its arguments.
+    returns: i64 = 0,
 };
 
 pub const UdonMeta = struct {
@@ -100,245 +139,136 @@ pub const UdonMeta = struct {
     behaviour: ?Behaviour = null,
     fields: []const Field = &.{},
     functions: []const Function = &.{},
+    imports: []const ImportBinding = &.{},
     options: Options = .{},
     /// Keeps the backing std.json.Value alive for the duration of the meta
     /// (Field.default, Field.comment etc. may alias strings inside it).
     _json_root: std.json.Value = .null,
 };
 
-// ---------------- JSON helpers ----------------
+// ---------------- JSON ----------------
 
-fn getU32FromValue(v: std.json.Value) errors.ParseError!u32 {
-    return switch (v) {
-        .integer => |i| {
-            if (i < 0 or i > std.math.maxInt(u32)) return error.MalformedMeta;
-            return @intCast(i);
-        },
-        else => error.MalformedMeta,
-    };
-}
+const ParseError = errors.ParseError;
 
-fn getBoolFromValue(v: std.json.Value) errors.ParseError!bool {
-    return switch (v) {
-        .bool => |b| b,
-        else => error.MalformedMeta,
-    };
-}
+/// One JSON object of the metadata, read member by member. A member of the
+/// wrong JSON type is `MalformedMeta`; an absent one is null.
+const Obj = struct {
+    map: std.json.ObjectMap,
 
-fn getStringFromValue(v: std.json.Value) errors.ParseError![]const u8 {
-    return switch (v) {
-        .string => |s| s,
-        else => error.MalformedMeta,
-    };
-}
-
-fn getObjectFromValue(v: std.json.Value) errors.ParseError!std.json.ObjectMap {
-    return switch (v) {
-        .object => |o| o,
-        else => error.MalformedMeta,
-    };
-}
-
-fn getOptionalField(obj: std.json.ObjectMap, key: []const u8) ?std.json.Value {
-    return obj.get(key);
-}
-
-fn enumFromStringOrError(comptime E: type, s: []const u8, comptime err: errors.ParseError) errors.ParseError!E {
-    return std.meta.stringToEnum(E, s) orelse return err;
-}
-
-// The field enum uses `bool_` / `error_` because those words are Zig keywords.
-// JSON emits the real names; translate manually.
-fn parseFieldType(s: []const u8) errors.ParseError!FieldType {
-    if (std.mem.eql(u8, s, "bool")) return .bool_;
-    if (std.mem.eql(u8, s, "int")) return .int;
-    if (std.mem.eql(u8, s, "uint")) return .uint;
-    if (std.mem.eql(u8, s, "float")) return .float;
-    if (std.mem.eql(u8, s, "string")) return .string;
-    if (std.mem.eql(u8, s, "object")) return .object;
-    if (std.mem.eql(u8, s, "gameobject")) return .gameobject;
-    if (std.mem.eql(u8, s, "transform")) return .transform;
-    if (std.mem.eql(u8, s, "udonBehaviour")) return .udon_behaviour;
-    if (std.mem.eql(u8, s, "udon_behaviour")) return .udon_behaviour;
-    return error.InvalidFieldType;
-}
-
-fn parseUnknownPolicy(s: []const u8) errors.ParseError!UnknownPolicy {
-    if (std.mem.eql(u8, s, "ignore")) return .ignore;
-    if (std.mem.eql(u8, s, "warn")) return .warn;
-    if (std.mem.eql(u8, s, "error")) return .error_;
-    return error.InvalidUnknownPolicy;
-}
-
-fn parseRecursionMode(s: []const u8) errors.ParseError!RecursionMode {
-    if (std.mem.eql(u8, s, "disabled")) return .disabled;
-    if (std.mem.eql(u8, s, "stack")) return .stack;
-    return error.MalformedMeta;
-}
-
-fn parseSource(obj: std.json.ObjectMap) errors.ParseError!Source {
-    const kind_v = obj.get("kind") orelse return error.MalformedMeta;
-    const kind_s = try getStringFromValue(kind_v);
-    const kind = try enumFromStringOrError(SourceKind, kind_s, error.InvalidSourceKind);
-    var src: Source = .{ .kind = kind };
-    if (obj.get("name")) |nv| src.name = try getStringFromValue(nv);
-    if (obj.get("module")) |mv| src.module = try getStringFromValue(mv);
-    return src;
-}
-
-fn parseSync(obj: std.json.ObjectMap) errors.ParseError!FieldSync {
-    var s: FieldSync = .{};
-    if (obj.get("enabled")) |e| s.enabled = try getBoolFromValue(e);
-    if (obj.get("mode")) |m| {
-        const ms = try getStringFromValue(m);
-        if (std.mem.eql(u8, ms, "none")) {
-            s.mode = .none;
-        } else if (std.mem.eql(u8, ms, "linear")) {
-            s.mode = .linear;
-        } else if (std.mem.eql(u8, ms, "smooth")) {
-            s.mode = .smooth;
-        } else {
-            return error.InvalidFieldSyncMode;
-        }
+    fn of(v: std.json.Value) ParseError!Obj {
+        return if (v == .object) .{ .map = v.object } else error.MalformedMeta;
     }
-    if (s.enabled and s.mode == null) return error.MissingSyncMode;
-    return s;
+
+    fn get(o: Obj, comptime T: type, key: []const u8) ParseError!?T {
+        const v = o.map.get(key) orelse return null;
+        return switch (T) {
+            Obj => try of(v),
+            bool => if (v == .bool) v.bool else error.MalformedMeta,
+            []const u8 => if (v == .string) v.string else error.MalformedMeta,
+            i64 => if (v == .integer) v.integer else error.MalformedMeta,
+            u32 => if (v == .integer) std.math.cast(u32, v.integer) orelse error.MalformedMeta else error.MalformedMeta,
+            else => @compileError("no JSON reading for " ++ @typeName(T)),
+        };
+    }
+
+    /// A string member naming a value of enum `E`. `error` is spelled
+    /// `error_` in the enums, being a keyword.
+    fn tag(o: Obj, comptime E: type, key: []const u8, comptime unknown: ParseError) ParseError!?E {
+        const name = try o.get([]const u8, key) orelse return null;
+        if (@hasField(E, "error_") and std.mem.eql(u8, name, "error")) return .error_;
+        return std.meta.stringToEnum(E, name) orelse unknown;
+    }
+
+    /// The members of the object member `key`, each parsed by `each`.
+    fn list(o: Obj, comptime T: type, allocator: std.mem.Allocator, key: []const u8, comptime each: fn ([]const u8, Obj) ParseError!T) ParseError![]const T {
+        const members = try o.get(Obj, key) orelse return &.{};
+        const out = try allocator.alloc(T, members.map.count());
+        for (out, members.map.keys(), members.map.values()) |*item, name, v| item.* = try each(name, try of(v));
+        return out;
+    }
+};
+
+fn parseSource(obj: Obj) ParseError!Source {
+    const o = try obj.get(Obj, "source") orelse return error.MalformedMeta;
+    return .{
+        .kind = try o.tag(SourceKind, "kind", error.InvalidSourceKind) orelse return error.MalformedMeta,
+        .name = try o.get([]const u8, "name"),
+        .module = try o.get([]const u8, "module"),
+        .setter = try o.get([]const u8, "setter"),
+    };
 }
 
-fn parseField(allocator: std.mem.Allocator, key: []const u8, v: std.json.Value) errors.ParseError!Field {
-    _ = allocator;
-    const obj = try getObjectFromValue(v);
-    const source_v = obj.get("source") orelse return error.MalformedMeta;
-    const source_obj = try getObjectFromValue(source_v);
-    const source = try parseSource(source_obj);
-
-    var f: Field = .{ .key = key, .source = source };
-    if (obj.get("udonName")) |uv| f.udon_name = try getStringFromValue(uv);
-    if (obj.get("type")) |tv| {
-        const ts = try getStringFromValue(tv);
-        f.type = try parseFieldType(ts);
+fn parseField(key: []const u8, o: Obj) ParseError!Field {
+    var f: Field = .{ .key = key, .source = try parseSource(o) };
+    f.udon_name = try o.get([]const u8, "udonName");
+    if (try o.get([]const u8, "type")) |t| f.type_name = udonTypeName(t);
+    f.is_export = try o.get(bool, "export") orelse false;
+    if (try o.get(Obj, "sync")) |sync| {
+        f.sync = .{ .enabled = try sync.get(bool, "enabled") orelse false, .mode = try sync.tag(FieldSyncMode, "mode", error.InvalidFieldSyncMode) };
+        if (f.sync.enabled and f.sync.mode == null) return error.MissingSyncMode;
     }
-    if (obj.get("export")) |ev| f.is_export = try getBoolFromValue(ev);
-    if (obj.get("sync")) |sv| {
-        const sobj = try getObjectFromValue(sv);
-        f.sync = try parseSync(sobj);
-    }
-    if (obj.get("default")) |dv| f.default = dv;
-    if (obj.get("comment")) |cv| f.comment = try getStringFromValue(cv);
+    f.default = o.map.get("default");
+    f.comment = try o.get([]const u8, "comment");
     return f;
 }
 
-fn parseFunction(allocator: std.mem.Allocator, key: []const u8, v: std.json.Value) errors.ParseError!Function {
-    _ = allocator;
-    const obj = try getObjectFromValue(v);
-    const source_v = obj.get("source") orelse return error.MalformedMeta;
-    const source_obj = try getObjectFromValue(source_v);
-    const source = try parseSource(source_obj);
-
-    var fn_: Function = .{ .key = key, .source = source };
-    if (obj.get("label")) |lv| fn_.label = try getStringFromValue(lv);
-    if (obj.get("export")) |ev| fn_.is_export = try getBoolFromValue(ev);
-    if (obj.get("event")) |ev| {
-        const es = try getStringFromValue(ev);
-        fn_.event = try enumFromStringOrError(EventKind, es, error.InvalidEventKind);
-    }
-    if (obj.get("comment")) |cv| fn_.comment = try getStringFromValue(cv);
-    return fn_;
+fn parseFunction(key: []const u8, o: Obj) ParseError!Function {
+    var f: Function = .{ .key = key, .source = try parseSource(o) };
+    f.label = try o.get([]const u8, "label");
+    f.is_export = try o.get(bool, "export") orelse false;
+    f.event = try o.tag(EventKind, "event", error.InvalidEventKind);
+    f.comment = try o.get([]const u8, "comment");
+    return f;
 }
 
-fn parseBehaviour(obj: std.json.ObjectMap) errors.ParseError!Behaviour {
-    var b: Behaviour = .{};
-    if (obj.get("syncMode")) |sv| {
-        const ss = try getStringFromValue(sv);
-        b.sync_mode = try enumFromStringOrError(SyncMode, ss, error.InvalidBehaviourSyncMode);
-    }
-    if (obj.get("comment")) |cv| b.comment = try getStringFromValue(cv);
-    return b;
+fn parseImport(pattern: []const u8, o: Obj) ParseError!ImportBinding {
+    const as = try o.tag(HostFunction, "as", error.MalformedMeta);
+    const returns = try o.get(i64, "returns");
+    // Exactly one of the two.
+    if ((as != null) == (returns != null)) return error.MalformedMeta;
+    return .{ .pattern = pattern, .as = as, .returns = returns orelse 0 };
 }
 
-fn parseMemoryOptions(obj: std.json.ObjectMap) errors.ParseError!MemoryOptions {
-    var m: MemoryOptions = .{};
-    if (obj.get("initialPages")) |iv| m.initial_pages = try getU32FromValue(iv);
-    if (obj.get("maxPages")) |mv| m.max_pages = try getU32FromValue(mv);
-    if (obj.get("udonName")) |uv| m.udon_name = try getStringFromValue(uv);
-    if (m.initial_pages) |ip| if (m.max_pages) |mp| if (ip > mp) return error.InvalidMemoryPageBounds;
-    return m;
+fn parseOptions(o: Obj) ParseError!Options {
+    var out: Options = .{};
+    out.strict = try o.get(bool, "strict") orelse false;
+    out.unknown_field_policy = try o.tag(UnknownPolicy, "unknownFieldPolicy", error.InvalidUnknownPolicy);
+    out.unknown_function_policy = try o.tag(UnknownPolicy, "unknownFunctionPolicy", error.InvalidUnknownPolicy);
+    if (try o.tag(RecursionMode, "recursion", error.MalformedMeta)) |mode| out.recursion = mode;
+    out.call_stack_size = try o.get(u32, "callStackSize");
+    out.recursion_unroll = try o.get(u32, "recursionUnroll");
+    if (try o.get(Obj, "memory")) |m| {
+        out.memory = .{
+            .initial_pages = try m.get(u32, "initialPages"),
+            .max_pages = try m.get(u32, "maxPages"),
+            .udon_name = try m.get([]const u8, "udonName"),
+        };
+        if (out.memory.initial_pages) |initial| if (out.memory.max_pages) |max| {
+            if (initial > max) return error.InvalidMemoryPageBounds;
+        };
+    }
+    return out;
 }
 
-fn parseOptions(obj: std.json.ObjectMap) errors.ParseError!Options {
-    var o: Options = .{};
-    if (obj.get("strict")) |sv| o.strict = try getBoolFromValue(sv);
-    if (obj.get("unknownFieldPolicy")) |pv| {
-        const ps = try getStringFromValue(pv);
-        o.unknown_field_policy = try parseUnknownPolicy(ps);
-    }
-    if (obj.get("unknownFunctionPolicy")) |pv| {
-        const ps = try getStringFromValue(pv);
-        o.unknown_function_policy = try parseUnknownPolicy(ps);
-    }
-    if (obj.get("memory")) |mv| {
-        const mobj = try getObjectFromValue(mv);
-        o.memory = try parseMemoryOptions(mobj);
-    }
-    if (obj.get("recursion")) |rv| {
-        const rs = try getStringFromValue(rv);
-        o.recursion = try parseRecursionMode(rs);
-    }
-    return o;
-}
-
-pub fn parse(allocator: std.mem.Allocator, json_bytes: []const u8) errors.ParseError!UdonMeta {
+pub fn parse(allocator: std.mem.Allocator, json_bytes: []const u8) ParseError!UdonMeta {
     if (!std.unicode.utf8ValidateSlice(json_bytes)) return error.InvalidUtf8MetaPayload;
-
-    const root = std.json.parseFromSliceLeaky(
-        std.json.Value,
-        allocator,
-        json_bytes,
-        .{},
-    ) catch |e| switch (e) {
+    const root = std.json.parseFromSliceLeaky(std.json.Value, allocator, json_bytes, .{}) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.MalformedMeta,
     };
-
-    const obj = try getObjectFromValue(root);
-    const version_v = obj.get("version") orelse return error.MalformedMeta;
-    const version = try getU32FromValue(version_v);
+    const o = try Obj.of(root);
+    const version = try o.get(u32, "version") orelse return error.MalformedMeta;
     if (version != 1) return error.UnsupportedUdonMetaVersion;
 
     var meta: UdonMeta = .{ .version = version, ._json_root = root };
-
-    if (obj.get("behaviour")) |bv| {
-        const bobj = try getObjectFromValue(bv);
-        meta.behaviour = try parseBehaviour(bobj);
-    }
-
-    if (obj.get("fields")) |fv| {
-        const fobj = try getObjectFromValue(fv);
-        var list = try allocator.alloc(Field, fobj.count());
-        var i: usize = 0;
-        var it = fobj.iterator();
-        while (it.next()) |entry| : (i += 1) {
-            list[i] = try parseField(allocator, entry.key_ptr.*, entry.value_ptr.*);
-        }
-        meta.fields = list;
-    }
-
-    if (obj.get("functions")) |fv| {
-        const fobj = try getObjectFromValue(fv);
-        var list = try allocator.alloc(Function, fobj.count());
-        var i: usize = 0;
-        var it = fobj.iterator();
-        while (it.next()) |entry| : (i += 1) {
-            list[i] = try parseFunction(allocator, entry.key_ptr.*, entry.value_ptr.*);
-        }
-        meta.functions = list;
-    }
-
-    if (obj.get("options")) |ov| {
-        const oobj = try getObjectFromValue(ov);
-        meta.options = try parseOptions(oobj);
-    }
-
+    if (try o.get(Obj, "behaviour")) |b| meta.behaviour = .{
+        .sync_mode = try b.tag(SyncMode, "syncMode", error.InvalidBehaviourSyncMode),
+        .comment = try b.get([]const u8, "comment"),
+    };
+    meta.fields = try o.list(Field, allocator, "fields", parseField);
+    meta.functions = try o.list(Function, allocator, "functions", parseFunction);
+    meta.imports = try o.list(ImportBinding, allocator, "imports", parseImport);
+    if (try o.get(Obj, "options")) |options| meta.options = try parseOptions(options);
     return meta;
 }
 
@@ -527,12 +457,12 @@ test "parse options.recursion=stack" {
     try std.testing.expectEqual(RecursionMode.stack, m.options.recursion);
 }
 
-test "parse options.recursion default is disabled" {
+test "parse options.recursion default is stack" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const j = "{\"version\":1,\"options\":{}}";
     const m = try parse(arena.allocator(), j);
-    try std.testing.expectEqual(RecursionMode.disabled, m.options.recursion);
+    try std.testing.expectEqual(RecursionMode.stack, m.options.recursion);
 }
 
 test "parse options.recursion invalid string" {
@@ -679,4 +609,29 @@ test "parseFromModule returns null when meta is absent" {
     const mod: Module = .{};
     const meta_opt = try parseFromModule(arena.allocator(), mod);
     try std.testing.expect(meta_opt == null);
+}
+
+test "imports: host functions and constant answers, in the order written" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const meta = try parse(arena.allocator(),
+        \\{"version":1,"imports":{
+        \\  "env.put":{"as":"write"},
+        \\  "env.sys_*":{"returns":-38},
+        \\  "env.*":{"as":"halt"}}}
+    );
+    try std.testing.expectEqual(@as(usize, 3), meta.imports.len);
+    try std.testing.expectEqualStrings("env.put", meta.imports[0].pattern);
+    try std.testing.expectEqual(HostFunction.write, meta.imports[0].as.?);
+    try std.testing.expectEqual(@as(i64, -38), meta.imports[1].returns);
+    try std.testing.expect(meta.imports[1].as == null);
+    try std.testing.expectEqual(HostFunction.halt, meta.imports[2].as.?);
+    // Exactly one of "as" and "returns"; a known host function.
+    for ([_][]const u8{
+        \\{"version":1,"imports":{"env.x":{}}}
+        ,
+        \\{"version":1,"imports":{"env.x":{"as":"write","returns":0}}}
+        ,
+        \\{"version":1,"imports":{"env.x":{"as":"teleport"}}}
+    }) |bad| try std.testing.expectError(error.MalformedMeta, parse(arena.allocator(), bad));
 }

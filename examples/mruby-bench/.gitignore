@@ -1,0 +1,4 @@
+# Build output, the vendored mruby checkout, and the lock file its build writes.
+build/
+vendor/
+build_config.rb.lock

@@ -1,0 +1,60 @@
+=== on_start begin ===
+== arithmetic ==
+1 + 2 = 3
+100 * 200 = 20000
+-50 / 7 = -7
+17 % 5 = 2
+1 << 10 = 1024
+0x7F00 | 0x00FF = 7fff
+0xABCD ^ 0x00FF = ab32
+== control_flow ==
+i = 0
+i = 1
+i = 2
+i = 3
+i = 4
+x > 5
+tag=2
+sum of odd 1..10 = 25
+=== on_start end ===
+== globals ==
+counter = 6
+accum = 15
+== recursion ==
+factorial(5) = 120
+fib(10) = 55
+== memory ==
+scratch[0] = deadbeef
+scratch[1] = 42
+scratch[2] (LE byte assemble) = 44332211
+memory.size before pages = 17
+memory.grow returned = 17
+memory.size after  pages = 18
+== call_indirect ==
+double_it(21) = 42
+negate_it(7) = -7
+add_one(99) = 100
+== struct ==
+point_area(6,7) = 42
+q.x after translate = 13
+q.y after translate = 24
+rect_width(g_rect) = 10
+g_rect.tag = 1234
+g_rect.tag after inc = 1235
+sum of areas = 36
+points[1].x after = 102
+points[1].y after = 204
+== 64bit_and_float ==
+(0x100000000 + 5) hi32 = 1
+(0x100000000 + 5) lo32 = 5
+floor(3.14 * 2.0 * 100) = 628
+(no more steps)
+(no more steps)
+(no more steps)
+(no more steps)
+(no more steps)
+(no more steps)
+(no more steps)
+(no more steps)
+(no more steps)
+(no more steps)

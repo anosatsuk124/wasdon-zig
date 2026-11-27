@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "behaviour": { "name": "Linux" },
+  "functions": {
+    "boot": { "source": { "kind": "export", "name": "_start" }, "label": "_start" }
+  },
+  "fields": {
+    "commandLine": {
+      "source": { "kind": "symbol", "name": "boot_command_line" },
+      "udonName": "commandLine",
+      "type": "string",
+      "default": "console=hvc"
+    }
+  },
+  "imports": {
+    "env.wasm_driver_hvc_put": { "as": "write" },
+    "env.wasm_cpu_clock_get_monotonic": { "as": "clock" },
+    "env.wasm_panic": { "as": "panic" },
+    "env.wasm_dump_stacktrace": { "returns": 0 },
+    "env.sys_*": { "returns": -38 },
+    "env.wasm_*": { "as": "halt" }
+  }
+}

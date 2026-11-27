@@ -1,0 +1,249 @@
+.data_start
+    # wasdon-zig heap-size: 68
+    _memory: %SystemByteArray, null
+    _memory_size_pages: %SystemInt32, 17
+    __G__g0: %SystemInt32, 1048576
+    __G__angular_speed: %SystemInt32, 1049848
+    __G__radius: %SystemInt32, 1049852
+    __G__self: %UnityEngineTransform, this
+    .export _radius
+    _radius: %SystemSingle, 1.5
+    .export _angularSpeed
+    _angularSpeed: %SystemSingle, 2
+    .export _cloneCount
+    _cloneCount: %SystemInt32, 0
+    __on_update_L0__: %SystemInt32, 0
+    __on_interact_T1__: %UnityEngineGameObject, null
+    __c_i32_1: %SystemInt32, 1
+    __on_interact_T2__: %SystemInt32, 0
+    __on_interact_T3__: %SystemString, null
+    __utf8: %SystemObject, null
+    __c_i32_1049827: %SystemInt32, 1049827
+    __c_i32_18: %SystemInt32, 18
+    __c_i32_1049856: %SystemInt32, 1049856
+    __on_update_T1__: %SystemSingle, 0
+    __c_i32_1049848: %SystemInt32, 1049848
+    __on_update_T2__: %SystemSingle, 0
+    __on_update_T3__: %SystemSingle, 0
+    __c_i32_4: %SystemInt32, 4
+    __c_i32_0: %SystemInt32, 0
+    __st_f32: %SystemSingleArray, null
+    __on_update_T4__: %UnityEngineVector3, null
+    __c_i32_1049852: %SystemInt32, 1049852
+    __c_f32_0: %SystemSingle, 0
+    __on_update_T5__: %UnityEngineVector3, null
+    __on_start_T1__: %SystemString, null
+    __c_i32_1049808: %SystemInt32, 1049808
+    __kpool: %SystemByteArray, null
+    __init_RA: %SystemUInt32, 0
+    __inited: %SystemBoolean, null
+    __ra_1: %SystemUInt32, 920
+    __ra_2: %SystemUInt32, 944
+    __ra_3: %SystemUInt32, 968
+    __c_i32_1114112: %SystemInt32, 1114112
+    __data_0: %SystemString, "ewogICJ2ZXJzaW9uIjogMSwKICAiYmVoYXZpb3VyIjogeyAic3luY01vZGUiOiAibm9uZSIgfSwKICAiZnVuY3Rpb25zIjogewogICAgInN0YXJ0IjogICAgeyAic291cmNlIjogeyJraW5kIjoiZXhwb3J0IiwibmFtZSI6Im9uX3N0YXJ0In0sICAgICJsYWJlbCI6Il9zdGFydCIsICAgICJleHBvcnQiOiB0cnVlLCAiZXZlbnQiOiJTdGFydCIgICAgfSwKICAgICJ1cGRhdGUiOiAgIHsgInNvdXJjZSI6IHsia2luZCI6ImV4cG9ydCIsIm5hbWUiOiJvbl91cGRhdGUifSwgICAibGFiZWwiOiJfdXBkYXRlIiwgICAiZXhwb3J0IjogdHJ1ZSwgImV2ZW50IjoiVXBkYXRlIiAgIH0sCiAgICAiaW50ZXJhY3QiOiB7ICJzb3VyY2UiOiB7ImtpbmQiOiJleHBvcnQiLCJuYW1lIjoib25faW50ZXJhY3QifSwgImxhYmVsIjoiX2ludGVyYWN0IiwgImV4cG9ydCI6IHRydWUsICJldmVudCI6IkludGVyYWN0IiB9CiAgfSwKICAiZmllbGRzIjogewogICAgInNlbGYiOiAgICAgICAgICB7ICJzb3VyY2UiOiB7ImtpbmQiOiJpbXBvcnQiLCJtb2R1bGUiOiJlbnYiLCJuYW1lIjoidWRvbi5zZWxmIn0sICJ1ZG9uTmFtZSI6Il9fR19fc2VsZiIsICJ0eXBlIjoidHJhbnNmb3JtIiwgImRlZmF1bHQiOiJ0aGlzIiB9LAogICAgInJhZGl1cyI6ICAgICAgICB7ICJzb3VyY2UiOiB7ImtpbmQiOiJzeW1ib2wiLCJuYW1lIjoicmFkaXVzIn0sICAgICAgICAidWRvbk5hbWUiOiJfcmFkaXVzIiwgICAgICAgInR5cGUiOiJmbG9hdCIsICJleHBvcnQiOiB0cnVlLCAiZGVmYXVsdCI6IDEuNSB9LAogICAgImFuZ3VsYXJfc3BlZWQiOiB7ICJzb3VyY2UiOiB7ImtpbmQiOiJzeW1ib2wiLCJuYW1lIjoiYW5ndWxhcl9zcGVlZCJ9LCAidWRvbk5hbWUiOiJfYW5ndWxhclNwZWVkIiwgInR5cGUiOiJmbG9hdCIsICJleHBvcnQiOiB0cnVlLCAiZGVmYXVsdCI6IDIuMCB9LAogICAgImNsb25lX2NvdW50IjogICB7ICJzb3VyY2UiOiB7ImtpbmQiOiJpbXBvcnQiLCJtb2R1bGUiOiJlbnYiLCJuYW1lIjoidWRvbi5jbG9uZV9jb3VudCIsInNldHRlciI6InVkb24uc2V0X2Nsb25lX2NvdW50In0sICJ1ZG9uTmFtZSI6Il9jbG9uZUNvdW50IiwgInR5cGUiOiJpbnQiLCAiZXhwb3J0IjogdHJ1ZSB9CiAgfSwKICAib3B0aW9ucyI6IHsKICAgICJzdHJpY3QiOiBmYWxzZSwKICAgICJtZW1vcnkiOiB7ICJpbml0aWFsUGFnZXMiOiAxLCAibWF4UGFnZXMiOiA0LCAidWRvbk5hbWUiOiAiX21lbW9yeSIgfQogIH0KfQB1ZG9uLW9yYml0OiBfc3RhcnQAdWRvbi1vcmJpdDogY2xvbmVk"
+    __data_bytes: %SystemByteArray, null
+    __c_i32_1048576: %SystemInt32, 1048576
+    __c_i32_1269: %SystemInt32, 1269
+    __data_1: %SystemString, "QAAAwD8="
+    __c_i32_1049851: %SystemInt32, 1049851
+    __c_i32_5: %SystemInt32, 5
+    __kpool_b64: %SystemString, "AAAAAA=="
+.data_end
+
+.code_start
+        PUSH, __G__self
+        PUSH, __on_interact_T1__
+        EXTERN, "UnityEngineComponent.__get_gameObject__UnityEngineGameObject"
+        PUSH, __on_interact_T1__
+        PUSH, __on_interact_T1__
+        EXTERN, "VRCInstantiate.__Instantiate__UnityEngineGameObject__UnityEngineGameObject"
+        PUSH, _cloneCount
+        PUSH, __c_i32_1
+        PUSH, _cloneCount
+        EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
+        PUSH, __utf8
+        PUSH, _memory
+        PUSH, __c_i32_1049827
+        PUSH, __c_i32_18
+        PUSH, __on_interact_T3__
+        EXTERN, "SystemTextEncoding.__GetString__SystemByteArray_SystemInt32_SystemInt32__SystemString"
+        PUSH, __on_interact_T3__
+        EXTERN, "UnityEngineDebug.__Log__SystemObject__SystemVoid"
+        JUMP, 0xFFFFFFFC
+        PUSH, _memory
+        PUSH, __c_i32_1049856
+        PUSH, __on_update_T1__
+        EXTERN, "SystemBitConverter.__ToSingle__SystemByteArray_SystemInt32__SystemSingle"
+        PUSH, _memory
+        PUSH, __c_i32_1049848
+        PUSH, __on_update_T2__
+        EXTERN, "SystemBitConverter.__ToSingle__SystemByteArray_SystemInt32__SystemSingle"
+        PUSH, __on_update_T3__
+        EXTERN, "UnityEngineTime.__get_deltaTime__SystemSingle"
+        PUSH, __on_update_T2__
+        PUSH, __on_update_T3__
+        PUSH, __on_update_T3__
+        EXTERN, "SystemSingle.__op_Multiplication__SystemSingle_SystemSingle__SystemSingle"
+        PUSH, __on_update_T1__
+        PUSH, __on_update_T3__
+        PUSH, __on_update_T3__
+        EXTERN, "SystemSingle.__op_Addition__SystemSingle_SystemSingle__SystemSingle"
+        PUSH, __st_f32
+        PUSH, __c_i32_0
+        PUSH, __on_update_T3__
+        EXTERN, "SystemSingleArray.__Set__SystemInt32_SystemSingle__SystemVoid"
+        PUSH, __st_f32
+        PUSH, __c_i32_0
+        PUSH, _memory
+        PUSH, __c_i32_1049856
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __G__self
+        PUSH, __on_update_L0__
+        COPY
+        PUSH, __on_update_L0__
+        PUSH, __on_update_T4__
+        EXTERN, "UnityEngineTransform.__get_position__UnityEngineVector3"
+        PUSH, _memory
+        PUSH, __c_i32_1049852
+        PUSH, __on_update_T3__
+        EXTERN, "SystemBitConverter.__ToSingle__SystemByteArray_SystemInt32__SystemSingle"
+        PUSH, _memory
+        PUSH, __c_i32_1049856
+        PUSH, __on_update_T1__
+        EXTERN, "SystemBitConverter.__ToSingle__SystemByteArray_SystemInt32__SystemSingle"
+        PUSH, __on_update_T1__
+        PUSH, __on_update_T1__
+        EXTERN, "UnityEngineMathf.__Cos__SystemSingle__SystemSingle"
+        PUSH, __on_update_T3__
+        PUSH, __on_update_T1__
+        PUSH, __on_update_T1__
+        EXTERN, "SystemSingle.__op_Multiplication__SystemSingle_SystemSingle__SystemSingle"
+        PUSH, _memory
+        PUSH, __c_i32_1049852
+        PUSH, __on_update_T3__
+        EXTERN, "SystemBitConverter.__ToSingle__SystemByteArray_SystemInt32__SystemSingle"
+        PUSH, _memory
+        PUSH, __c_i32_1049856
+        PUSH, __on_update_T2__
+        EXTERN, "SystemBitConverter.__ToSingle__SystemByteArray_SystemInt32__SystemSingle"
+        PUSH, __on_update_T2__
+        PUSH, __on_update_T2__
+        EXTERN, "UnityEngineMathf.__Sin__SystemSingle__SystemSingle"
+        PUSH, __on_update_T3__
+        PUSH, __on_update_T2__
+        PUSH, __on_update_T2__
+        EXTERN, "SystemSingle.__op_Multiplication__SystemSingle_SystemSingle__SystemSingle"
+        PUSH, __on_update_T1__
+        PUSH, __c_f32_0
+        PUSH, __on_update_T2__
+        PUSH, __on_update_T5__
+        EXTERN, "UnityEngineVector3.__ctor__SystemSingle_SystemSingle_SystemSingle__UnityEngineVector3"
+        PUSH, __on_update_T4__
+        PUSH, __on_update_T5__
+        PUSH, __on_update_T5__
+        EXTERN, "UnityEngineVector3.__op_Addition__UnityEngineVector3_UnityEngineVector3__UnityEngineVector3"
+        PUSH, __on_update_L0__
+        PUSH, __on_update_T5__
+        EXTERN, "UnityEngineTransform.__set_position__UnityEngineVector3__SystemVoid"
+        JUMP, 0xFFFFFFFC
+        PUSH, __utf8
+        PUSH, _memory
+        PUSH, __c_i32_1049808
+        PUSH, __c_i32_18
+        PUSH, __on_start_T1__
+        EXTERN, "SystemTextEncoding.__GetString__SystemByteArray_SystemInt32_SystemInt32__SystemString"
+        PUSH, __on_start_T1__
+        EXTERN, "UnityEngineDebug.__Log__SystemObject__SystemVoid"
+        PUSH, __kpool
+        PUSH, __c_i32_0
+        PUSH, _memory
+        PUSH, __c_i32_1049856
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __c_i32_0
+        PUSH, _cloneCount
+        COPY
+        JUMP, 0xFFFFFFFC
+    .export _start
+    _start:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x000003D0
+        JUMP, 0x000002FC
+    .export _update
+    _update:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x000003EC
+        JUMP, 0x00000098
+    .export _interact
+    _interact:
+        PUSH, __inited
+        JUMP_IF_FALSE, 0x00000408
+        JUMP, 0x00000000
+        PUSH, __ra_1
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x0000041C
+        PUSH, __ra_2
+        PUSH, __init_RA
+        COPY
+        JUMP, 0x0000041C
+        PUSH, __ra_3
+        PUSH, __init_RA
+        COPY
+        PUSH, __c_i32_0
+        PUSH, __c_i32_0
+        PUSH, __inited
+        EXTERN, "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __c_i32_1114112
+        PUSH, _memory
+        EXTERN, "SystemByteArray.__ctor__SystemInt32__SystemByteArray"
+        PUSH, __data_0
+        PUSH, __data_bytes
+        EXTERN, "SystemConvert.__FromBase64String__SystemString__SystemByteArray"
+        PUSH, __data_bytes
+        PUSH, __c_i32_0
+        PUSH, _memory
+        PUSH, __c_i32_1048576
+        PUSH, __c_i32_1269
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __data_1
+        PUSH, __data_bytes
+        EXTERN, "SystemConvert.__FromBase64String__SystemString__SystemByteArray"
+        PUSH, __data_bytes
+        PUSH, __c_i32_0
+        PUSH, _memory
+        PUSH, __c_i32_1049851
+        PUSH, __c_i32_5
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __kpool_b64
+        PUSH, __kpool
+        EXTERN, "SystemConvert.__FromBase64String__SystemString__SystemByteArray"
+        PUSH, __c_i32_1
+        PUSH, __st_f32
+        EXTERN, "SystemSingleArray.__ctor__SystemInt32__SystemSingleArray"
+        PUSH, __utf8
+        EXTERN, "SystemTextEncoding.__get_UTF8__SystemTextEncoding"
+        PUSH, __st_f32
+        PUSH, __c_i32_0
+        PUSH, _radius
+        EXTERN, "SystemSingleArray.__Set__SystemInt32_SystemSingle__SystemVoid"
+        PUSH, __st_f32
+        PUSH, __c_i32_0
+        PUSH, _memory
+        PUSH, __c_i32_1049852
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        PUSH, __st_f32
+        PUSH, __c_i32_0
+        PUSH, _angularSpeed
+        EXTERN, "SystemSingleArray.__Set__SystemInt32_SystemSingle__SystemVoid"
+        PUSH, __st_f32
+        PUSH, __c_i32_0
+        PUSH, _memory
+        PUSH, __c_i32_1049848
+        PUSH, __c_i32_4
+        EXTERN, "SystemBuffer.__BlockCopy__SystemArray_SystemInt32_SystemArray_SystemInt32_SystemInt32__SystemVoid"
+        JUMP_INDIRECT, __init_RA
+.code_end

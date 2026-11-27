@@ -61,22 +61,18 @@ pub fn decodeFuncType(allocator: std.mem.Allocator, r: *Reader) errors.ParseErro
 pub const Limits = struct {
     min: u32,
     max: ?u32,
+    /// Threads proposal: the memory may be shared between agents.
+    shared: bool = false,
 };
 
+/// Flags: bit 0 "has a maximum", bit 1 "shared" (threads proposal).
+/// 64-bit limits (memory64, bit 2) are not decoded.
 pub fn decodeLimits(r: *Reader) errors.ParseError!Limits {
-    const tag = try r.readByte();
-    switch (tag) {
-        0x00 => {
-            const min = try leb128.readULEB128(u32, r);
-            return .{ .min = min, .max = null };
-        },
-        0x01 => {
-            const min = try leb128.readULEB128(u32, r);
-            const max = try leb128.readULEB128(u32, r);
-            return .{ .min = min, .max = max };
-        },
-        else => return error.MalformedLimits,
-    }
+    const flags = try r.readByte();
+    if (flags > 0x03) return error.MalformedLimits;
+    const min = try leb128.readULEB128(u32, r);
+    const max: ?u32 = if (flags & 0x01 != 0) try leb128.readULEB128(u32, r) else null;
+    return .{ .min = min, .max = max, .shared = flags & 0x02 != 0 };
 }
 
 pub const MemType = Limits;
@@ -225,8 +221,16 @@ test "decodeLimits min + max" {
 }
 
 test "decodeLimits rejects bad tag" {
-    var r = mk(&[_]u8{ 0x02, 0x01 });
+    var r = mk(&[_]u8{ 0x04, 0x01 });
     try std.testing.expectError(error.MalformedLimits, decodeLimits(&r));
+}
+
+test "decodeLimits reads the shared flag" {
+    var r = mk(&[_]u8{ 0x03, 0x0F, 0x80, 0x80, 0x04 });
+    const l = try decodeLimits(&r);
+    try std.testing.expect(l.shared);
+    try std.testing.expectEqual(@as(u32, 15), l.min);
+    try std.testing.expectEqual(@as(u32, 65536), l.max.?);
 }
 
 test "decodeTableType funcref" {

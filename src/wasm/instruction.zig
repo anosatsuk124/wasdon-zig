@@ -36,7 +36,7 @@ pub const If = struct {
     else_body: ?[]const Instruction,
 };
 
-/// One variant per Core 1 opcode. Keep in lockstep with `opcode.spec`.
+/// One variant per entry of `opcode.spec`; keep the two in lockstep.
 pub const Instruction = union(enum) {
     // control
     unreachable_,
@@ -235,6 +235,56 @@ pub const Instruction = union(enum) {
     i64_reinterpret_f64,
     f32_reinterpret_i32,
     f64_reinterpret_i64,
+
+    // sign-extension operators
+    i32_extend8_s,
+    i32_extend16_s,
+    i64_extend8_s,
+    i64_extend16_s,
+    i64_extend32_s,
+
+    // non-trapping float-to-int conversions
+    i32_trunc_sat_f32_s,
+    i32_trunc_sat_f32_u,
+    i32_trunc_sat_f64_s,
+    i32_trunc_sat_f64_u,
+    i64_trunc_sat_f32_s,
+    i64_trunc_sat_f32_u,
+    i64_trunc_sat_f64_s,
+    i64_trunc_sat_f64_u,
+
+    // bulk memory
+    /// Operand is the data segment index.
+    memory_init: u32,
+    data_drop: u32,
+    memory_copy,
+    memory_fill,
+
+    /// Any instruction of the threads proposal (prefix 0xFE). Decoded so
+    /// that a module using them can be parsed and reported on; they are
+    /// not translated.
+    atomic: Atomic,
+};
+
+pub const Atomic = struct {
+    /// Sub-opcode after the 0xFE prefix.
+    op: u32,
+    memarg: MemArg = .{ .@"align" = 0, .offset = 0 },
+
+    pub const Kind = enum { notify, wait, fence, load, store, rmw, cmpxchg };
+
+    pub fn kind(self: Atomic) ?Kind {
+        return switch (self.op) {
+            0x00 => .notify,
+            0x01, 0x02 => .wait,
+            0x03 => .fence,
+            0x10...0x16 => .load,
+            0x17...0x1D => .store,
+            0x1E...0x47 => .rmw,
+            0x48...0x4E => .cmpxchg,
+            else => null,
+        };
+    }
 };
 
 // Compile-time invariant: every opcode in `spec` has a matching union tag,
@@ -242,7 +292,8 @@ pub const Instruction = union(enum) {
 comptime {
     @setEvalBranchQuota(100_000);
     const union_fields = @typeInfo(Instruction).@"union".fields;
-    if (union_fields.len != opcode.spec.len) {
+    // `atomic` stands for the whole 0xFE prefix and has no entry in `spec`.
+    if (union_fields.len != opcode.spec.len + 1) {
         @compileError("Instruction union field count does not match opcode.spec length");
     }
     for (opcode.spec) |s| {
@@ -257,6 +308,66 @@ comptime {
             @compileError("opcode.spec tag missing from Instruction union: " ++ s.tag);
         }
     }
+}
+
+// ----------------------------------------------------------------------
+//  Walking a body
+// ----------------------------------------------------------------------
+//
+// A body is a tree: `block`, `loop` and `if` hold bodies of their own. The
+// helpers below visit the instructions that are not blocks, at every depth.
+
+/// Call `visit` for every instruction of `body`.
+pub fn forEach(body: []const Instruction, ctx: anytype, comptime visit: fn (@TypeOf(ctx), Instruction) void) void {
+    for (body) |ins| switch (ins) {
+        .block, .loop => |b| forEach(b.body, ctx, visit),
+        .if_ => |b| {
+            forEach(b.then_body, ctx, visit);
+            if (b.else_body) |e| forEach(e, ctx, visit);
+        },
+        else => visit(ctx, ins),
+    };
+}
+
+/// True if `found` holds for some instruction of `body`.
+pub fn any(body: []const Instruction, ctx: anytype, comptime found: fn (@TypeOf(ctx), Instruction) bool) bool {
+    for (body) |ins| switch (ins) {
+        .block, .loop => |b| if (any(b.body, ctx, found)) return true,
+        .if_ => |b| if (any(b.then_body, ctx, found) or (b.else_body != null and any(b.else_body.?, ctx, found))) return true,
+        else => if (found(ctx, ins)) return true,
+    };
+    return false;
+}
+
+/// A copy of `body` in which every instruction has been replaced by what
+/// `replace` appended for it.
+pub fn rewrite(
+    arena: std.mem.Allocator,
+    body: []const Instruction,
+    ctx: anytype,
+    comptime replace: fn (@TypeOf(ctx), Instruction, *std.ArrayList(Instruction), std.mem.Allocator) error{OutOfMemory}!void,
+) error{OutOfMemory}![]const Instruction {
+    var out: std.ArrayList(Instruction) = try .initCapacity(arena, body.len);
+    for (body) |ins| switch (ins) {
+        .block => |b| try out.append(arena, .{ .block = .{ .bt = b.bt, .body = try rewrite(arena, b.body, ctx, replace) } }),
+        .loop => |b| try out.append(arena, .{ .loop = .{ .bt = b.bt, .body = try rewrite(arena, b.body, ctx, replace) } }),
+        .if_ => |b| try out.append(arena, .{ .if_ = .{
+            .bt = b.bt,
+            .then_body = try rewrite(arena, b.then_body, ctx, replace),
+            .else_body = if (b.else_body) |e| try rewrite(arena, e, ctx, replace) else null,
+        } }),
+        else => try replace(ctx, ins, &out, arena),
+    };
+    return out.items;
+}
+
+/// A copy of `body` in which every `call f` is `call target(ctx, f)`.
+pub fn mapCalls(arena: std.mem.Allocator, body: []const Instruction, ctx: anytype, comptime target: fn (@TypeOf(ctx), u32) u32) error{OutOfMemory}![]const Instruction {
+    return rewrite(arena, body, ctx, struct {
+        fn replace(c: @TypeOf(ctx), ins: Instruction, out: *std.ArrayList(Instruction), a: std.mem.Allocator) error{OutOfMemory}!void {
+            try out.append(a, if (ins == .call) .{ .call = target(c, ins.call) } else ins);
+        }
+    }.replace);
 }
 
 fn readMemArg(r: *Reader) errors.ParseError!MemArg {
@@ -285,8 +396,20 @@ pub fn decodeInstruction(allocator: std.mem.Allocator, r: *Reader) errors.ParseE
     if (op == 0x0B) return error.UnexpectedEndOpcode;
     if (op == 0x05) return error.UnexpectedElseOpcode;
 
+    if (op == opcode.prefix_fe) {
+        const atomic: Atomic = .{ .op = try leb128.readULEB128(u32, r) };
+        const kind = atomic.kind() orelse return error.UnknownOpcode;
+        if (kind == .fence) {
+            if (try r.readByte() != 0x00) return error.MalformedReserved;
+            return .{ .atomic = atomic };
+        }
+        return .{ .atomic = .{ .op = atomic.op, .memarg = try readMemArg(r) } };
+    }
+
+    const ext: u32 = if (op == opcode.prefix_fc) try leb128.readULEB128(u32, r) else 0;
+
     inline for (opcode.spec) |s| {
-        if (s.opcode == op) {
+        if (s.opcode == op and s.ext == ext) {
             switch (s.imm) {
                 .none => return @unionInit(Instruction, s.tag, {}),
                 .labelidx, .funcidx, .localidx, .globalidx => {
@@ -295,8 +418,11 @@ pub fn decodeInstruction(allocator: std.mem.Allocator, r: *Reader) errors.ParseE
                 },
                 .typeidx_reserved => {
                     const tidx = try leb128.readULEB128(u32, r);
-                    const reserved = try r.readByte();
-                    if (reserved != 0x00) return error.MalformedReserved;
+                    // Core 1 has a zero byte here. With reference types it
+                    // is a table index, which linkers write as a padded
+                    // LEB128; only table 0 exists for this translator.
+                    const table = try leb128.readULEB128(u32, r);
+                    if (table != 0) return error.MalformedReserved;
                     return @unionInit(Instruction, s.tag, tidx);
                 },
                 .br_table => {
@@ -311,6 +437,19 @@ pub fn decodeInstruction(allocator: std.mem.Allocator, r: *Reader) errors.ParseE
                     const reserved = try r.readByte();
                     if (reserved != 0x00) return error.MalformedReserved;
                     return @unionInit(Instruction, s.tag, {});
+                },
+                .two_reserved => {
+                    if (try r.readByte() != 0x00 or try r.readByte() != 0x00) return error.MalformedReserved;
+                    return @unionInit(Instruction, s.tag, {});
+                },
+                .dataidx => {
+                    const idx = try leb128.readULEB128(u32, r);
+                    return @unionInit(Instruction, s.tag, idx);
+                },
+                .dataidx_reserved => {
+                    const idx = try leb128.readULEB128(u32, r);
+                    if (try r.readByte() != 0x00) return error.MalformedReserved;
+                    return @unionInit(Instruction, s.tag, idx);
                 },
                 .i32_imm => {
                     const v = try leb128.readSLEB128(i32, r);
@@ -407,7 +546,21 @@ fn mk(bytes: []const u8) Reader {
 
 test "Instruction union matches opcode.spec length" {
     const union_fields = @typeInfo(Instruction).@"union".fields;
-    try std.testing.expectEqual(opcode.spec.len, union_fields.len);
+    // Plus `atomic`, which covers the whole 0xFE prefix.
+    try std.testing.expectEqual(opcode.spec.len + 1, union_fields.len);
+}
+
+test "atomic instructions decode with their memarg; fence has none" {
+    var load = mk(&[_]u8{ 0xFE, 0x10, 0x02, 0x08 });
+    const a = (try decodeInstruction(std.testing.allocator, &load)).atomic;
+    try std.testing.expectEqual(Atomic.Kind.load, a.kind().?);
+    try std.testing.expectEqual(@as(u32, 8), a.memarg.offset);
+    var fence = mk(&[_]u8{ 0xFE, 0x03, 0x00 });
+    try std.testing.expectEqual(Atomic.Kind.fence, (try decodeInstruction(std.testing.allocator, &fence)).atomic.kind().?);
+    var cmpxchg = mk(&[_]u8{ 0xFE, 0x48, 0x02, 0x00 });
+    try std.testing.expectEqual(Atomic.Kind.cmpxchg, (try decodeInstruction(std.testing.allocator, &cmpxchg)).atomic.kind().?);
+    var unknown = mk(&[_]u8{ 0xFE, 0x7F });
+    try std.testing.expectError(error.UnknownOpcode, decodeInstruction(std.testing.allocator, &unknown));
 }
 
 test "decode nop" {
@@ -521,8 +674,28 @@ test "decode unknown opcode rejected" {
         error.UnexpectedElseOpcode,
         decodeInstruction(std.testing.allocator, &r),
     );
-    var r2 = mk(&[_]u8{0xC0});
+    var r2 = mk(&[_]u8{0xC5});
     try std.testing.expectError(error.UnknownOpcode, decodeInstruction(std.testing.allocator, &r2));
+    // 0xFC 12 is table.init, which this parser does not support.
+    var r3 = mk(&[_]u8{ 0xFC, 0x0C });
+    try std.testing.expectError(error.UnknownOpcode, decodeInstruction(std.testing.allocator, &r3));
+}
+
+test "decode sign-extension, saturating truncation and bulk memory" {
+    var r = mk(&[_]u8{0xC0});
+    try std.testing.expect(try decodeInstruction(std.testing.allocator, &r) == .i32_extend8_s);
+    var r2 = mk(&[_]u8{ 0xFC, 0x02 });
+    try std.testing.expect(try decodeInstruction(std.testing.allocator, &r2) == .i32_trunc_sat_f64_s);
+    var r3 = mk(&[_]u8{ 0xFC, 0x0A, 0x00, 0x00 });
+    try std.testing.expect(try decodeInstruction(std.testing.allocator, &r3) == .memory_copy);
+    var r4 = mk(&[_]u8{ 0xFC, 0x0B, 0x00 });
+    try std.testing.expect(try decodeInstruction(std.testing.allocator, &r4) == .memory_fill);
+    var r5 = mk(&[_]u8{ 0xFC, 0x08, 0x03, 0x00 });
+    try std.testing.expectEqual(@as(u32, 3), (try decodeInstruction(std.testing.allocator, &r5)).memory_init);
+    var r6 = mk(&[_]u8{ 0xFC, 0x09, 0x02 });
+    try std.testing.expectEqual(@as(u32, 2), (try decodeInstruction(std.testing.allocator, &r6)).data_drop);
+    var r7 = mk(&[_]u8{ 0xFC, 0x0A, 0x00, 0x01 });
+    try std.testing.expectError(error.MalformedReserved, decodeInstruction(std.testing.allocator, &r7));
 }
 
 test "decodeExpr empty" {

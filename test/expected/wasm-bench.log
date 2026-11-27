@@ -1,0 +1,97 @@
+=== on_start begin ===
+-- nofmt_simple --
+literal one
+literal two
+literal three
+nofmt_simple done
+-- manual fastpath --
+plain: hi
+manual fastpath done
+-- wl slice write --
+plain: hi
+wl slice write done
+-- real logf (staged) --
+-- stage1: Writer.fixed init only --
+stage1 done
+-- stage2: bufPrint with literal only --
+abc
+stage2 done
+-- stage3: bufPrint with {s} --
+x=y
+stage3 done
+-- stage4: bufPrint with {d} --
+n=42
+stage4 done
+real logf all stages done
+=== on_start end ===
+-- fmt_int_hand --
+42
+-7
+0
+fmt_int_hand done
+-- memcpy direct --
+abcdefg
+memcpy direct done
+-- writer-like struct --
+plain: hi
+writer-like done
+-- vtable indirect --
+321
+vtable indirect done
+-- wl slice memcpy --
+plain: hi
+wl slice memcpy done
+-- wl slice err --
+plain: hi
+wl slice err done
+-- fmt_single --
+plain: hi
+fmt_single done
+== arithmetic ==
+1 + 2 = 3
+100 * 200 = 20000
+-50 / 7 = -7
+17 % 5 = 2
+1 << 10 = 1024
+0x7F00 | 0x00FF = 0x7fff
+0xABCD ^ 0x00FF = 0xab32
+== control_flow ==
+i = 0
+i = 1
+i = 2
+i = 3
+i = 4
+x > 5
+tag=2
+sum of odd 1..10 = 25
+== globals ==
+counter = 6
+accum = 15
+== recursion ==
+factorial(5) = 120
+fib(10) = 55
+== memory ==
+scratch[0] = 0xdeadbeef
+scratch[1] = 42
+scratch[2] (LE byte assemble) = 0x44332211
+memory.size before = 17 pages
+memory.grow returned = 17
+memory.size after  = 18 pages
+== call_indirect ==
+double_it(21) = 42
+negate_it(7) = -7
+add_one(99) = 100
+== struct ==
+point_area({6,7}) = 42
+q after translate = (13, 24)
+rect_width(g_rect) = 10
+g_rect.tag = 0x1234
+g_rect.tag after inc = 0x1235
+sum of areas = 36
+points[1] after translate = (102, 204)
+== 64bit_and_float ==
+(0x100000000 + 5) hi32 = 1
+(0x100000000 + 5) lo32 = 5
+3.14 * 2.0 = 6.28
+floor(m * 100) = 628
+(no more steps)

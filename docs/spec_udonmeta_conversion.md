@@ -6,9 +6,9 @@
 
 The metadata is mainly intended to express the following three kinds of information:
 
-* How state on the Wasm side should be treated as data-section variables on the Udon side
+* Which Udon variables the program shares with the Inspector, other behaviours and the network
 * Which Udon event labels Wasm-side functions should correspond to
-* What synchronization policy and conversion options should apply to the UdonBehaviour as a whole
+* Translator options
 
 ---
 
@@ -113,30 +113,33 @@ acceptable; the translator must tolerate both.
   "behaviour": {},
   "fields": {},
   "functions": {},
+  "imports": {},
   "options": {}
 }
 ```
+
+`imports` is for a module built for another host: it binds imports that
+are not Udon externs to a console, a clock, a panic, a constant answer or
+a halt. Its keys, values and semantics are in
+`docs/spec_host_import_conversion.md` §8.
 
 ---
 
 ## `fields`
 
-`fields` describes attributes for variables that will ultimately be placed in the Udon data section.
+`fields` declares Udon variables that the WASM program shares with the
+outside world: values set in the Inspector, values other behaviours read,
+synced values, and references to Unity objects.
 
 ```json
 {
   "fields": {
     "<field-key>": {
-      "source": {
-        "kind": "global | symbol"
-      },
+      "source": { "kind": "global | import | symbol", "name": "…" },
       "udonName": "string",
-      "type": "bool | int | uint | float | string | object",
+      "type": "bool | int | uint | float | string | object | gameobject | transform | udonBehaviour | <Udon type name>",
       "export": false,
-      "sync": {
-        "enabled": false,
-        "mode": "none | linear | smooth"
-      },
+      "sync": { "enabled": false, "mode": "none | linear | smooth" },
       "default": null,
       "comment": "string"
     }
@@ -146,69 +149,109 @@ acceptable; the translator must tolerate both.
 
 ### `source`
 
-Indicates which Wasm-side state a field is generated from.
+Where the field's value lives on the WASM side. There are three kinds.
 
-#### When referring to a global
-
-```json
-{
-  "kind": "global",
-  "name": "score"
-}
-```
-
-#### When referring to a symbol name
+#### `global` — a WASM global
 
 ```json
-{
-  "kind": "symbol",
-  "name": "__state_owner_id"
-}
+{ "kind": "global", "name": "score" }
 ```
+
+`name` is the export name of a WASM global. The global *is* the Udon
+variable: `global.get` / `global.set` read and write it directly. The
+field's type must match the global's value type (`int` for `i32`, `float`
+for `f32`).
+
+Compilers rarely emit mutable globals for program state (see `symbol`);
+this kind is mostly for hand-written WAT.
+
+#### `import` — an Udon variable accessed through imports
+
+```json
+{ "kind": "import", "module": "env", "name": "udon.texture", "setter": "udon.set_texture" }
+```
+
+The variable lives in the Udon heap with the field's `type`. `name` is a
+function import `() -> T` that reads it; the optional `setter` is a function
+import `(T) -> ()` that writes it (`module` applies to both and may be
+omitted). Calls to them are not externs: a read costs nothing, a write is a
+`COPY` or less (`docs/spec_host_import_conversion.md` §6).
+
+`T` is the matching WASM type for `int` / `float` (and `SystemInt64`,
+`SystemDouble`), `i32` holding 0 or 1 for `bool`, and an opaque `i32`
+handle for every other type. This is the general mechanism: it works for
+any Udon type, in both directions, at any time.
+
+If `name` matches an imported WASM *global* instead of a function, the
+field describes that global.
+
+#### `symbol` — a variable in linear memory
+
+```json
+{ "kind": "symbol", "name": "radius" }
+```
+
+`name` is an exported global holding the **address** of a variable in
+linear memory — what `export var radius: f32` (Zig) or an exported `static`
+(Rust, C) produces. The field is an **input**: the init routine copies the
+field's value (as set in the Inspector, or its `default`) into memory once,
+after the data segments and after the module's start function. Later
+changes on either side are not propagated; use an `import` field for state
+that must stay visible.
+
+`type` must be `int`, `float` or `string`. An `int` or `float` is a 4-byte
+variable. A `string` is a character buffer: the text is written at the
+address as UTF-8, followed by a NUL — a C string. The translator does not
+know the buffer's size; the text must fit. This is how a program that
+expects its host to write a configuration string into its memory gets one
+(`examples/linux`: the kernel's command line).
 
 ### `udonName`
 
-The name of the generated Udon variable. If omitted, the key name is used.
+Name of the Udon variable. Defaults to the field key (for `global`
+fields, to `__G__<name>`).
 
 ### `type`
 
-A hint for the initial type emitted into the Udon data section.
+The Udon type of the variable: one of the aliases above, or any Udon type
+name from the node list (`UnityEngineTexture2D`, `SystemByteArray`,
+`VRCSDKBaseVRCPlayerApi`, `UnityEngineTransformArray`, …).
 
 ### `export`
 
-If `true`, `.export <name>` is attached to that variable.
+If `true`, `.export <name>` is attached: the variable appears in the
+Inspector and is reachable with `GetProgramVariable`.
 
 ### `sync`
 
-Corresponds to `.sync <variableName>, <interpolationMode>` in Udon.
-
-* If `enabled = false`, no `.sync` is emitted
-* `mode = none | linear | smooth`
-
-If `enabled = true` but `mode` is missing, this should be treated as an error.
+Emits `.sync <name>, <mode>`. `enabled = true` without `mode` is an error.
 
 ### `default`
 
-An initial-value hint. It is used as-is only when it fits within Udon Assembly literal constraints.
+Initial value. A number for `int` / `uint` / `float`; a string for
+`string`; the string `"this"` for the types Udon can resolve it for —
+`UnityEngineGameObject`, `UnityEngineTransform`, `VRCUdonUdonBehaviour` and
+`UnityEngineObject` (`docs/udon_specs.md` §4.6); `null`. Udon Assembly cannot
+initialize any other type to anything but `null`
+(`docs/udon_specs.md` §4.7), and the translator rejects defaults it cannot
+express.
 
 ### `comment`
 
-A human-facing note. It has no effect on conversion semantics.
+A human-facing note. No effect.
 
 ---
 
 ## `functions`
 
-`functions` provides label/export information in the Udon code section for Wasm-side functions.
+`functions` binds exported WASM functions to Udon event labels.
 
 ```json
 {
   "functions": {
     "<function-key>": {
-      "source": {
-        "kind": "export | symbol | name"
-      },
-      "label": "string",
+      "source": { "kind": "export", "name": "on_start" },
+      "label": "_start",
       "export": true,
       "event": "Start | Update | Interact | custom",
       "comment": "string"
@@ -217,62 +260,23 @@ A human-facing note. It has no effect on conversion semantics.
 }
 ```
 
-### `source`
+- `source.name` is the WASM export name. A name the module does not export
+  is handled per `options.unknownFunctionPolicy`.
+- `label` is the Udon label: `_start`, `_update`, `_interact`,
+  `_onPlayerJoined`, … for standard events (any event in the node list), or
+  a name not starting with `_` for a custom event. If omitted, `event`
+  supplies it (`Start` → `_start`, `Update` → `_update`, `Interact` →
+  `_interact`).
+- The function must take no parameters. Standard events deliver their
+  arguments in dedicated variables; declare those as `import` fields (for
+  example `onPlayerJoinedPlayer` of type `VRCSDKBaseVRCPlayerApi`).
 
-Specifies which Wasm function is being referred to.
+**Without a `functions` section**, every exported function with no
+parameters and no results whose name is a valid Udon label becomes an event
+of that name: `export fn _start()`, `export fn _update()`,
+`export fn Reset()` need no metadata at all.
 
-#### Referencing by export name
-
-```json
-{
-  "kind": "export",
-  "name": "on_start"
-}
-```
-
-#### Referencing by symbol name
-
-```json
-{
-  "kind": "symbol",
-  "name": "__wasm_entry_interact"
-}
-```
-
-#### Referencing by debug/name-based identifier
-
-```json
-{
-  "kind": "name",
-  "name": "interact"
-}
-```
-
-### `label`
-
-The label name to generate in the Udon code section.
-
-Examples:
-
-* `_start`
-* `_update`
-* `_interact`
-* `CustomEventFoo`
-
-### `export`
-
-If `true`, `.export <label>` is attached to that label.
-
-### `event`
-
-A logical event name. It may be used as auxiliary information when `label` is omitted.
-
-Default mapping examples:
-
-* `Start` -> `_start`
-* `Update` -> `_update`
-* `Interact` -> `_interact`
-* `custom` -> explicit `label` is required
+Functions that no event reaches are not translated.
 
 ---
 
@@ -299,32 +303,45 @@ This is not treated as a direct `.sync` line in Udon Assembly itself. Instead, i
 
 ## `options`
 
-`options` contains auxiliary settings related to the behavior of the translator itself.
-
 ```json
 {
   "options": {
-    "strict": true,
+    "strict": false,
     "unknownFieldPolicy": "ignore | warn | error",
     "unknownFunctionPolicy": "ignore | warn | error",
-    "memory": {
-      "initialPages": 1,
-      "maxPages": 256,
-      "udonName": "_memory"
-    }
+    "recursion": "stack | disabled",
+    "callStackSize": 1024,
+    "memory": { "initialPages": 1, "maxPages": 256, "udonName": "_memory" }
   }
 }
 ```
 
+- `strict` — treat an import that is not in the Udon node list, and a field
+  or function whose source does not exist, as an error instead of a warning.
+- `unknownFieldPolicy`, `unknownFunctionPolicy` — what to do when a field's
+  or function's `source` names something the module does not have. Default
+  `warn`.
+- `recursion` — `stack` (default): functions on a call-graph cycle save
+  their frame around calls that may re-enter them. `disabled`: no saving;
+  correct only if nothing is ever re-entered
+  (`docs/spec_call_return_conversion.md` §6).
+- `callStackSize` — the maximum depth of active re-entrant calls (default
+  1024); see `docs/spec_call_return_conversion.md` §6.
+- `recursionUnroll` — how many levels of a small self-recursive function
+  get slots of their own and save no frame (default 64; 0 turns it off).
+  More levels are more code; see `docs/spec_call_return_conversion.md` §6.
+- `memory` — see below.
+
 ### `options.memory`
 
-Overrides for how WASM linear memory is lowered. See `spec_linear_memory.md` for the underlying model (a two-level chunked array with runtime `memory.grow` support).
+All fields are optional (`docs/spec_linear_memory.md` §9).
 
-All fields are optional.
-
-- `initialPages` — number of 64 KiB pages committed at `_onEnable`. If omitted, the WASM module's declared `initial` is used.
-- `maxPages` — upper bound used to size the outer `SystemObjectArray` and to gate `memory.grow`. Resolution order: this field, then the WASM module's declared `max`, then a default of `256` when the module has no `max` and `options.strict` is not `true`. With `options.strict = true` and no `max` anywhere, the translator raises an error. `initialPages > maxPages` is always an error.
-- `udonName` — overrides the Udon variable name of the outer array (default `__G__memory`). Companion scalars `__G__memory_size_pages` and `__G__memory_max_pages` follow the same prefix rule and are renamed in lockstep.
+- `initialPages` — 64 KiB pages allocated at startup; never less than the
+  module's declared minimum or than its data segments need.
+- `maxPages` — bound for `memory.grow`. Falls back to the module's declared
+  maximum, then to 1024.
+- `udonName` — name of the memory variable (default `__G__memory`); the
+  size variable is `<udonName>_size_pages`.
 
 ---
 
@@ -354,15 +371,16 @@ All fields are optional.
     },
     "doorOpen": {
       "source": {
-        "kind": "symbol",
-        "name": "__state_door_open"
+        "kind": "import",
+        "name": "udon.door_open",
+        "setter": "udon.set_door_open"
       },
       "udonName": "_doorOpen",
       "type": "bool",
       "export": false,
       "sync": {
         "enabled": true,
-        "mode": "smooth"
+        "mode": "none"
       },
       "default": null
     },
@@ -401,8 +419,8 @@ All fields are optional.
     },
     "customReset": {
       "source": {
-        "kind": "symbol",
-        "name": "__entry_reset"
+        "kind": "export",
+        "name": "reset_state"
       },
       "label": "ResetState",
       "export": true,
@@ -426,52 +444,20 @@ All fields are optional.
 
 ## Conversion Rules
 
-### 1. Find `__udon_meta`
-
-* Look for the exports `__udon_meta_ptr` and `__udon_meta_len` (either as globals or as zero-argument functions returning `i32`)
-* Read their values to obtain the byte offset and length inside linear memory
-* Resolve that byte range against the module's `data` segments and extract the raw bytes
-* Decode the bytes as UTF-8 JSON
-* If the `__udon_meta_ptr` / `__udon_meta_len` pair is absent, lowering proceeds with default behavior
-* Treat decode failure (invalid UTF-8 or malformed JSON) as an error or warning per `options.strict`
-
-### 2. Check `version`
-
-* Reject unsupported versions
-* If strict compatibility is desired, accept only `version == 1`
-
-### 3. Resolve `fields`
-
-* Resolve Wasm-side globals/symbols based on `source`
-* Generate the corresponding Udon data-section variables
-* If `export = true`, attach `.export <udonName>`
-* If `sync.enabled = true`, attach `.sync <udonName>, <mode>`
-
-### 4. Resolve `functions`
-
-* Resolve Wasm functions based on `source`
-* Generate the corresponding Udon code-section labels
-* If `export = true`, attach `.export <label>`
-
-### 5. Apply `behaviour.syncMode`
-
-* Reflect it in the synchronization setting of the generated UdonBehaviour
-* Since there is no direct corresponding line in Udon Assembly, it may be treated as out-of-assembly generation metadata
-
-### 6. Apply `options.memory`
-
-* Resolve `initialPages` and `maxPages` per the order in `spec_linear_memory.md` (meta override, then WASM declaration, then default `256` with `strict = false`)
-* Size the outer `SystemObjectArray` to `maxPages`
-* Rename the memory variables if `udonName` is provided
-
----
-
-## Constraints
-
-* `fields[*].sync.mode` must allow only `none | linear | smooth`, matching the actual value domain of Udon Assembly `.sync`
-* `functions` event/export metadata applies to code labels and must not be confused with field sync metadata
-* `source.kind = "name"` is discouraged because it is fragile with respect to stripping and optimization
-* JSON is chosen for human readability, but could be replaced with CBOR or another format in the future if needed
+1. **Find the metadata.** Evaluate the exports `__udon_meta_ptr` and
+   `__udon_meta_len` (constant globals or constant nullary functions),
+   slice the data segment that contains the range, and parse it as UTF-8
+   JSON. If either export is missing the module has no metadata and
+   defaults apply. Malformed JSON, an unsupported `version`, or a range
+   outside a single data segment is an error.
+2. **Fields.** Declare one Udon variable per field as described above, with
+   its `.export` / `.sync` attributes and initial value.
+3. **Functions.** Emit an exported label per binding; translate only what
+   those labels (and the WASM start function) reach.
+4. **`behaviour.syncMode`** has no Udon Assembly representation; it is
+   parsed and otherwise ignored. Set the sync mode on the UdonBehaviour
+   component.
+5. **Options** steer the translator as listed above.
 
 ---
 

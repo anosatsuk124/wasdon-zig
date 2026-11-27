@@ -1,31 +1,33 @@
 //! VRChat Udon sample: orbit own GameObject around its spawn point
 //! and clone it on interact.
 //!
-//! Target language is Udon Assembly. Every Udon object type flows through
-//! the WASM boundary as an opaque `i32` heap-handle — never do arithmetic
-//! on those values. See the accompanying plan file for the full design
-//! rationale.
+//! Udon object types cross the WASM boundary as opaque `i32` handles — never
+//! do arithmetic on those values, and never store them in memory. All Udon
+//! externs and their Unity-shaped wrappers live in `udon_api.zig`; this file
+//! holds state, events, and `__udon_meta`.
 //!
-//! All Udon "bare node" externs and their Unity-shaped wrappers live in
-//! `udon_api.zig`; this file only contains state, events, and
-//! `__udon_meta`.
+//! The example shows the three ways state is shared with Udon
+//! (`docs/spec_udonmeta_conversion.md`):
+//!   * `radius` / `angular_speed` are ordinary Zig variables in linear
+//!     memory. Their `kind: "symbol"` fields make them Inspector-tunable:
+//!     the Inspector value is copied into memory once, at startup.
+//!   * `clone_count` lives in the Udon heap (`_cloneCount`) and is read and
+//!     written through a getter/setter import pair, so other behaviours and
+//!     the Inspector always see the current value.
+//!   * `self` is a `this`-initialized Udon variable read through a getter.
 
 const udon = @import("udon_api.zig");
 
-// ---------- Receiver + state ----------
-
 export var radius: f32 = 1.5;
 export var angular_speed: f32 = 2.0;
-export var phase: f32 = 0.0;
-
-export var clone_count: i32 = 0;
+var phase: f32 = 0.0;
 
 // ---------- Events ----------
 
 export fn on_start() void {
     udon.Debug.log("udon-orbit: _start");
     phase = 0.0;
-    clone_count = 0;
+    udon.setCloneCount(0);
 }
 
 export fn on_update() void {
@@ -43,7 +45,7 @@ export fn on_update() void {
 export fn on_interact() void {
     const go = udon.Component.getGameObject(udon.self());
     _ = udon.VRC.instantiate(go);
-    clone_count +%= 1;
+    udon.setCloneCount(udon.cloneCount() +% 1);
     udon.Debug.log("udon-orbit: cloned");
 }
 
@@ -59,11 +61,10 @@ const udon_meta_json =
     \\    "interact": { "source": {"kind":"export","name":"on_interact"}, "label":"_interact", "export": true, "event":"Interact" }
     \\  },
     \\  "fields": {
-    \\    "self":          { "source": {"kind":"import","module":"env","name":"udon.self"}, "udonName":"__G__self",     "type":"transform", "default":"this" },
-    \\    "radius":        { "source": {"kind":"global","name":"radius"},        "udonName":"_radius",       "type":"float",  "export": true, "default": 1.5 },
-    \\    "angular_speed": { "source": {"kind":"global","name":"angular_speed"}, "udonName":"_angularSpeed", "type":"float",  "export": true, "default": 2.0 },
-    \\    "phase":         { "source": {"kind":"global","name":"phase"},         "udonName":"__G__phase",    "type":"float" },
-    \\    "clone_count":   { "source": {"kind":"global","name":"clone_count"},   "udonName":"_cloneCount",   "type":"int",    "export": true }
+    \\    "self":          { "source": {"kind":"import","module":"env","name":"udon.self"}, "udonName":"__G__self", "type":"transform", "default":"this" },
+    \\    "radius":        { "source": {"kind":"symbol","name":"radius"},        "udonName":"_radius",       "type":"float", "export": true, "default": 1.5 },
+    \\    "angular_speed": { "source": {"kind":"symbol","name":"angular_speed"}, "udonName":"_angularSpeed", "type":"float", "export": true, "default": 2.0 },
+    \\    "clone_count":   { "source": {"kind":"import","module":"env","name":"udon.clone_count","setter":"udon.set_clone_count"}, "udonName":"_cloneCount", "type":"int", "export": true }
     \\  },
     \\  "options": {
     \\    "strict": false,

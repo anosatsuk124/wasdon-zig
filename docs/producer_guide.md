@@ -1,74 +1,51 @@
 # Producer guide: writing WASM that wasdon-zig can translate
 
-Audience: anyone writing a WASM module that the wasdon-zig translator
-will consume. This document is the **producer-side** counterpart to the
-`spec_*.md` files — those describe what the translator does, this one
-describes what your source program must look like for that translation
-to succeed.
+Audience: anyone writing the WASM module the translator consumes. The
+`spec_*.md` files describe what the translator does; this guide describes
+what your program must look like, and what makes it fast on the Udon VM.
 
-The schemas of `__udon_meta` itself, the Udon Assembly target language,
-and the WASM-side ABI conversions are covered in
-[`spec_udonmeta_conversion.md`](spec_udonmeta_conversion.md),
-[`udon_specs.md`](udon_specs.md), and the various
-[`spec_*_conversion.md`](.) files. This guide collects the practical
-constraints you have to obey to produce binaries the translator accepts.
-
-Working examples that follow every rule below live under
-`examples/` (Zig: `wasm-bench`, `udon-orbit`; Rust:
-`wasm-bench-rs`, `udon-orbit-rs`).
+Working examples that follow every rule below live under `examples/`.
 
 ---
 
-## 1. Target the WebAssembly MVP, not "modern" WASM
+## 1. Target features
 
-The translator is a Core 1 / MVP parser. It rejects post-MVP opcodes
-(`i32.trunc_sat_*`, anything in the `0xFC` prefix, sign-extension ops,
-bulk-memory, multi-value results, reference types, mutable globals from
-the `mutable-globals` proposal, etc.) with `UnknownOpcode` or related
-parse errors.
+The translator accepts WebAssembly Core 1 (MVP) plus:
 
-You **must** pin your toolchain to MVP-only output:
+| Proposal | Why you want it |
+|---|---|
+| **bulk memory** (`memory.copy`, `memory.fill`) | `memcpy`/`memset` become **one extern** instead of a byte loop costing several externs per byte. The single biggest producer-side win. |
+| sign-extension operators | two instructions each |
+| non-trapping float-to-int | supported |
+| mutable-global import/export | supported |
 
-| Toolchain | What to do                                                          |
-|-----------|---------------------------------------------------------------------|
-| Zig       | `cpu_model = .{ .explicit = &std.Target.wasm.cpu.mvp }` on a `wasm32-freestanding` target. The default `generic` model enables `sign-ext` / `bulk-memory` / `multivalue` / `mutable-globals` / `nontrapping-fptoint` / `reference-types`, all of which the parser refuses. See `build.zig` in this repo for the canonical setup. |
-| Rust      | Use the `wasm32v1-none` target — it is the official "WASM 1.0 / MVP only" target and disables every post-MVP feature by default. `wasm32-unknown-unknown` will *not* work without aggressive `-C target-feature=-…` flags, and even then is a moving target. |
-| WAT/wasm-tools | Hand-author or process with `wasm-tools` and avoid the proposal extensions. |
+Passive data segments (`memory.init` / `data.drop`) and the LEB-encoded
+table index of `call_indirect` are read as well, so the output of
+toolchains that enable bulk memory and reference types by default
+translates.
 
-### Implication: no mutable WASM globals
+A module built with threads — shared memory, atomic instructions — is
+translated as the one thread the Udon VM has executes it: atomics become
+ordinary accesses, and a wait that nothing could end is a trap
+(`docs/spec_linear_memory.md` §12). There is no reason to build for
+threads on purpose; this is for modules that already are.
 
-The MVP only allows immutable globals. The Rust target enforces this
-strictly: Rust `static mut` variables live in **linear memory**, with
-their address exported as an immutable i32 global. Zig with the MVP CPU
-model behaves the same way. There is no language-level workaround on
-the producer side; design your `__udon_meta.fields` accordingly
-(see [§5](#5-state--__udon_metafields)).
+Not supported: multi-value block parameters, reference-typed values and
+table instructions, SIMD, tail calls, exception handling, memory64.
+`wasdon_zig inspect` lists what a given module uses.
+
+| Toolchain | Setup |
+|---|---|
+| Zig | `wasm32-freestanding`, CPU model `mvp` plus features `bulk_memory_opt`, `sign_ext`, `nontrapping_fptoint`, `mutable_globals` — see `build.zig`. The default `generic` model also enables multi-value, which is rejected. |
+| Rust | `wasm32v1-none` (MVP only) works as is; the examples in this repository use it. Add `-C target-feature=+bulk-memory` to get `memory.copy` / `memory.fill` in your own code (the precompiled standard library keeps its software `memcpy` unless rebuilt with `-Zbuild-std`). |
+| C / other | Equivalent `-m` flags; check the output with the translator, which names the first unsupported construct. |
 
 ---
 
 ## 2. Project layout (Rust)
 
-A two-crate Cargo workspace (one per example) with the wasm target as
-the build default works cleanly:
-
-```
-Cargo.toml                 # workspace + release profile
-.cargo/config.toml         # default --target = wasm32v1-none
-examples/<name>-rs/
-├─ Cargo.toml              # crate-type = ["cdylib"]
-└─ src/lib.rs
-```
-
 ```toml
 # Cargo.toml (workspace root)
-[workspace]
-resolver = "2"
-members = ["examples/udon-orbit-rs", "examples/wasm-bench-rs"]
-
-[workspace.package]
-edition = "2021"
-publish = false
-
 [profile.release]
 opt-level = "z"
 lto = true
@@ -85,143 +62,48 @@ target = "wasm32v1-none"
 
 ```toml
 # examples/<name>-rs/Cargo.toml
-[package]
-name = "<name>-rs"
-version = "0.0.0"
-edition.workspace = true
-publish.workspace = true
-
 [lib]
 crate-type = ["cdylib"]
-path = "src/lib.rs"
 ```
 
-The release profile is **load-bearing**:
-
-- `opt-level = "z"` + `lto = true` + `codegen-units = 1` is what makes
-  `__udon_meta_ptr`/`_len` collapse to a single `i32.const` (see
-  [§6](#6-__udon_meta-discovery-contract)).
-- `panic = "abort"` prevents pulling in unwinding support that
-  freestanding WASM cannot link.
-- `strip = "symbols"` keeps the binary small and removes debug-info
-  imports the translator does not understand.
-
-Install the target once with `rustup target add wasm32v1-none`.
-
-### File-name mapping
-
-Cargo turns hyphens in the crate name into underscores in the output
-file name. `udon-orbit-rs` produces `target/wasm32v1-none/release/udon_orbit_rs.wasm`.
+- `opt-level = "z"` + `lto` + `codegen-units = 1` make the
+  `__udon_meta_ptr` / `_len` functions fold to constants (§6).
+- `panic = "abort"`: there is no unwinder.
+- Cargo turns hyphens into underscores: `udon-orbit-rs` builds
+  `target/wasm32v1-none/release/udon_orbit_rs.wasm`.
 
 ---
 
 ## 3. `no_std` skeleton (Rust)
 
-The translator's runtime environment is the Udon VM; there is no OS,
-no allocator, no thread, no panic infrastructure. Every Rust crate
-must:
-
 ```rust
 #![no_std]
 
-use core::panic::PanicInfo;
-
 #[panic_handler]
-fn panic(_: &PanicInfo) -> ! {
-    loop {}
+fn panic(_: &core::panic::PanicInfo) -> ! {
+    core::arch::wasm32::unreachable()
 }
 ```
 
-WASM-specific intrinsics like `memory.size`/`memory.grow` are exposed
-through `core::arch::wasm32`:
+Prefer `unreachable()` to `loop {}`: `unreachable` becomes a logged trap
+that ends the event, while an infinite loop runs until Udon's 10-second
+watchdog halts the behaviour.
 
-```rust
-let pages_before = core::arch::wasm32::memory_size(0) as i32;
-let prev = core::arch::wasm32::memory_grow(0, 1) as i32;
-```
-
-These are safe to call directly — they lower to the matching MVP
-opcodes, no `unsafe` needed.
-
-### Using `alloc` (`Vec`, `Box`, `String`, `BTreeMap`)
-
-`wasm32v1-none` ships no global allocator, but the translator does not
-forbid heap-using Rust code. Register a `#[global_allocator]` of your
-own and `extern crate alloc;`, and the standard heap types come back:
-
-```rust
-extern crate alloc;
-use alloc::vec::Vec;
-
-const ARENA_SIZE: usize = 256 * 1024;
-static mut ARENA: [u8; ARENA_SIZE] = [0; ARENA_SIZE];
-static mut BUMP: usize = 0;
-
-struct BumpAlloc;
-unsafe impl core::alloc::GlobalAlloc for BumpAlloc {
-    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
-        let cur = unsafe { *(&raw const BUMP) };
-        let aligned = (cur + layout.align() - 1) & !(layout.align() - 1);
-        let new = aligned + layout.size();
-        if new > ARENA_SIZE { return core::ptr::null_mut(); }
-        unsafe { *(&raw mut BUMP) = new; }
-        unsafe { (&raw mut ARENA as *mut u8).add(aligned) }
-    }
-    unsafe fn dealloc(&self, _: *mut u8, _: core::alloc::Layout) {}
-}
-
-#[global_allocator]
-static GLOBAL: BumpAlloc = BumpAlloc;
-```
-
-A `static mut` arena is the smallest MVP-clean option:
-
-- It lives in the data section, so the allocator never has to call
-  `memory.grow` on the hot path. The hot path stays trivially
-  MVP-only.
-- `dealloc` as a no-op is allowed by `GlobalAlloc`. Reset the bump
-  pointer at the top of every event entrypoint to keep memory bounded
-  across Udon's per-event 10 s budget.
-- `Vec` realloc still copies, but on `wasm32v1-none` Rust's
-  `core::ptr::copy_nonoverlapping` lowers to a compiler-builtins
-  software memcpy loop — *not* the post-MVP `memory.copy` opcode the
-  translator rejects.
-
-Avoid `dlmalloc`, `talc`, `wee_alloc`, and any other third-party
-allocator that you have not first audited for `memory.copy` /
-`memory.fill` emission. If `wasm-tools print foo.wasm | grep
-'memory\.\(copy\|fill\)'` matches, the translator will reject the
-binary.
-
-See `examples/wasm-bench-alloc-rs` for a worked end-to-end example
-covering `Vec`, `Box`, `String`, nested `Vec<Vec<_>>`, `BTreeMap`,
-and a direct `memory.grow` probe.
+`alloc` works with any `#[global_allocator]`; see
+`examples/wasm-bench-alloc-rs` for a bump allocator over a static arena.
 
 ---
 
-## 4. Declaring host imports (Udon externs)
+## 4. Calling Udon (host imports)
 
-Every Udon EXTERN is reached through a WASM function import whose name
-is the *verbatim* Udon-extern signature string from
-`docs/udon_nodes.txt`. The import module is conventionally `"env"`.
-The translator parses this name against the signature grammar in
-`docs/udon_specs.md` §7 and dispatches generically — there is no
-per-import table, so adding a new extern never requires touching the
-translator.
-
-### Zig
+An import whose **name** is an Udon extern signature from
+`docs/udon_nodes.txt` is called as that extern. Full rules:
+`docs/spec_host_import_conversion.md`.
 
 ```zig
-extern "env" fn @"UnityEngineDebug.__Log__SystemString__SystemVoid"(
-    ptr: [*]const u8,
-    len: usize,
-) void;
+extern "env" fn @"UnityEngineDebug.__Log__SystemString__SystemVoid"(ptr: [*]const u8, len: usize) void;
+extern "env" fn @"UnityEngineTransform.__set_position__UnityEngineVector3__SystemVoid"(self: i32, pos: i32) void;
 ```
-
-Zig's raw-identifier syntax (`@"..."`) lets the import name contain
-dots and other characters that aren't valid identifiers.
-
-### Rust
 
 ```rust
 #[link(wasm_import_module = "env")]
@@ -231,282 +113,251 @@ unsafe extern "C" {
 }
 ```
 
-A few things to note:
+- Instance methods take the receiver as an extra first parameter.
+- `SystemString` parameters are a `(pointer, length)` pair of UTF-8 bytes.
+- `SystemBoolean` is an `i32` 0/1; `SystemSingle` an `f32`; and so on.
+- Every other Udon type is an **opaque `i32` handle**.
 
-- `unsafe extern "C"` (Rust 2024 syntax) is required — `extern "C"`
-  alone now warns/errors in 2024 edition.
-- `#[link(wasm_import_module = "env")]` sets the WASM import module
-  for the entire block; this is what the translator's signature
-  matcher keys on alongside the per-function `link_name`.
-- Use the matching C calling convention (`extern "C"`) — Rust's
-  default ABI may pass aggregates through hidden pointers and break
-  the parser's idea of "two-arg `(ptr, len)` extern".
+### Handles
 
-### Strings
+A handle is not a number. **Never compute with it, compare it, or store it
+in memory** (a struct field, an array, a `static`). Keep it in a local, pass
+it on, or put it in an Udon variable (§5). Rust and Zig keep such values in
+WASM locals as long as their address is not taken.
 
-`SystemString`-typed parameters in the Udon signature are
-auto-marshalled by the translator from a `(ptr: i32, len: i32)` pair
-on the WASM side. So a Zig `[]const u8` slice or a Rust
-`(*const u8, usize)` pair both work — pass the pointer first, length
-second.
+### Cost
 
-### The `udon.self` import trick
+Each extern call costs the same on the Udon VM regardless of what it does,
+so prefer coarse calls:
 
-`udon.self` (returning the receiver `UnityEngineTransform`) is a
-Udon-only singleton with no real WASM-side function body. It is bound
-through `__udon_meta.fields.self` with `source.kind = "import"` so the
-translator turns calls to it into a pure read of the `__G__self` data
-slot rather than a real EXTERN. Declare it on the producer side as a
-normal nullary import:
-
-```rust
-#[link(wasm_import_module = "env")]
-unsafe extern "C" {
-    #[link_name = "udon.self"]
-    fn udon_self() -> i32;
-}
-```
-
-```jsonc
-"fields": {
-  "self": {
-    "source": { "kind": "import", "module": "env", "name": "udon.self" },
-    "udonName": "__G__self",
-    "type": "transform",
-    "default": "this"
-  }
-}
-```
-
-See `docs/spec_host_import_conversion.md` for the full calling
-convention (instance methods take the receiver as the first WASM arg
-when the WASM arity is one greater than the signature's arg-list
-length).
+- one `Buffer.BlockCopy` + `Texture2D.LoadRawTextureData` instead of
+  per-pixel `SetPixel`;
+- `Transform.SetPositionAndRotation` instead of two property sets;
+- computing in WASM and handing over the result once.
 
 ---
 
-## 5. State and `__udon_meta.fields`
+## 5. Sharing state with Udon (`__udon_meta.fields`)
 
-`__udon_meta.fields[*].source.kind` currently has two implementations
-in the translator:
+Three kinds of field, by where the value lives
+(`docs/spec_udonmeta_conversion.md`):
 
-| `kind`   | What it binds to                                                         | Status                  |
-|----------|--------------------------------------------------------------------------|-------------------------|
-| `global` | A WASM **global** (mutable or immutable). Resolves via the export table. | Implemented             |
-| `import` | A WASM **function import** (e.g. `udon.self`); see §4 above.             | Implemented             |
-| `symbol` | A symbol-name pointing into linear memory.                               | Documented, not yet implemented |
-
-Practical consequence: only state that lives in a true WASM global can
-be exposed to Udon as a field today. Because **MVP forbids mutable
-globals** (§1), this means:
-
-- **Zig** can place tweakable scalars (`f32`, `i32`, …) as `export var`
-  globals — these become exported WASM globals and `kind: "global"`
-  picks them up.
-- **Rust** cannot. `static mut` lives in linear memory; only the address
-  is an exported global, which is not what `kind: "global"` resolves
-  to. Until `kind: "symbol"` is implemented, Rust producers should
-  keep mutable state private to the wasm side and expose only
-  `udon.self`-style imports as fields.
-
-If you need Inspector-tunable parameters today, write the relevant
-example in Zig.
-
----
-
-## 6. `__udon_meta` discovery contract
-
-The translator finds the JSON blob through two exports:
-
-| Export name        | Meaning                                  | WASM type                       |
-|--------------------|------------------------------------------|---------------------------------|
-| `__udon_meta_ptr`  | Linear-memory byte offset of the JSON    | `i32` (or func returning `i32`) |
-| `__udon_meta_len`  | Byte length of the JSON                  | `i32` (or func returning `i32`) |
-
-Both are required; if either is missing, the translator silently
-treats the module as having no metadata and falls back to defaults.
-
-### What "constant" means
-
-Both locators are evaluated by `src/wasm/const_eval.zig`'s
-`evalExportedI32`, which is a deliberately tiny constant evaluator.
-The translator never executes WASM. It accepts only:
-
-1. An **exported global** whose init expression is a single `i32.const N`.
-2. An **exported nullary function** whose body is exactly one of:
-   - `i32.const N`
-   - `global.get G`, where `G` is *not* an imported global and `G`'s
-     init expression is itself a single `i32.const N` (one hop only).
-
-Everything else returns `error.NonConstMetaLocator`:
-multi-instruction bodies, arithmetic, `local.get`, computed addresses,
-chained `global.get`, `global.get` of an imported global.
-
-### Producer recipes
-
-Both languages emit a function whose body collapses to a single
-`i32.const` after optimization:
+| `source.kind` | Value lives in | Use it for |
+|---|---|---|
+| `import` | the Udon heap; WASM reads/writes through a getter/setter import pair | anything Udon-typed: object references, synced values, values other behaviours read, event parameters |
+| `symbol` | linear memory, at an exported address | Inspector-tunable inputs for ordinary `static`/`var` variables (copied in once at startup) |
+| `global` | a WASM global | hand-written WAT |
 
 ```zig
-// Zig (ReleaseSmall)
-const udon_meta_json = \\{ "version": 1, ... };
+export var radius: f32 = 1.5;                       // kind: symbol
+extern "env" fn @"udon.self"() i32;                  // kind: import, type transform, default "this"
+extern "env" fn @"udon.score"() i32;                 // kind: import, getter
+extern "env" fn @"udon.set_score"(v: i32) void;      //               setter
+```
 
+`examples/udon-orbit` uses all of them.
+
+---
+
+## 6. `__udon_meta` discovery
+
+The translator finds the JSON through two exports: `__udon_meta_ptr`
+(address) and `__udon_meta_len` (byte length). Each must be an exported
+constant global, or an exported nullary function whose body is exactly one
+`i32.const` or one `global.get` of such a global. The translator never
+executes WASM.
+
+```zig
+const udon_meta_json = \\{ "version": 1, ... };
 export fn __udon_meta_ptr() [*]const u8 { return udon_meta_json.ptr; }
 export fn __udon_meta_len() u32 { return @intCast(udon_meta_json.len); }
 ```
 
 ```rust
-// Rust (release profile from §2)
 const UDON_META_JSON: &[u8] = br#"{ "version": 1, ... }"#;
-
-#[unsafe(no_mangle)]
-pub extern "C" fn __udon_meta_ptr() -> *const u8 { UDON_META_JSON.as_ptr() }
-
-#[unsafe(no_mangle)]
-pub extern "C" fn __udon_meta_len() -> u32 { UDON_META_JSON.len() as u32 }
+#[unsafe(no_mangle)] pub extern "C" fn __udon_meta_ptr() -> *const u8 { UDON_META_JSON.as_ptr() }
+#[unsafe(no_mangle)] pub extern "C" fn __udon_meta_len() -> u32 { UDON_META_JSON.len() as u32 }
 ```
 
-For raw WAT, two exported immutable globals are simpler:
+| Error | Cause |
+|---|---|
+| `NonConstMetaLocator` | The locator function did not fold to a constant. Build optimized (§2). |
+| `MetaSpansMultipleSegments` | The JSON crosses a data-segment boundary. Keep it one literal. |
+| `MetaRangeOutOfData` | The address is covered by no data segment. |
+| Defaults used silently | One of the two exports is missing. |
 
-```wat
-(global (export "__udon_meta_ptr") i32 (i32.const 1024))
-(global (export "__udon_meta_len") i32 (i32.const 187))
-(data  (i32.const 1024) "{ \"version\": 1, ... }")
-```
-
-### Data segment placement
-
-Once `(ptr, len)` is known, the byte range must lie **fully inside one
-data segment** whose offset itself constant-folds. Splitting the JSON
-across segments returns `error.MetaSpansMultipleSegments`. A single
-`static`/`const` byte literal is the safe choice.
-
-### Common errors
-
-| Error                          | Cause                                                                                                |
-|--------------------------------|------------------------------------------------------------------------------------------------------|
-| `NonConstMetaLocator`          | Locator function body is more than one instruction, or uses an unsupported op. Disassemble with `wasm-tools print` and confirm. |
-| `MetaSpansMultipleSegments`    | The JSON blob landed across a data-segment boundary. Move into a single literal.                     |
-| `MetaRangeOutOfData`           | `__udon_meta_ptr` resolved to an address no data segment covers. Often the slice was eliminated as dead code — make sure the meta exports are reachable. |
-| Translator silently uses defaults | One of `__udon_meta_ptr` / `_len` is missing from the exports. Discovery is all-or-nothing.       |
+Metadata is optional. Without it, every exported function with no
+parameters and no results becomes an event named after its export
+(`export fn _start()`, `export fn _update()`).
 
 ---
 
-## 7. Recursion: opt-in via `options.recursion`
+## 7. Events and time
 
-Udon has no call stack — the translator's RAC-based ABI keeps each
-function's parameters/locals in flat heap slots. That means a function
-that calls itself (directly or transitively) overwrites its own state.
+- Udon gives each event **10 seconds**; exceeding it halts the behaviour
+  permanently. Split long work across `_update` calls and keep the state in
+  ordinary variables (`examples/pi`, `examples/mandelbrot`).
+- Initialization (memory, data segments, the WASM start function) runs
+  before the first event delivered, whichever that is, and only once.
+- An event function takes no parameters.
 
-Recursive functions therefore need an explicit opt-in so the translator
-emits prologue/epilogue spill of P / L / R / RA onto the synthesized
-`__call_stack__`. Set in your `__udon_meta`:
+---
 
-```jsonc
-"options": {
-  "recursion": "stack"
+## 8. Recursion
+
+Every function has one static frame. Functions on a call-graph cycle save
+and restore their frame around the recursive call automatically
+(`docs/spec_call_return_conversion.md` §6). Only what is still needed after
+the call is saved, at two externs per value plus two per call.
+
+A small function that only calls *itself* does better: its first 64 levels
+are separate copies with slots of their own and save nothing, so a call
+costs no extern at all. The recursive Fibonacci, Takeuchi and Ackermann
+functions of `examples/bench` run 3 to 11 times fewer externs than the same
+code in UdonSharp that way. The copies are code and heap slots — set
+`"options": { "recursionUnroll": 16 }` (or `0`) if that matters more, and
+raise it for a function known to recurse deeper. Mutual recursion, and
+recursion through function pointers, always saves frames.
+
+A program whose only "cycles" come from function pointers that never
+actually recurse can set `"options": { "recursion": "disabled" }`.
+
+---
+
+## 9. Memory
+
+- Linear memory is one .NET `byte[]`; loads are 1–2 externs, stores 2, at
+  any alignment (`docs/spec_linear_memory.md`).
+- The initial size is the module's declared minimum. Zig reserves 1 MiB of
+  stack by default (17 pages); lower it if you instantiate many behaviours.
+- `memory.grow` reallocates and copies; grow rarely and in large steps.
+- Values that live in WASM locals cost nothing to read. Values in memory
+  cost an extern per access — keep hot state in locals where the compiler
+  allows it.
+
+---
+
+## 9a. What is cheap and what is not
+
+On the Udon VM time is the number of externs executed. What that means for
+source code, from the examples' optimization log (`docs/benchmarks.md`):
+
+- **Use 32-bit fields and variables.** A word is read with one extern, a
+  byte with two; `u8`/`i8` arithmetic needs masking and sign extension that
+  `i32` does not. Keep bytes for bulk data (pixels, a board), not for
+  counters and coordinates.
+- **Do not iterate arrays by value.** Zig's `for (a.xs, a.ys) |x, y|`
+  copies both arrays to the stack first; index them, or iterate pointers.
+- **Keep hot values in locals.** A local is free; a field in memory costs
+  an extern per access, and after every store the compiler must reload
+  anything a pointer might alias — including a slice's own pointer. Copy
+  such things into locals before a loop and write them back after it.
+- **Tables beat tests.** A lookup indexed by a byte is two or three
+  externs; each `if` in front of it is at least one more.
+- **Draw only what changed**, and let the GPU scale: a 10 × 12 texture with
+  point filtering is a crisp board.
+- **Strings Udon will consume are best built by Udon.** One
+  `String.Concat` extern concatenates any two strings; doing it in linear
+  memory costs an allocator and a copy. `examples/udon/udon.zig` has
+  `udon.str` for this. Handles to strings live in locals like any handle.
+- **Speed over size for hot code.** `-O ReleaseFast` / `opt-level = 3`
+  unrolls and inlines, which removes loop-control externs; the code grows.
+  The benchmark is built that way, the other examples for size.
+- **A `switch` / `match` is cheap at any size.** With five or more cases
+  it compiles to `br_table`, which is a bounds test and an indexed jump —
+  two or three externs whichever case is taken
+  (`docs/spec_call_return_conversion.md` §5). A chain of `if`/`else if`
+  costs one extern per test passed.
+- **Interpreters work, at interpreter cost.** `examples/rhai-bench` and
+  `examples/mruby-bench` run whole scripting engines; they spend about 1 100
+  and 240 times the externs of the same workloads compiled ahead of time.
+  Step such a thing over many frames.
+- **Recursion is affordable, loops are cheaper** (§8).
+
+## 9b. WASI programs
+
+A module built for `wasm32-wasi` / `wasm32-wasip1` translates as it is:
+`println!`, `printf`, `String`, clocks and `exit` work, files and sockets
+answer "not available" (`docs/spec_wasi_preview_1.md`).
+
+```sh
+cargo build --release --target wasm32-wasip1
+wasdon_zig translate target/wasm32-wasip1/release/app.wasm -o app.uasm --stats
+wasdon_zig run app.uasm --events _start
+```
+
+- `main` runs inside the Start event and so under Udon's ten-second limit.
+- Each line written to stdout is one `Debug.Log`; stderr lines are
+  warnings. End the last line with a newline.
+- A portable runtime costs externs — formatting an integer for `println!`
+  is thousands — so use this for code that has to stay portable, and the
+  direct style of §4 for code that only targets Udon.
+- Options without touching the program: `--meta app.udon_meta.json`.
+- **C:** `zig cc -target wasm32-wasi` is a complete toolchain (compiler and
+  wasi-libc). `setjmp` / `longjmp` exist in wasi-libc only on top of the
+  WebAssembly exception-handling proposal, which is not translated; a
+  program that uses them only for error exits can be built with a shim
+  header (`examples/mruby-bench/shim/setjmp.h`).
+
+## 9c. Modules you cannot rebuild
+
+A WebAssembly module made for another host imports that host's functions.
+A sidecar file can stand in for the host without touching the module
+(`docs/spec_host_import_conversion.md` §8):
+
+```json
+{
+  "version": 1,
+  "fields": {
+    "commandLine": { "source": { "kind": "symbol", "name": "boot_command_line" }, "type": "string", "default": "console=hvc" }
+  },
+  "imports": {
+    "env.console_put": { "as": "write" },
+    "env.now":         { "as": "clock" },
+    "env.sys_*":       { "returns": -38 },
+    "env.*":           { "as": "halt" }
+  }
 }
 ```
 
-Detection is Tarjan-SCC based across the whole call graph, so opting
-in is binary — once enabled, all recursive (or mutually recursive)
-functions get the spill. See `src/translator/recursion.zig` for the
-analysis and `examples/wasm-bench/main.zig` (`factorial`/`fib`) plus
-`examples/wasm-bench-rs/src/lib.rs` for the matching producer-side
-test.
-
----
-
-## 8. Linear memory sizing
-
-`__udon_meta.options.memory.{initialPages, maxPages, udonName}`
-controls the chunked-array layout described in
-`docs/spec_linear_memory.md`. A few non-obvious behaviors:
-
-- **`maxPages` is a *floor*, not a hard ceiling.** The translator
-  computes the highest page any data segment occupies (rounded up
-  from `(offset + len)`) and clamps `maxPages` and `initialPages` up
-  to that value. If your meta says `maxPages: 4` but the linker laid
-  out the binary with data extending into page 16, the emitted
-  `_memory_max_pages` literal will read 17. This is intentional —
-  undercounting cannot produce broken bytecode this way.
-- The clamp also applies to `initialPages` so `emitMemoryInit`
-  unrolls the right number of chunk allocations.
-- Set `udonName` (e.g. `"_memory"`) when you want the outer
-  `SystemObjectArray` and its companion scalars exported under a
-  predictable name.
-
-If you don't know how much memory you need, a generous `maxPages`
-costs nothing at translate time (only `_memory_max_pages` literal
-size) and avoids surprises.
-
----
-
-## 9. Build & translate pipeline
-
-For the Rust crates in this repo:
-
 ```sh
-# 1. Build the wasm
-cargo build --release
-# → target/wasm32v1-none/release/<name>_underscored.wasm
-
-# 2. Build / re-build the translator if needed
-zig build
-
-# 3. Translate
-./zig-out/bin/wasdon_zig.exe translate \
-    target/wasm32v1-none/release/<name>_underscored.wasm \
-    -o zig-out/wasm/<name>.uasm
+wasdon_zig inspect   module.wasm --meta module.udon_meta.json   # what is still unbound
+wasdon_zig translate module.wasm --meta module.udon_meta.json -o module.uasm
 ```
 
-For the Zig examples, `zig build wasm-example` and
-`zig build udon-orbit-example` (defined in `build.zig`) compile and
-install the wasm into `zig-out/wasm/`, and copy the bench fixture
-into the test data directories so the integration tests can
-`@embedFile` it.
-
-The translator CLI accepts `--mem-oob-diagnostics` to instrument every
-memory op with a unique site id and the effective byte address.
-Useful when a generated program hits an OOB trap and the bare
-`page=P; max=M` log line isn't enough to localize it.
+`examples/linux` does this with a Linux kernel.
 
 ---
 
-## 10. Verifying the output
-
-A quick sanity check on the produced `.uasm`:
+## 10. Build, translate, check, run
 
 ```sh
-# Event labels you declared in __udon_meta.functions should all appear
-grep -nE "^\s*\.export _start|_update|_interact" output.uasm
+zig build                      # the translator: zig-out/bin/wasdon_zig
+zig build examples             # example modules: zig-out/wasm/*.wasm
 
-# The data section header confirms memory sizing was honored
-head -30 output.uasm
+wasdon_zig inspect app.wasm    # size, imports, and anything unsupported
+wasdon_zig translate app.wasm -o app.uasm --stats
+wasdon_zig check app.uasm      # Udon Assembly rules + node list + heap size
+wasdon_zig run app.uasm --events "_start,_update*60,_interact" --profile
 ```
 
-Ground-truth verification is "does it run on the Udon VM" — the CI
-cannot do that. The translator's responsibility ends at "emit a
-structurally spec-conformant Udon Assembly program."
+`run` executes the program in the bundled Udon VM emulator
+(`docs/udon_vm.md`) and reports instructions and externs executed per
+event; `--profile` lists the externs by execution count, which is where to
+look when optimizing.
+
+In Unity, use a **Wasdon Assembly Program Asset** (`unity/Wasdon/`), which
+sizes the Udon heap from the program (`docs/spec_heap_size.md`). The stock
+Udon Assembly Program Asset only holds programs of up to 512 heap slots.
 
 ---
 
-## Quick checklist before opening a PR
+## Checklist
 
-- [ ] Toolchain pinned to MVP (`cpu_model = .mvp` for Zig,
-      `wasm32v1-none` for Rust).
-- [ ] Release profile gives `__udon_meta_ptr/_len` single-instruction
-      bodies (`opt-level=z`, `lto=true`, `codegen-units=1`).
-- [ ] Every Udon EXTERN is declared with the verbatim signature name
-      from `docs/udon_nodes.txt`.
-- [ ] Mutable state matches the field-source rules in §5 (Zig: WASM
-      globals; Rust: keep private until `kind: "symbol"` lands).
-- [ ] `options.recursion = "stack"` set if any function recurses
-      (directly or transitively).
-- [ ] `options.memory.maxPages` is at least as large as you actually
-      need; underestimates are silently floored up but
-      overestimates cost almost nothing.
-- [ ] Translator round-trip checked: `cargo build --release` →
-      `wasdon_zig translate ... -o foo.uasm` succeeds, and the
-      expected `.export _start`/`_update`/`_interact` labels appear
-      in the output.
+- [ ] Bulk memory enabled; no multi-value or reference types.
+- [ ] Every extern import name appears verbatim in `docs/udon_nodes.txt`
+      (`translate --strict` checks).
+- [ ] Handles never stored in memory or used as numbers.
+- [ ] `__udon_meta_ptr` / `_len` fold to constants (or no metadata at all).
+- [ ] No event runs longer than its share of a frame, let alone 10 s.
+- [ ] `wasdon_zig check` reports 0 errors; `wasdon_zig run` behaves.
